@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+// TEMPORARY DIAGNOSTIC — shows any JS error directly on the page instead of a silent blank
+// screen. Remove once the cause is found and fixed.
+function showJsError(label, msg, line, col, stack){
+  var el = document.createElement('div');
+  el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;color:#900;padding:16px;font-family:monospace;font-size:13px;white-space:pre-wrap;overflow:auto;z-index:99999;';
+  el.textContent = label + ':\n\n' + msg + (line?('\n\nLine: '+line+', Col: '+col):'') + '\n\n' + (stack || '(no stack available)');
+  document.body.appendChild(el);
+}
+window.onerror = function(msg, url, line, col, error){
+  showJsError('JS ERROR CAUGHT', msg, line, col, error && error.stack);
+  return false;
+};
+window.addEventListener('unhandledrejection', function(event){
+  showJsError('UNHANDLED PROMISE REJECTION', event.reason && event.reason.message ? event.reason.message : String(event.reason), null, null, event.reason && event.reason.stack);
+});
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
 <meta name="apple-mobile-web-app-capable" content="yes">
