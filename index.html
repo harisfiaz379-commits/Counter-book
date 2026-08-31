@@ -68,6 +68,28 @@
   }
   window.__localStorageReady = hydrate().then(install).catch(install);
 })();
+(function(){
+  // TEMPORARY DIAGNOSTIC — checks the specific APIs behind "Full screen", "Download backup
+  // file", and "Import & merge backup file", which stopped working inside the App Inventor
+  // WebView. Also checks whether App Inventor's own JS bridge (window.AppInventor) is exposed,
+  // since that's the mechanism we'd use to fix file save/open properly if the browser APIs
+  // themselves are blocked.
+  window.addEventListener("load", function(){
+    var results = [];
+    results.push("requestFullscreen exists: " + (typeof document.documentElement.requestFullscreen));
+    results.push("document.fullscreenEnabled: " + document.fullscreenEnabled);
+    results.push("Blob exists: " + (typeof window.Blob));
+    results.push("URL.createObjectURL exists: " + (typeof URL.createObjectURL));
+    results.push("window.AppInventor exists: " + (typeof window.AppInventor));
+    if(window.AppInventor){
+      results.push("AppInventor.setWebViewString exists: " + (typeof window.AppInventor.setWebViewString));
+    }
+    var testInput = document.createElement("input");
+    testInput.type = "file";
+    results.push("file input element created OK: " + (testInput.type === "file"));
+    alert("FEATURE PROBE:\n\n" + results.join("\n"));
+  });
+})();
 </script>
 
 <meta charset="UTF-8">
