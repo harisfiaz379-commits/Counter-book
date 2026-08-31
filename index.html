@@ -2,45 +2,72 @@
 <html lang="en">
 <head>
 <script>
-// TEMPORARY DIAGNOSTIC — actively tests which storage APIs actually work in this WebView,
-// since the same "localStorage is null" error happened on BOTH file:// and https://, which
-// rules out the opaque-origin theory and points to something else (WebView settings, device
-// privacy settings, etc). Uses a blocking alert() so results are guaranteed visible BEFORE the
-// app's own script runs (and possibly crashes) — DOM-injection would have been at risk of
-// being covered up by the crash's own full-screen error overlay.
+// This WebView (confirmed via on-device testing) leaves window.localStorage present but set
+// to null, while sessionStorage/indexedDB both work fine — so every localStorage.getItem/
+// setItem call in the app below would throw. Replacing window.localStorage with a shim backed
+// by IndexedDB fixes this WITHOUT touching any of the app's own code (which just keeps calling
+// localStorage.getItem/setItem exactly as before). IndexedDB itself is async, so on startup we
+// hydrate an in-memory copy first — window.__localStorageReady resolves once that's done, and
+// the app's own boot sequence (bottom of the file) waits on it before calling loadAll().
 (function(){
-  function testStorage(name, fn){
-    try{
-      const v = fn();
-      return name + ': OK (' + (typeof v) + ')';
-    }catch(e){
-      return name + ': FAILED — ' + e.name + ': ' + e.message;
-    }
+  // Only step in if real localStorage is actually broken here — everywhere else (a normal
+  // browser, a different device where it works fine) must keep using the real thing untouched,
+  // so existing data already saved there is never hidden behind an empty shim.
+  var realLocalStorageWorks = false;
+  try{
+    localStorage.setItem("__ls_probe__", "1");
+    realLocalStorageWorks = (localStorage.getItem("__ls_probe__") === "1");
+    localStorage.removeItem("__ls_probe__");
+  }catch(e){ realLocalStorageWorks = false; }
+  if(realLocalStorageWorks){ window.__localStorageReady = Promise.resolve(); return; }
+
+  var DB_NAME = "localStorageShim", STORE = "kv";
+  var memory = {};
+  var dbPromise = null;
+  function openDb(){
+    if(dbPromise) return dbPromise;
+    dbPromise = new Promise(function(resolve, reject){
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore(STORE); };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error); };
+    });
+    return dbPromise;
   }
-  const results = [];
-  results.push(testStorage('window.localStorage exists', ()=>typeof window.localStorage));
-  results.push(testStorage('localStorage.setItem/getItem', ()=>{ localStorage.setItem('__t','1'); const v=localStorage.getItem('__t'); localStorage.removeItem('__t'); return v; }));
-  results.push(testStorage('window.sessionStorage exists', ()=>typeof window.sessionStorage));
-  results.push(testStorage('sessionStorage.setItem/getItem', ()=>{ sessionStorage.setItem('__t','1'); const v=sessionStorage.getItem('__t'); sessionStorage.removeItem('__t'); return v; }));
-  results.push(testStorage('window.indexedDB exists', ()=>typeof window.indexedDB));
-  results.push(testStorage('document.cookie writable', ()=>{ document.cookie='__t=1'; return document.cookie; }));
-  results.push('User-Agent: ' + navigator.userAgent);
-  results.push('Location: ' + window.location.href);
-  alert('STORAGE PROBE RESULTS:\n\n' + results.join('\n'));
+  function hydrate(){
+    return openDb().then(function(db){
+      return new Promise(function(resolve, reject){
+        var tx = db.transaction(STORE, "readonly");
+        var req = tx.objectStore(STORE).openCursor();
+        req.onsuccess = function(e){
+          var cursor = e.target.result;
+          if(cursor){ memory[cursor.key] = cursor.value; cursor.continue(); }
+          else resolve();
+        };
+        req.onerror = function(){ reject(req.error); };
+      });
+    });
+  }
+  function persist(key, value){
+    openDb().then(function(db){
+      var store = db.transaction(STORE, "readwrite").objectStore(STORE);
+      if(value === null) store.delete(key); else store.put(value, key);
+    }).catch(function(){});
+  }
+  var shim = {
+    getItem: function(key){ return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null; },
+    setItem: function(key, value){ value = String(value); memory[key] = value; persist(key, value); },
+    removeItem: function(key){ delete memory[key]; persist(key, null); },
+    key: function(i){ return Object.keys(memory)[i] || null; },
+    clear: function(){ memory = {}; openDb().then(function(db){ db.transaction(STORE,"readwrite").objectStore(STORE).clear(); }).catch(function(){}); }
+  };
+  Object.defineProperty(shim, "length", { get: function(){ return Object.keys(memory).length; } });
+  function install(){
+    try{ Object.defineProperty(window, "localStorage", { value: shim, configurable: true }); }
+    catch(e){ window.localStorage = shim; }
+  }
+  window.__localStorageReady = hydrate().then(install).catch(install);
 })();
-function showJsError(label, msg, line, col, stack){
-  var el = document.createElement('div');
-  el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;color:#900;padding:16px;font-family:monospace;font-size:13px;white-space:pre-wrap;overflow:auto;z-index:99999;';
-  el.textContent = label + ':\n\n' + msg + (line?('\n\nLine: '+line+', Col: '+col):'') + '\n\n' + (stack || '(no stack available)');
-  document.body.appendChild(el);
-}
-window.onerror = function(msg, url, line, col, error){
-  showJsError('JS ERROR CAUGHT', msg, line, col, error && error.stack);
-  return false;
-};
-window.addEventListener('unhandledrejection', function(event){
-  showJsError('UNHANDLED PROMISE REJECTION', event.reason && event.reason.message ? event.reason.message : String(event.reason), null, null, event.reason && event.reason.stack);
-});
 </script>
 
 <meta charset="UTF-8">
@@ -3015,10 +3042,15 @@ function toggleFullscreen(){
 }
 
 /* ===================== INIT ===================== */
-loadAll();
-bill = newBillState();
-render();
-startCloudSync();
+// Waits for the localStorage shim's IndexedDB hydration (see <head>) before booting, so loadAll()
+// always sees the real saved data. On a normal browser where the shim never installed itself
+// (real localStorage worked fine), __localStorageReady still resolves immediately either way.
+Promise.resolve(window.__localStorageReady).then(function(){
+  loadAll();
+  bill = newBillState();
+  render();
+  startCloudSync();
+});
 </script>
 <script>
 // Registers the service worker (sw.js, same folder) so the app is cached on first load and
