@@ -1,0 +1,2993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0F5C57">
+<title>Counter Book</title>
+<style>
+  :root{
+    --page:#F3F6F7; --header:#0F5C57; --headerSub:#CFE9E5;
+    --primary:#0F5C57; --primarySoft:#E4F1EF;
+    --text:#1B2430; --muted:#7C8A99; --faint:#A9B4BE;
+    --border:#E2E8F0; --card:#FFFFFF;
+    --success:#0E9F6E; --successSoft:#E5F8F1;
+    --danger:#DC3B2C; --dangerSoft:#FCEAE8;
+    --warning:#B4650A; --warningSoft:#FDF3E3;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:var(--page);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
+  #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;}
+  header{background:var(--header);color:#fff;padding:18px 16px 14px;position:sticky;top:0;z-index:30;
+    box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;}
+  header h1{margin:0;font-size:18px;font-weight:700;}
+  header p{margin:2px 0 0;font-size:12px;color:var(--headerSub);}
+  #fullscreenBtn{background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;
+    padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;}
+  #banner{font-size:12px;padding:8px 16px;background:var(--warningSoft);color:var(--warning);
+    border-bottom:1px solid #F0DCB0;display:none;align-items:center;gap:6px;}
+  main{flex:1;padding:14px 12px 100px;max-width:560px;margin:0 auto;width:100%;}
+  nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);
+    display:flex;justify-content:space-around;padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:30;}
+  nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
+    padding:6px 10px;border-radius:8px;color:var(--faint);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
+  nav button.active{color:var(--primary);font-weight:700;}
+  nav button .icon{font-size:20px;line-height:1;}
+  nav button .badge{position:absolute;top:0;right:2px;background:var(--danger);color:#fff;font-size:9px;
+    font-weight:700;border-radius:999px;min-width:14px;height:14px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:12px;}
+  .card.primary{background:var(--primary);color:#fff;border:none;}
+  label.field-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.02em;color:var(--muted);display:block;margin-bottom:4px;}
+  input,textarea,select{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;
+    font-size:16px;font-family:inherit;color:var(--text);background:#fff;}
+  input:focus,textarea:focus,select:focus{outline:2px solid var(--primary);outline-offset:-1px;}
+  textarea{resize:none;}
+  .row{display:flex;justify-content:space-between;align-items:center;}
+  .row .val{font-weight:600;}
+  .row.big .lab{font-size:14px;}
+  .row.big .val{font-size:20px;font-weight:700;}
+  .btn{border:none;border-radius:10px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;}
+  .btn-primary{background:var(--primary);color:#fff;}
+  .btn-success{background:var(--success);color:#fff;}
+  .btn-danger{background:var(--danger);color:#fff;}
+  .btn-outline{background:none;border:1px solid var(--border);color:var(--muted);}
+  .btn-dashed{background:none;border:2px dashed var(--primary);color:var(--primary);width:100%;padding:12px;
+    border-radius:12px;display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700;}
+  .btn:disabled{opacity:.4;cursor:default;}
+  .pill-badge{font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;}
+  .small{font-size:12px;color:var(--muted);}
+  .faint{color:var(--faint);}
+  .mt2{margin-top:8px;}.mt3{margin-top:12px;}.mb2{margin-bottom:8px;}
+  .flex{display:flex;}.gap2{gap:8px;}.gap1{gap:4px;}.flex1{flex:1;}
+  .search-wrap{position:relative;}
+  .search-icon{position:absolute;left:10px;top:12px;color:var(--faint);pointer-events:none;}
+  .search-wrap input{padding-left:32px;}
+  .dropdown{position:absolute;z-index:20;margin-top:4px;width:100%;background:#fff;border:1px solid var(--border);
+    border-radius:8px;max-height:220px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.12);}
+  .dropdown button{width:100%;text-align:left;padding:10px 12px;border:none;background:none;border-bottom:1px solid var(--border);
+    display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
+  .dropdown button:last-child{border-bottom:none;}
+  .item-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);}
+  .item-row:last-child{border-bottom:none;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(15,23,30,.45);z-index:50;display:flex;
+    align-items:flex-end;justify-content:center;}
+  /* The confirm dialog can be triggered from inside another already-open modal (category
+     editor, inventory form, backup panel, etc.). All modal overlays share the same z-index
+     and stack by DOM order, and #confirmModalRoot happens to sit earlier in the markup than
+     those — so without this, the confirm dialog rendered BEHIND the still-open modal and was
+     invisible and unclickable. Confirm dialogs are always meant to be the topmost thing on
+     screen, so they get a dedicated higher z-index instead of relying on DOM order. */
+  #confirmModalRoot .modal-overlay{z-index:60;}
+  .modal{background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:85vh;
+    display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.2);}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);}
+  .modal-body{margin:12px 16px;padding:12px;background:var(--page);border:1px solid var(--border);border-radius:8px;
+    font-size:12px;font-family:ui-monospace,monospace;white-space:pre-wrap;overflow-y:auto;color:var(--text);}
+  .modal-actions{display:flex;gap:8px;padding:14px 16px;}
+  .hidden{display:none !important;}
+  #toast{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);background:#1B2430;color:#fff;
+    padding:10px 18px;border-radius:999px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 4px 16px rgba(0,0,0,.25);}
+  a.silent{color:inherit;text-decoration:none;}
+  ::placeholder{color:var(--faint);}
+  #invFab{position:fixed;right:16px;bottom:calc(70px + env(safe-area-inset-bottom));width:54px;height:54px;border-radius:50%;
+    background:var(--primary);color:#fff;border:none;font-size:26px;line-height:1;cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:35;display:flex;align-items:center;justify-content:center;}
+  .expiry-tag{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;display:inline-block;}
+  .icon-del-btn{background:none;border:none;color:var(--faint);cursor:pointer;font-size:16px;}
+  .modal-x{border:none;font-size:18px;padding:4px 8px;}
+  .item-title{font-weight:700;font-size:14px;margin:0;}
+  .divider-top{border-top:1px solid var(--border);padding-top:10px;}
+  .divider-top8{border-top:1px solid var(--border);padding-top:8px;}
+  /* Category dropdown + "Edit" button, merged into one visual box (New medicine form and the
+     inline per-medicine Edit form). Plain <input>/<select> elements get a full outline all the
+     way around themselves on focus (see the shared input:focus rule above); a bare <select>
+     inside this merged box would only outline itself, leaving the "Edit" button half of the
+     box looking untouched and the whole thing visually inconsistent with every other field.
+     Using :focus-within on the wrapping box instead makes the WHOLE pill glow together,
+     matching how every other field responds when focused. */
+  .cat-picker{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .cat-picker:focus-within{outline:2px solid var(--primary);outline-offset:-1px;}
+  .cat-picker select{flex:1;min-width:0;border:none;border-radius:0;outline:none;}
+  .cat-picker button{flex:0 0 auto;border:none;border-left:1px solid var(--border);background:var(--page);
+    color:var(--muted);font-size:12px;font-weight:600;padding:0 10px;cursor:pointer;}
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <h1>Counter Book</h1>
+      <p>Dispensing &amp; billing</p>
+    </div>
+    <div class="flex gap2" style="align-items:center;">
+      <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
+      <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
+      <button id="backupBtn" onclick="toggleBackupModal()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">💾 Backup</button>
+      <button id="fullscreenBtn" onclick="toggleFullscreen()">⛶ Full screen</button>
+    </div>
+  </header>
+  <div id="banner"></div>
+  <main id="main"></main>
+  <nav id="nav"></nav>
+  <button id="invFab" class="hidden" onclick="toggleInvForm()" title="Add medicine">+</button>
+</div>
+<div id="shareModalRoot"></div>
+<div id="confirmModalRoot"></div>
+<div id="invFormModalRoot"></div>
+<div id="backupModalRoot"></div>
+<div id="monthBreakdownModalRoot"></div>
+<div id="categoryModalRoot"></div>
+<div id="toast" class="hidden"></div>
+<input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
+
+<script>
+/* ===================== STATE ===================== */
+const CURRENCY = "Rs ";
+// Repeated on nearly every text input below to stop mobile keyboards/password managers
+// from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
+const NOAC = 'autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true"';
+let inventory = [];
+let transactions = [];
+let monthAdjustments = {}; // { "YYYY-MM": {doctorFee, medTotal, testsTotal, othersTotal, updatedAt} } — manual corrections, not tied to any bill
+let notes = [];
+let profiles = [];
+let currentProfileId = null;
+let tab = "bill";
+let saveError = "";
+let shareText = null;
+let testPrices = {}; // { testId: permanentAmount } — set via the "Edit" panel, synced across devices
+let defaultDoctorFee = 0; // permanent default for the doctor visit fee — synced across devices (see defaultDoctorFeeUpdatedAt/mergeDefaultDoctorFee)
+let defaultDoctorFeeUpdatedAt = 0; // timestamp of the last real edit, used for last-write-wins merging across devices
+let customTests = []; // [{id,name}] — tests added by the user beyond the built-in TEST_CATALOG, synced across devices
+let testNameOverrides = {}; // { testId: renamedName } — user-renamed built-in TEST_CATALOG entries, synced across devices
+let hiddenBuiltInTestIds = []; // ids of built-in TEST_CATALOG entries the user removed from their list — kept out of allTests(), synced across devices
+// Per-test-id edit timestamp: { testId: ms }. Each test's own name/price/hidden-state/
+// existence is merged individually against this per-id time (see mergeTestSettings) —
+// so editing/adding ONE test on this device can never silently overwrite a DIFFERENT
+// test another device added or priced. testSettingsUpdatedAt below is kept only as a
+// legacy "something in the catalog changed" marker for older backup files.
+let testItemUpdatedAt = {};
+let testSettingsUpdatedAt = 0;
+let testPriceEditorOpen = false; // transient: is the "Edit" panel open in the Tests card
+let testPriceDraft = {}; // transient: in-progress edits while that panel is open
+let testNameDraft = {}; // transient: in-progress name edits while that panel is open
+let newTestNameDraft = ""; // transient: name input for adding a new test in the Edit panel
+let newTestPriceDraft = ""; // transient: price input for adding a new test in the Edit panel
+
+/* transient (not persisted) UI state */
+function newBillState(){
+  return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", selectedMedId:null, qtyMode:"total", daysMode:"perMed", perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
+    tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", feeEditing:false, testsMenuOpen:false, feeIncluded:false,
+    // Special-category medicines: a second, separate search/add flow (see specialMatches()
+    // in renderBill) for medicines flagged with a specialCategory, which are deliberately
+    // excluded from the normal medicine search above. applyingFeeMode is per-bill: "perItem"
+    // charges an optional fee on each special medicine as it's added; "whole" charges one
+    // fee for the whole bill, folded onto the last special medicine added (see
+    // addSpecialBillItem/recomputeWholeApplyingFee). Neither fee is ever typed as a saved
+    // default — always typed fresh — and neither shows as its own line in the bill; both are
+    // baked directly into the relevant item's subtotal.
+    specialQuery:"", selectedSpecialMedId:null, specialPills:"", applyingFeeMode:"perItem", applyingFeeDraft:"", wholeApplyingFee:"" };
+}
+let bill = newBillState();
+let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10"},
+            restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", editId:null,
+            editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
+let backupUi = { open:false };
+let rec = { expandedId:null, searchQuery:"", editingId:null, expandedMonth:null, expandedYear:null, showMonthBreakdown:false, editingMonthBreakdown:false, breakdownDraft:{doctorFee:"",medTotal:"",testsTotal:"",othersTotal:""}, expandedDayBreakdown:null };
+let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:null };
+let notesUi = { openId:null, draftTitle:"", draftBody:"", addingProfile:false, newProfileName:"", searchQuery:"" };
+
+/* ===================== HELPERS ===================== */
+let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
+let catUi = { open:false, renameDrafts:{}, newCategoryDraft:"" }; // transient: in-progress edits while the category-manager modal is open
+// Special category: a SECOND, independent tag per medicine (e.g. Controlled/Cold-chain/
+// High-value), separate from the regular Category above. Its only purpose is to flag a
+// medicine as hidden from the normal New Bill medicine search — see specialMatches() in
+// renderBill — and searchable instead through its own dedicated search box there. Managed
+// the same way as MED_CATEGORIES (own editor modal, add/rename/delete, rename cascades to
+// every medicine set to the old name) but kept as a completely separate list.
+let SPECIAL_CATEGORIES = ["Controlled","Cold-chain","High-value"]; // user-editable via specialCatUi below
+let specialCatUi = { open:false, renameDrafts:{}, newCategoryDraft:"" }; // transient: in-progress edits while the special-category-manager modal is open
+const TEST_CATALOG = [
+  {id:"cbc", name:"CBC"},
+  {id:"bloodGroup", name:"Blood group identification"},
+  {id:"lft", name:"LFT"},
+  {id:"tsh", name:"TSH"},
+  {id:"t3", name:"T3"},
+  {id:"t4", name:"T4"},
+  {id:"rft", name:"RFT"},
+  {id:"urineCE", name:"Urine C/E"},
+  {id:"flp", name:"FLP"},
+  {id:"sCreatinine", name:"S.creatinine"},
+  {id:"hba1c", name:"HbA1c"},
+  {id:"ecg", name:"ECG"}
+];
+function isBuiltInTestId(id){ return TEST_CATALOG.some(t=>t.id===id); }
+function allTests(){
+  return TEST_CATALOG
+    .filter(t=>!hiddenBuiltInTestIds.includes(t.id))
+    .map(t=>({ id:t.id, name: testNameOverrides[t.id]||t.name }))
+    .concat(customTests);
+}
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function money(n){ const v=Number(n)||0; return v.toFixed(2).replace(/\.00$/,""); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDateTime(ts){
+  const d=new Date(ts);
+  return d.toLocaleDateString(undefined,{day:"2-digit",month:"short"})+", "+d.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"});
+}
+function sameDay(ts,ref){ return new Date(ts).toDateString()===new Date(ref).toDateString(); }
+function monthKeyOf(ts){ const d=new Date(ts); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); }
+function monthLabelOf(ts){ return new Date(ts).toLocaleDateString(undefined,{month:"long",year:"numeric"}); }
+
+/* ===================== PERSISTENCE (localStorage) ===================== */
+/* Inventory and transactions are shared — every person using this device sees the same data.
+   Notes are kept separate per profile, so each person's notepad stays private to them. */
+function loadAll(){
+  try{ inventory = JSON.parse(localStorage.getItem("clinic_inventory")||"[]"); }catch(e){ inventory=[]; }
+  // Migrate medicines saved before batch/expiry tracking existed: fold their existing
+  // stock into one "no expiry recorded" batch so nothing is lost.
+  inventory.forEach(m=>{
+    if(!Array.isArray(m.batches)){
+      m.batches = (m.stockPills>0) ? [{ id:uid(), boxes:null, pillsRemaining:m.stockPills, expiryDate:null, addedAt:Date.now(), disposed:false }] : [];
+    }
+    recomputeStock(m);
+  });
+  try{ transactions = JSON.parse(localStorage.getItem("clinic_transactions")||"[]"); }catch(e){ transactions=[]; }
+  try{ monthAdjustments = JSON.parse(localStorage.getItem("clinic_month_adjustments")||"{}"); }catch(e){ monthAdjustments={}; }
+  try{ profiles = JSON.parse(localStorage.getItem("clinic_profiles")||"[]"); }catch(e){ profiles=[]; }
+  try{ testPrices = JSON.parse(localStorage.getItem("clinic_test_prices")||"{}"); }catch(e){ testPrices={}; }
+  try{ defaultDoctorFee = Number(localStorage.getItem("clinic_default_doctor_fee"))||0; }catch(e){ defaultDoctorFee=0; }
+  try{ defaultDoctorFeeUpdatedAt = Number(localStorage.getItem("clinic_default_doctor_fee_updated_at"))||0; }catch(e){ defaultDoctorFeeUpdatedAt=0; }
+  try{ customTests = JSON.parse(localStorage.getItem("clinic_custom_tests")||"[]"); }catch(e){ customTests=[]; }
+  try{ testNameOverrides = JSON.parse(localStorage.getItem("clinic_test_name_overrides")||"{}"); }catch(e){ testNameOverrides={}; }
+  try{ hiddenBuiltInTestIds = JSON.parse(localStorage.getItem("clinic_hidden_tests")||"[]"); }catch(e){ hiddenBuiltInTestIds=[]; }
+  try{ testSettingsUpdatedAt = Number(localStorage.getItem("clinic_test_settings_updated_at"))||0; }catch(e){ testSettingsUpdatedAt=0; }
+  try{ testItemUpdatedAt = JSON.parse(localStorage.getItem("clinic_test_item_updated_at")||"{}"); }catch(e){ testItemUpdatedAt={}; }
+  // One-time backfill: devices that used the Tests feature before per-test-id timestamps
+  // existed have real test data but no per-id time to merge it by, which would make it
+  // always lose to another device's newer per-id edits even if it was set up first. Seed
+  // every id this device currently has non-default data for with the old bundle time, so
+  // it competes fairly from here on.
+  if(Object.keys(testItemUpdatedAt).length===0 && testSettingsUpdatedAt>0){
+    customTests.forEach(t=>{ testItemUpdatedAt[t.id]=testSettingsUpdatedAt; });
+    hiddenBuiltInTestIds.forEach(id=>{ testItemUpdatedAt[id]=testSettingsUpdatedAt; });
+    Object.keys(testNameOverrides).forEach(id=>{ testItemUpdatedAt[id]=testSettingsUpdatedAt; });
+    Object.keys(testPrices).forEach(id=>{ testItemUpdatedAt[id]=testSettingsUpdatedAt; });
+    try{ localStorage.setItem("clinic_test_item_updated_at", JSON.stringify(testItemUpdatedAt)); }catch(e){}
+  }
+  try{
+    const savedCats = JSON.parse(localStorage.getItem("clinic_med_categories")||"null");
+    if(Array.isArray(savedCats) && savedCats.length) MED_CATEGORIES = savedCats;
+  }catch(e){}
+  try{
+    const savedSpecialCats = JSON.parse(localStorage.getItem("clinic_special_categories")||"null");
+    if(Array.isArray(savedSpecialCats) && savedSpecialCats.length) SPECIAL_CATEGORIES = savedSpecialCats;
+  }catch(e){}
+
+  // Migrate an old single shared notepad (from before profiles existed) into its own profile,
+  // so nobody's existing notes get lost.
+  if(profiles.length===0){
+    let legacy = null;
+    try{ legacy = JSON.parse(localStorage.getItem("clinic_notes")||"null"); }catch(e){ legacy=null; }
+    if(legacy && Array.isArray(legacy) && legacy.length){
+      profiles = [{ id:"legacy", name:"Notes" }];
+      localStorage.setItem("clinic_profiles", JSON.stringify(profiles));
+      localStorage.setItem("clinic_notes_legacy", JSON.stringify(legacy));
+    }
+  }
+
+  currentProfileId = localStorage.getItem("clinic_current_profile") || (visibleProfiles()[0] ? visibleProfiles()[0].id : null);
+  if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
+    currentProfileId = visibleProfiles()[0] ? visibleProfiles()[0].id : null;
+  }
+  loadNotesForCurrentProfile();
+}
+function saveInventory(){
+  try{ localStorage.setItem("clinic_inventory", JSON.stringify(inventory)); saveError=""; }
+  catch(e){ saveError="That change may not have saved. Storage might be full."; }
+  schedulePushToCloud();
+}
+function saveTransactions(){
+  try{ localStorage.setItem("clinic_transactions", JSON.stringify(transactions)); saveError=""; }
+  catch(e){ saveError="That bill may not have saved. Storage might be full."; }
+  schedulePushToCloud();
+}
+function loadNotesForCurrentProfile(){
+  if(!currentProfileId){ notes=[]; return; }
+  try{ notes = JSON.parse(localStorage.getItem("clinic_notes_"+currentProfileId)||"[]"); }catch(e){ notes=[]; }
+}
+function saveNotes(){
+  if(!currentProfileId) return;
+  try{ localStorage.setItem("clinic_notes_"+currentProfileId, JSON.stringify(notes)); saveError=""; }
+  catch(e){ saveError="That note may not have saved. Storage might be full."; }
+  schedulePushToCloud();
+}
+function saveProfiles(){
+  try{ localStorage.setItem("clinic_profiles", JSON.stringify(profiles)); }catch(e){}
+  schedulePushToCloud();
+}
+function saveMonthAdjustments(){
+  try{ localStorage.setItem("clinic_month_adjustments", JSON.stringify(monthAdjustments)); }catch(e){}
+  schedulePushToCloud();
+}
+/* Test prices/names/catalog and the default doctor fee used to be device-local-only settings,
+   which is why they could look completely different between two phones. Both are now synced
+   the same way: a timestamp per setting, last-write-wins (see mergeTestSettings and
+   mergeDefaultDoctorFee below). */
+function saveTestPrices(){
+  try{ localStorage.setItem("clinic_test_prices", JSON.stringify(testPrices)); }catch(e){}
+}
+function saveDefaultDoctorFeeStorage(){
+  try{ localStorage.setItem("clinic_default_doctor_fee", String(defaultDoctorFee)); }catch(e){}
+}
+function saveDefaultDoctorFeeUpdatedAt(){
+  try{ localStorage.setItem("clinic_default_doctor_fee_updated_at", String(defaultDoctorFeeUpdatedAt)); }catch(e){}
+}
+function saveCustomTests(){
+  try{ localStorage.setItem("clinic_custom_tests", JSON.stringify(customTests)); }catch(e){}
+}
+function saveTestNameOverrides(){
+  try{ localStorage.setItem("clinic_test_name_overrides", JSON.stringify(testNameOverrides)); }catch(e){}
+}
+function saveHiddenBuiltInTests(){
+  try{ localStorage.setItem("clinic_hidden_tests", JSON.stringify(hiddenBuiltInTestIds)); }catch(e){}
+}
+function saveTestSettingsUpdatedAt(){
+  try{ localStorage.setItem("clinic_test_settings_updated_at", String(testSettingsUpdatedAt)); }catch(e){}
+}
+function saveTestItemUpdatedAt(){
+  try{ localStorage.setItem("clinic_test_item_updated_at", JSON.stringify(testItemUpdatedAt)); }catch(e){}
+}
+// Call once per actual user edit to ONE test (added/removed/renamed/re-priced) — NOT on
+// every keystroke of a draft, and NOT once for the whole catalog. Bumping only that one
+// test's own timestamp is what lets mergeTestSettings() merge each test independently, so
+// adding/pricing a test on this device can't overwrite a DIFFERENT test's data that another
+// device added or changed around the same time.
+function touchTestItem(id){
+  testItemUpdatedAt[id] = Date.now();
+  testSettingsUpdatedAt = Date.now(); // legacy marker, kept for older backup-file compatibility
+  saveTestItemUpdatedAt();
+  saveTestSettingsUpdatedAt();
+  schedulePushToCloud();
+}
+function saveMedCategoriesStorage(){
+  try{ localStorage.setItem("clinic_med_categories", JSON.stringify(MED_CATEGORIES)); }catch(e){}
+}
+function saveSpecialCategoriesStorage(){
+  try{ localStorage.setItem("clinic_special_categories", JSON.stringify(SPECIAL_CATEGORIES)); }catch(e){}
+}
+/* Category options for a select: the saved list, plus the medicine's current category if it
+   was since removed from the list — so an old/deleted category never silently disappears
+   from a medicine that's already using it. */
+function categoryOptionsHtml(current){
+  const list = MED_CATEGORIES.slice();
+  if(current && !list.includes(current)) list.push(current);
+  return list.map(c=>`<option value="${esc(c)}" ${current===c?"selected":""}>${esc(c)}</option>`).join("");
+}
+function specialCategoryOptionsHtml(current){
+  const list = SPECIAL_CATEGORIES.slice();
+  if(current && !list.includes(current)) list.push(current);
+  return list.map(c=>`<option value="${esc(c)}" ${current===c?"selected":""}>${esc(c)}</option>`).join("");
+}
+/* Single merged <select> for both the regular category list and the special-category list,
+   so a medicine picks ONE of either (not both independently as before). Special categories are
+   grouped under their own <optgroup> heading, which every mobile OS renders as a section
+   header inside the native picker — this is what puts "Special medicine category" as a
+   sub-heading under the plain category list instead of needing its own separate field/button. */
+function mergedCategoryOptionsHtml(current){
+  const regularList = MED_CATEGORIES.slice();
+  const specialList = SPECIAL_CATEGORIES.slice();
+  // preserve an old/removed value picked before it was renamed/deleted, so it never just vanishes
+  if(current && !regularList.includes(current) && !specialList.includes(current)) regularList.push(current);
+  const regularHtml = regularList.map(c=>`<option value="${esc(c)}" ${current===c?"selected":""}>${esc(c)}</option>`).join("");
+  const specialHtml = specialList.length ? `<optgroup label="Special medicine category">${specialList.map(c=>`<option value="${esc(c)}" ${current===c?"selected":""}>${esc(c)}</option>`).join("")}</optgroup>` : "";
+  return regularHtml + specialHtml;
+}
+/* One shared editor now covers both the regular category list and the special category list —
+   there's only a single "Edit" button next to the merged picker, so opening/closing/saving it
+   drives both catUi and specialCatUi together instead of needing two separate modals. */
+function openCategoryEditor(){
+  catUi.open = true;
+  catUi.renameDrafts = {};
+  MED_CATEGORIES.forEach(c=>{ catUi.renameDrafts[c]=c; });
+  catUi.newCategoryDraft = "";
+  specialCatUi.renameDrafts = {};
+  SPECIAL_CATEGORIES.forEach(c=>{ specialCatUi.renameDrafts[c]=c; });
+  specialCatUi.newCategoryDraft = "";
+  render();
+}
+function closeCategoryEditor(){ catUi.open=false; render(); }
+function onCategoryRenameDraft(origName, v){ catUi.renameDrafts[origName]=v; }
+function onNewCategoryDraft(v){ catUi.newCategoryDraft=v; scheduleRender(); }
+function addNewCategoryFromEditor(){
+  const name = catUi.newCategoryDraft.trim();
+  if(!name) return;
+  if(MED_CATEGORIES.some(c=>c.toLowerCase()===name.toLowerCase())){ showToast("That category already exists"); return; }
+  MED_CATEGORIES.push(name);
+  catUi.renameDrafts[name] = name;
+  catUi.newCategoryDraft = "";
+  saveMedCategoriesStorage();
+  render();
+  showToast("✓ Category added");
+}
+function deleteCategoryFromEditor(name){
+  askConfirm(`Remove "${name}" from the category list? Medicines already set to this category keep showing it, but you won't be able to pick it for new or edited ones.`, ()=>{
+    MED_CATEGORIES = MED_CATEGORIES.filter(c=>c!==name);
+    delete catUi.renameDrafts[name];
+    saveMedCategoriesStorage();
+    render();
+  });
+}
+function saveAllCategoryChanges(){
+  // Applying a rename updates the list entry AND cascades to every medicine currently set
+  // to the old name, so existing medicines' category tags stay correct instead of pointing
+  // at a name that no longer exists in the list. Runs for both the regular list and the
+  // special list, since one shared Edit button/editor now manages both together.
+  let invChanged = false;
+
+  const renamePairs = [];
+  MED_CATEGORIES = MED_CATEGORIES.map(oldName=>{
+    const draft = (catUi.renameDrafts[oldName]||"").trim();
+    if(!draft || draft===oldName) return oldName;
+    renamePairs.push([oldName, draft]);
+    return draft;
+  });
+  if(renamePairs.length){
+    inventory.forEach(m=>{
+      const hit = renamePairs.find(([oldName])=>m.category===oldName);
+      if(hit){ m.category = hit[1]; m.updatedAt = Date.now(); invChanged=true; }
+    });
+  }
+  saveMedCategoriesStorage();
+
+  const specialRenamePairs = [];
+  SPECIAL_CATEGORIES = SPECIAL_CATEGORIES.map(oldName=>{
+    const draft = (specialCatUi.renameDrafts[oldName]||"").trim();
+    if(!draft || draft===oldName) return oldName;
+    specialRenamePairs.push([oldName, draft]);
+    return draft;
+  });
+  if(specialRenamePairs.length){
+    inventory.forEach(m=>{
+      const hit = specialRenamePairs.find(([oldName])=>m.specialCategory===oldName);
+      if(hit){ m.specialCategory = hit[1]; m.updatedAt = Date.now(); invChanged=true; }
+    });
+  }
+  saveSpecialCategoriesStorage();
+
+  if(invChanged) saveInventory();
+  catUi.open = false;
+  render();
+  showToast("✓ Categories saved");
+}
+function renderCategoryModal(){
+  const root = document.getElementById("categoryModalRoot");
+  if(!root) return;
+  if(!catUi.open){ root.innerHTML=""; return; }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeCategoryEditor()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Edit categories</strong>
+          <button class="modal-x" onclick="closeCategoryEditor()">✕</button>
+        </div>
+        <div style="padding:14px 16px;overflow-y:auto;">
+          <p class="small faint" style="font-weight:700;margin:0 0 8px;">Categories</p>
+          ${MED_CATEGORIES.length===0 ? `<p class="small faint mb2">No categories yet — add one below.</p>` : MED_CATEGORIES.map(c=>`
+            <div class="flex gap2 mb2" style="align-items:center;">
+              <input ${NOAC} value="${esc(catUi.renameDrafts[c]!=null?catUi.renameDrafts[c]:c)}" oninput='onCategoryRenameDraft(${JSON.stringify(c)},this.value)' class="flex1">
+              <button onclick='deleteCategoryFromEditor(${JSON.stringify(c)})' style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;">🗑</button>
+            </div>`).join("")}
+          <div class="flex gap2 mt2 mb3">
+            <input ${NOAC} id="newCategoryInput" value="${esc(catUi.newCategoryDraft)}" oninput="onNewCategoryDraft(this.value)" placeholder="New category name" class="flex1">
+            <button class="btn btn-outline" ${!catUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewCategoryFromEditor()">+ Add</button>
+          </div>
+
+          <p class="small faint divider-top" style="font-weight:700;padding-top:12px;margin:4px 0 8px;">Special medicine category</p>
+          ${SPECIAL_CATEGORIES.length===0 ? `<p class="small faint mb2">No special categories yet — add one below.</p>` : SPECIAL_CATEGORIES.map(c=>`
+            <div class="flex gap2 mb2" style="align-items:center;">
+              <input ${NOAC} value="${esc(specialCatUi.renameDrafts[c]!=null?specialCatUi.renameDrafts[c]:c)}" oninput='onSpecialCategoryRenameDraft(${JSON.stringify(c)},this.value)' class="flex1">
+              <button onclick='deleteSpecialCategoryFromEditor(${JSON.stringify(c)})' style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;">🗑</button>
+            </div>`).join("")}
+          <div class="flex gap2 mt2">
+            <input ${NOAC} id="newSpecialCategoryInput" value="${esc(specialCatUi.newCategoryDraft)}" oninput="onNewSpecialCategoryDraft(this.value)" placeholder="New special category name" class="flex1">
+            <button class="btn btn-outline" ${!specialCatUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewSpecialCategoryFromEditor()">+ Add</button>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline flex1" onclick="closeCategoryEditor()">Cancel</button>
+          <button class="btn btn-primary flex1" onclick="saveAllCategoryChanges()">Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function onSpecialCategoryRenameDraft(origName, v){ specialCatUi.renameDrafts[origName]=v; }
+function onNewSpecialCategoryDraft(v){ specialCatUi.newCategoryDraft=v; scheduleRender(); }
+function addNewSpecialCategoryFromEditor(){
+  const name = specialCatUi.newCategoryDraft.trim();
+  if(!name) return;
+  if(SPECIAL_CATEGORIES.some(c=>c.toLowerCase()===name.toLowerCase())){ showToast("That special category already exists"); return; }
+  SPECIAL_CATEGORIES.push(name);
+  specialCatUi.renameDrafts[name] = name;
+  specialCatUi.newCategoryDraft = "";
+  saveSpecialCategoriesStorage();
+  render();
+  showToast("✓ Special category added");
+}
+function deleteSpecialCategoryFromEditor(name){
+  askConfirm(`Remove "${name}" from the special category list? Medicines already set to this special category keep showing it, but you won't be able to pick it for new or edited ones.`, ()=>{
+    SPECIAL_CATEGORIES = SPECIAL_CATEGORIES.filter(c=>c!==name);
+    delete specialCatUi.renameDrafts[name];
+    saveSpecialCategoriesStorage();
+    render();
+  });
+}
+
+
+/* ===================== BATCHES / EXPIRY (FEFO) ===================== */
+/* Every restock creates its own "batch" with its own expiry date. When medicine is
+   sold, pills are drawn from the batch with the nearest expiry date first (FEFO —
+   first-expiry-first-out). m.stockPills is always kept as the sum of active batches. */
+function activeBatches(m){ return (m.batches||[]).filter(b=>!b.disposed && b.pillsRemaining>0); }
+function recomputeStock(m){ m.stockPills = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0); }function fefoOrder(m){
+  return activeBatches(m).slice().sort((a,b)=>{
+    const ea = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
+    const eb = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
+    if(ea!==eb) return ea-eb;
+    return (a.addedAt||0)-(b.addedAt||0);
+  });
+}
+/* ---- Batch-level pricing (MRP can change per restock, FEFO-style) ----
+   Each batch may carry its own mrpPerBox (set at restock time). If a batch has no
+   mrpPerBox recorded (left blank at restock, or an old batch from before this existed),
+   it falls back to the medicine's current mrpPerBox — i.e. "use the older/current price". */
+function batchPricePerPill(m, b){
+  const mrp = (b && b.mrpPerBox!=null && b.mrpPerBox>0) ? b.mrpPerBox : m.mrpPerBox;
+  return (Number(mrp)||0) / (Number(m.pillsPerBox)||1);
+}
+function nextBatchUnitPrice(m){
+  // The price that will actually be charged for the next pill sold, following the same
+  // FEFO order stock is drawn from — so billing price always matches the batch being dispensed.
+  const order = fefoOrder(m);
+  if(order.length) return batchPricePerPill(m, order[0]);
+  return (Number(m.mrpPerBox)||0) / (Number(m.pillsPerBox)||1);
+}
+function deductStock(m, pills){
+  let remaining = pills;
+  for(const b of fefoOrder(m)){
+    if(remaining<=0) break;
+    const take = Math.min(b.pillsRemaining, remaining);
+    b.pillsRemaining -= take;
+    remaining -= take;
+    b.updatedAt = Date.now();
+  }
+  recomputeStock(m);
+}
+function returnStock(m, pills){
+  // Used when an old bill is edited/undone — put pills back into the batch nearest
+  // to expiry (the one most likely to have been sold from), or a fresh undated batch.
+  const batches = fefoOrder(m);
+  if(batches.length){ batches[0].pillsRemaining += pills; batches[0].updatedAt = Date.now(); }
+  else {
+    m.batches = m.batches||[];
+    m.batches.push({ id:uid(), boxes:null, pillsRemaining:pills, originalPills:pills, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+  }
+  recomputeStock(m);
+}
+function adjustStockTo(m, newTotal){
+  // Used for manual stock correction in Edit (e.g. accounting for loss/damage).
+  const current = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0);
+  const diff = newTotal - current;
+  if(diff<0) deductStock(m, -diff);
+  else if(diff>0){
+    m.batches = m.batches||[];
+    m.batches.push({ id:uid(), boxes:null, pillsRemaining:diff, originalPills:diff, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+    recomputeStock(m);
+  }
+}
+function daysUntil(dateStr){
+  if(!dateStr) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const exp = new Date(dateStr+"T00:00:00");
+  return Math.round((exp-today)/86400000);
+}
+function expiringBatches(){
+  const out = [];
+  inventory.forEach(m=>{
+    if(m.deleted) return;
+    activeBatches(m).forEach(b=>{
+      if(b.expiryDate){
+        const d = daysUntil(b.expiryDate);
+        if(d!==null && d<=10) out.push({ med:m, batch:b, daysLeft:d });
+      }
+    });
+  });
+  return out.sort((a,b)=>a.daysLeft-b.daysLeft);
+}
+function onBatchExpiryChange(medId, batchId, val){
+  const m = inventory.find(x=>x.id===medId);
+  if(m){ const b=(m.batches||[]).find(x=>x.id===batchId); if(b){ b.expiryDate = val || null; b.updatedAt = Date.now(); } }
+  saveInventory();
+  render();
+}
+function disposeBatch(medId, batchId){
+  askConfirm("Mark this batch as disposed? It'll be removed from stock and cleared from expiry alerts.", ()=>{
+    const m = inventory.find(x=>x.id===medId);
+    if(m){
+      const b = (m.batches||[]).find(x=>x.id===batchId);
+      if(b){ b.disposed=true; b.pillsRemaining=0; b.updatedAt=Date.now(); recomputeStock(m); }
+    }
+    saveInventory();
+    render();
+  });
+}
+function batchExpiryLabel(daysLeft){
+  if(daysLeft<0) return `Expired ${Math.abs(daysLeft)}d ago`;
+  if(daysLeft===0) return "Expires today";
+  return `${daysLeft}d left`;
+}
+
+/* Coalesces render() calls into once-per-frame. Several input handlers below
+   call this instead of render() directly: calling render() synchronously on
+   every keystroke destroys and recreates the focused <input> element (since
+   render rebuilds innerHTML from scratch), which resets the DOM node's
+   identity mid-keystroke. On mobile that interrupts the OS keyboard's native
+   "hold backspace to repeat-delete" gesture, making a held backspace remove
+   only one character instead of continuously deleting. Batching multiple
+   rapid keystrokes (as happens during a held key) into a single render per
+   animation frame keeps the input's identity stable long enough for that
+   native repeat behavior to keep working, while still updating on-screen
+   totals/dropdowns live as the person types. */
+let renderScheduled = false;
+function scheduleRender(){
+  if(renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(()=>{ renderScheduled = false; render(); });
+}
+/* ===================== RENDER (with focus preservation) ===================== */
+function render(){
+  const active = document.activeElement;
+  const id = active && active.id;
+  const selStart = active && typeof active.selectionStart==="number" ? active.selectionStart : null;
+  const selEnd = active && typeof active.selectionEnd==="number" ? active.selectionEnd : null;
+
+  renderBanner();
+  renderNav();
+  renderCloudSizeBadge();
+  if(tab==="bill") renderBill();
+  else if(tab==="inventory") renderInventory();
+  else if(tab==="records") renderRecords();
+  else if(tab==="stock") renderStock();
+  else if(tab==="notes") renderNotes();
+  renderShareModal();
+  renderConfirmModal();
+  renderInvFormModal();
+  renderBackupModal();
+  renderMonthBreakdownModal();
+  renderCategoryModal();
+
+  const fab = document.getElementById("invFab");
+  if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
+
+  if(id){
+    const el = document.getElementById(id);
+    if(el){
+      el.focus();
+      if(selStart!=null && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
+    }
+  }
+}
+
+function renderBanner(){
+  const b = document.getElementById("banner");
+  if(saveError){ b.style.display="flex"; b.textContent="⚠ "+saveError; }
+  else { b.style.display="none"; b.textContent=""; }
+}
+
+function lowStockList(){ return inventory.filter(m=>!m.deleted && !m.noWarn && m.stockPills <= (m.lowStockAt ?? 0)); }
+
+function renderNav(){
+  const tabs = [
+    {id:"bill",label:"New Bill",icon:"📄"},
+    {id:"inventory",label:"Inventory",icon:"💊"},
+    {id:"records",label:"Records",icon:"🕒"},
+    {id:"stock",label:"Warnings",icon:"⚠️",badge:lowStockList().length+expiringBatches().length},
+    {id:"notes",label:"Notepad",icon:"📝"},
+  ];
+  document.getElementById("nav").innerHTML = tabs.map(t=>`
+    <button class="${tab===t.id?'active':''}" onclick="setTab('${t.id}')">
+      <span class="icon">${t.icon}</span>
+      <span>${t.label}</span>
+      ${t.badge?`<span class="badge">${t.badge}</span>`:""}
+    </button>`).join("");
+}
+
+function setTab(t){ tab=t; render(); }
+
+/* ===================== SHARE MODAL ===================== */
+function openShare(text){ shareText=text; render(); }
+function closeShare(){ shareText=null; render(); }
+function shareWhatsApp(){ window.open("https://wa.me/?text="+encodeURIComponent(shareText),"_blank"); }
+function copyShare(){
+  navigator.clipboard.writeText(shareText).then(()=>{
+    const btn = document.getElementById("copyBtnLabel");
+    if(btn){ btn.textContent="Copied ✓"; setTimeout(()=>{ if(document.getElementById("copyBtnLabel")) document.getElementById("copyBtnLabel").textContent="Copy text"; },1500); }
+  }).catch(()=>{});
+}
+function renderShareModal(){
+  const root = document.getElementById("shareModalRoot");
+  if(shareText===null){ root.innerHTML=""; return; }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeShare()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Share</strong>
+          <button class="modal-x" onclick="closeShare()">✕</button>
+        </div>
+        <div class="modal-body">${esc(shareText)}</div>
+        <div class="modal-actions">
+          <button class="btn btn-outline flex1" onclick="copyShare()"><span id="copyBtnLabel">Copy text</span></button>
+          <button class="btn btn-success flex1" onclick="shareWhatsApp()">Share to WhatsApp</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== CONFIRM MODAL ===================== */
+/* Some in-app browsers / WebViews silently block window.confirm() (it returns
+   false with no dialog shown), which made delete buttons look broken.
+   This custom modal replaces confirm() everywhere so it always works. */
+let confirmState = null; // { message, onYes }
+function askConfirm(message, onYes){ confirmState = { message, onYes }; renderConfirmModal(); }
+function cancelConfirm(){ confirmState = null; renderConfirmModal(); }
+function proceedConfirm(){
+  const fn = confirmState && confirmState.onYes;
+  confirmState = null;
+  renderConfirmModal();
+  if(fn) fn();
+}
+function renderConfirmModal(){
+  const root = document.getElementById("confirmModalRoot");
+  if(!root) return;
+  if(!confirmState){ root.innerHTML=""; return; }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) cancelConfirm()">
+      <div class="modal">
+        <div class="modal-head"><strong>Please confirm</strong></div>
+        <div class="modal-body">${esc(confirmState.message)}</div>
+        <div class="modal-actions">
+          <button class="btn btn-outline flex1" onclick="cancelConfirm()">Cancel</button>
+          <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">Delete</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== NEW BILL TAB ===================== */
+function billMedTotal(){ return bill.items.reduce((s,it)=>s+it.subtotal,0); }
+function billExtrasTotal(){ return bill.extras.reduce((s,it)=>s+it.amount,0); }
+function billTestsGross(){ return bill.tests.reduce((s,t)=>s+t.amount,0); }
+function billTestsDiscount(){ return Math.min(Number(bill.testsDiscount)||0, billTestsGross()); }
+function billTestsTotal(){ return billTestsGross() - billTestsDiscount(); }
+function billFeeGross(){ return Number(bill.fee)||0; }
+function billFeeDiscount(){ return Math.min(Number(bill.feeDiscount)||0, billFeeGross()); }
+function billFeeNet(){ return billFeeGross() - billFeeDiscount(); }
+function billFeeContribution(){ return bill.feeIncluded ? billFeeNet() : 0; }
+function billGrandTotal(){ return billMedTotal() + billExtrasTotal() + billTestsTotal() + billFeeContribution(); }
+function onExtraAmount(v){ bill.extraAmount=v; scheduleRender(); }
+function addExtraItem(){
+  const amount = Number(bill.extraAmount);
+  if(!amount || amount<=0) return;
+  bill.extras.push({ id:uid(), amount });
+  bill.extraAmount="";
+  render();
+}
+function removeExtraItem(idx){ bill.extras.splice(idx,1); render(); }
+
+function toggleBillTestSelected(id){
+  const i = bill.selectedTestIds.indexOf(id);
+  if(i>=0) bill.selectedTestIds.splice(i,1); else bill.selectedTestIds.push(id);
+  render();
+}
+function toggleTestsMenu(){ bill.testsMenuOpen = !bill.testsMenuOpen; if(!bill.testsMenuOpen) testPriceEditorOpen=false; render(); }
+function addSelectedBillTests(){
+  if(!bill.selectedTestIds.length) return;
+  bill.selectedTestIds.forEach(id=>{
+    const test = allTests().find(t=>t.id===id);
+    if(!test) return;
+    const amount = Number(testPrices[id])||0;
+    bill.tests.push({ id:uid(), testId:test.id, name:test.name, amount });
+  });
+  bill.selectedTestIds = [];
+  render();
+}
+function onBillTestItemAmount(idx, v){
+  if(bill.tests[idx]) bill.tests[idx].amount = Number(v)||0;
+  scheduleRender();
+}
+function removeBillTest(idx){ bill.tests.splice(idx,1); render(); }
+function onBillTestsDiscount(v){ bill.testsDiscount=v; scheduleRender(); }
+function toggleTestPriceEditor(){
+  testPriceEditorOpen = !testPriceEditorOpen;
+  if(testPriceEditorOpen){
+    testPriceDraft = {};
+    testNameDraft = {};
+    allTests().forEach(t=>{
+      testPriceDraft[t.id] = (testPrices[t.id]!=null && testPrices[t.id]>0) ? String(testPrices[t.id]) : "";
+      testNameDraft[t.id] = t.name;
+    });
+    newTestNameDraft = ""; newTestPriceDraft = "";
+  }
+  render();
+}
+function onTestPriceDraft(id, v){ testPriceDraft[id]=v; }
+function onTestNameDraft(id, v){ testNameDraft[id]=v; }
+function onNewTestNameDraft(v){ newTestNameDraft=v; scheduleRender(); }
+function onNewTestPriceDraft(v){ newTestPriceDraft=v; }
+function addNewCustomTest(){
+  const name = newTestNameDraft.trim();
+  if(!name) return;
+  const id = uid();
+  customTests.push({ id, name });
+  saveCustomTests();
+  const price = Number(newTestPriceDraft)||0;
+  // Save the price right away instead of only staging it in the draft — previously the price
+  // only became permanent when the separate "Save" button below was tapped, so a test added
+  // and then left (panel closed, tab switched) without that extra tap kept its name but lost
+  // its price, showing 0 the next time the Edit panel opened.
+  if(price>0) testPrices[id]=price; else delete testPrices[id];
+  saveTestPrices();
+  testPriceDraft[id] = price>0 ? String(price) : "";
+  testNameDraft[id] = name;
+  newTestNameDraft = ""; newTestPriceDraft = "";
+  touchTestItem(id);
+  render();
+  showToast("✓ Test added");
+}
+function removeCustomTest(id){
+  const builtIn = isBuiltInTestId(id);
+  askConfirm(builtIn
+    ? "Remove this test from your list? It will no longer be available to add to bills. (You can't fully delete a built-in test, but this hides it from your list the same way.)"
+    : "Remove this test from your list? It will no longer be available to add to bills.", ()=>{
+    if(builtIn){
+      if(!hiddenBuiltInTestIds.includes(id)) hiddenBuiltInTestIds.push(id);
+      saveHiddenBuiltInTests();
+    } else {
+      customTests = customTests.filter(t=>t.id!==id);
+      saveCustomTests();
+    }
+    delete testPrices[id];
+    delete testPriceDraft[id];
+    delete testNameDraft[id];
+    delete testNameOverrides[id];
+    saveTestPrices();
+    saveTestNameOverrides();
+    touchTestItem(id);
+    render();
+  });
+}
+function saveAllTestPrices(){
+  const builtIn = {}; TEST_CATALOG.forEach(t=>builtIn[t.id]=t.name);
+  const touchedIds = [];
+  allTests().forEach(t=>{
+    const val = Number(testPriceDraft[t.id])||0;
+    const prevPrice = testPrices[t.id];
+    const newPrice = val>0 ? val : undefined;
+    if(newPrice!==prevPrice){
+      if(val>0) testPrices[t.id]=val; else delete testPrices[t.id];
+      touchedIds.push(t.id);
+    }
+    const nameVal = (testNameDraft[t.id]||"").trim();
+    if(!nameVal) return; // never allow a blank name to wipe a test's name
+    const custom = customTests.find(ct=>ct.id===t.id);
+    if(custom){
+      if(custom.name!==nameVal){ custom.name = nameVal; touchedIds.push(t.id); }
+    } else if(builtIn[t.id] !== undefined){
+      const prevOverride = testNameOverrides[t.id];
+      const newOverride = (nameVal !== builtIn[t.id]) ? nameVal : undefined;
+      if(newOverride!==prevOverride){
+        if(newOverride!=null) testNameOverrides[t.id] = newOverride; else delete testNameOverrides[t.id];
+        touchedIds.push(t.id);
+      }
+    }
+  });
+  saveTestPrices();
+  saveCustomTests();
+  saveTestNameOverrides();
+  // Only bump the ids that actually changed — so tests nobody touched in this edit keep
+  // their existing (possibly newer) per-id time from wherever they were last really edited.
+  new Set(touchedIds).forEach(id=>touchTestItem(id));
+  testPriceEditorOpen = false;
+  render();
+  showToast("✓ Tests saved");
+}
+function onBillFeeDiscount(v){ bill.feeDiscount=v; scheduleRender(); }
+function toggleFeeEdit(){ bill.feeEditing = !bill.feeEditing; render(); }
+function toggleFeeIncluded(){ bill.feeIncluded = !bill.feeIncluded; render(); }
+function saveDefaultDoctorFee(){
+  const val = Number(bill.fee)||0;
+  defaultDoctorFee = val;
+  defaultDoctorFeeUpdatedAt = Date.now();
+  saveDefaultDoctorFeeStorage();
+  saveDefaultDoctorFeeUpdatedAt();
+  schedulePushToCloud();
+  render();
+  showToast(val>0 ? "✓ Saved as permanent doctor fee" : "✓ Permanent doctor fee cleared");
+}
+
+function onBillPatient(v){ bill.patient=v; scheduleRender(); }
+function onBillFee(v){ bill.fee=v; scheduleRender(); }
+function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; scheduleRender(); }
+function onBillPills(v){ bill.pills=v; scheduleRender(); }
+function onBillPerDay(v){ bill.perDay=v; scheduleRender(); }
+function onBillDays(v){ bill.days=v; scheduleRender(); }
+function setBillQtyMode(mode){ bill.qtyMode=mode; render(); }
+function setBillDaysMode(mode){ bill.daysMode=mode; render(); }
+function onGlobalDays(v){
+  bill.globalDays = v;
+  const days = Number(v)||0;
+  bill.items.forEach(it=>{
+    if(it.linkedToGlobalDays){
+      it.pills = (it.perDay||0)*days;
+      it.subtotal = it.pricePerPill*it.pills;
+      it.note = days>0 ? `${it.perDay}/day × ${days}d` : `${it.perDay}/day × (set days below)`;
+    }
+  });
+  scheduleRender();
+}
+function billComputedPills(){
+  if(bill.qtyMode==="dose"){
+    const perDay = Number(bill.perDay);
+    if(!perDay || perDay<=0) return 0;
+    const days = bill.daysMode==="same" ? (Number(bill.globalDays)||0) : Number(bill.days);
+    if(!days || days<=0) return 0;
+    return perDay*days;
+  }
+  return Number(bill.pills) || 0;
+}
+function canAddBillItem(){
+  if(!bill.selectedMedId) return false;
+  if(bill.qtyMode==="total") return Number(bill.pills)>0;
+  const perDay = Number(bill.perDay);
+  if(!perDay || perDay<=0) return false;
+  if(bill.daysMode==="same") return true; // days can be set later, applies to whole list
+  const days = Number(bill.days);
+  return !!(days && days>0);
+}
+function pickBillMed(id){ bill.selectedMedId=id; const m=inventory.find(x=>x.id===id); bill.query=m?m.name:""; render(); }
+
+function addBillItem(){
+  const med = inventory.find(m=>m.id===bill.selectedMedId);
+  if(!med || !canAddBillItem()) return;
+  const pricePerPill = nextBatchUnitPrice(med);
+  if(bill.qtyMode==="total"){
+    const pills = Number(bill.pills)||0;
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note:"", perDay:null, linkedToGlobalDays:false});
+  } else if(bill.daysMode==="same"){
+    const perDay = Number(bill.perDay)||0;
+    const days = Number(bill.globalDays)||0;
+    const pills = perDay*days;
+    const note = days>0 ? `${perDay}/day × ${days}d` : `${perDay}/day × (set days below)`;
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:true});
+  } else {
+    const perDay = Number(bill.perDay)||0;
+    const days = Number(bill.days)||0;
+    const pills = perDay*days;
+    const note = `${perDay}/day × ${days}d`;
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:false});
+  }
+  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days="";
+  render();
+}
+function removeBillItem(idx){
+  bill.items.splice(idx,1);
+  if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee(); // the removed item may have held the whole-bill fee, or been the "last" one it should move to
+  render();
+}
+function editBillItem(idx){
+  const it = bill.items[idx];
+  if(!it) return;
+  bill.items.splice(idx,1);
+  if(it.special){
+    // Route special-medicine items back through the special add flow (not the normal one)
+    // so re-adding them keeps their specialCategory/applying-fee handling intact.
+    bill.selectedSpecialMedId = it.medId;
+    const sm = inventory.find(x=>x.id===it.medId);
+    bill.specialQuery = sm ? sm.name : it.name;
+    bill.specialPills = String(it.pills);
+    bill.applyingFeeDraft = (bill.applyingFeeMode==='perItem' && it.appliedFee) ? String(it.appliedFee) : "";
+    if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee();
+    render();
+    const el = document.getElementById("billSpecialPillsInput");
+    if(el){ el.focus(); el.select(); }
+    return;
+  }
+  bill.selectedMedId = it.medId;
+  const m = inventory.find(x=>x.id===it.medId);
+  bill.query = m ? m.name : it.name;
+  bill.qtyMode = "total";
+  bill.pills = String(it.pills);
+  bill.perDay = ""; bill.days = "";
+  render();
+  const el = document.getElementById("billPillsInput");
+  if(el){ el.focus(); el.select(); }
+}
+function pendingBillSubtotal(){
+  const med = inventory.find(m=>m.id===bill.selectedMedId);
+  const pills = billComputedPills();
+  if(!med || !pills || pills<=0) return 0;
+  return nextBatchUnitPrice(med)*pills;
+}
+function pendingSpecialBillSubtotal(){
+  const med = inventory.find(m=>m.id===bill.selectedSpecialMedId);
+  const pills = billComputedSpecialPills();
+  if(!med || !pills || pills<=0) return 0;
+  const fee = bill.applyingFeeMode==='perItem' ? (Number(bill.applyingFeeDraft)||0) : 0;
+  return nextBatchUnitPrice(med)*pills + fee;
+}
+
+/* ---- Special-category medicines: separate search/add flow, see specialMatches() in
+   renderBill and the state comment in newBillState() ---- */
+function onBillSpecialQuery(v){ bill.specialQuery=v; bill.selectedSpecialMedId=null; scheduleRender(); }
+function pickBillSpecialMed(id){ bill.selectedSpecialMedId=id; const m=inventory.find(x=>x.id===id); bill.specialQuery=m?m.name:""; render(); }
+function onBillSpecialPills(v){ bill.specialPills=v; scheduleRender(); }
+function billComputedSpecialPills(){ return Number(bill.specialPills)||0; }
+function canAddSpecialBillItem(){ return !!bill.selectedSpecialMedId && billComputedSpecialPills()>0; }
+function setApplyingFeeMode(mode){
+  bill.applyingFeeMode = mode;
+  bill.applyingFeeDraft = "";
+  bill.wholeApplyingFee = "";
+  recomputeWholeApplyingFee(); // strips any previously-applied whole fee when switching away from "whole"
+  render();
+}
+function onApplyingFeeDraft(v){ bill.applyingFeeDraft=v; scheduleRender(); }
+function onWholeApplyingFee(v){ bill.wholeApplyingFee=v; recomputeWholeApplyingFee(); scheduleRender(); }
+// The single whole-bill applying fee always lives on whichever special item was added most
+// recently — never as its own line. Re-run this after any add/remove of a special item, or
+// whenever the whole-bill fee amount itself changes, so it always tracks the current "last"
+// special item instead of staying stuck on one that may have since been removed.
+function recomputeWholeApplyingFee(){
+  const specials = bill.items.filter(it=>it.special);
+  specials.forEach(it=>{
+    if(it.feeMode==='whole'){
+      it.appliedFee = 0;
+      it.subtotal = it.baseSubtotal;
+      it.note = it.baseNote||"";
+      it.feeMode = null;
+    }
+  });
+  if(bill.applyingFeeMode==='whole' && specials.length){
+    const fee = Number(bill.wholeApplyingFee)||0;
+    const last = specials[specials.length-1];
+    last.feeMode = 'whole';
+    last.appliedFee = fee;
+    last.subtotal = last.baseSubtotal + fee;
+    last.note = fee>0 ? `${last.baseNote?last.baseNote+" · ":""}+applying fee ${CURRENCY}${money(fee)}` : (last.baseNote||"");
+  }
+}
+function addSpecialBillItem(){
+  const med = inventory.find(m=>m.id===bill.selectedSpecialMedId);
+  if(!med || !canAddSpecialBillItem()) return;
+  const pills = billComputedSpecialPills();
+  const pricePerPill = nextBatchUnitPrice(med);
+  const baseSubtotal = pricePerPill*pills;
+  const item = { medId:med.id, name:med.name, pills, pricePerPill, subtotal:baseSubtotal, note:"", perDay:null, linkedToGlobalDays:false,
+    special:true, specialCategory:med.specialCategory||"", baseSubtotal, baseNote:"", appliedFee:0, feeMode:null };
+  if(bill.applyingFeeMode==='perItem'){
+    const fee = Number(bill.applyingFeeDraft)||0;
+    item.feeMode = 'perItem';
+    item.appliedFee = fee;
+    item.subtotal = baseSubtotal + fee;
+    item.note = fee>0 ? `+applying fee ${CURRENCY}${money(fee)}` : "";
+  }
+  bill.items.push(item);
+  bill.selectedSpecialMedId=null; bill.specialQuery=""; bill.specialPills=""; bill.applyingFeeDraft="";
+  if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee();
+  render();
+}
+
+function canCompleteBill(){ return bill.patient.trim() && (bill.items.length>0 || (bill.feeIncluded && Number(bill.fee)>0) || bill.extras.length>0 || bill.tests.length>0) && bill.items.every(it=>it.pills>0); }
+
+/* ===================== TOAST ===================== */
+let toastTimer = null;
+function showToast(msg){
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ el.classList.add("hidden"); }, 1800);
+}
+
+function completeBill(){
+  if(!canCompleteBill()) return;
+  bill.items.forEach(it=>{
+    const med = inventory.find(m=>m.id===it.medId);
+    if(med) deductStock(med, it.pills);
+  });
+  saveInventory();
+  const tx = { id:uid(), timestamp:Date.now(), updatedAt:Date.now(), patientName:bill.patient.trim(),
+    doctorFee: bill.feeIncluded?billFeeGross():0, feeDiscount: bill.feeIncluded?billFeeDiscount():0, items:bill.items, medTotal:billMedTotal(),
+    extras:bill.extras, extrasTotal:billExtrasTotal(),
+    tests:bill.tests, testsTotal:billTestsGross(), testsDiscount:billTestsDiscount(),
+    grandTotal:billGrandTotal() };
+  transactions.unshift(tx);
+  saveTransactions();
+  bill = newBillState();
+  render();
+  showToast("✓ Bill saved — find it anytime in Records");
+}
+
+function buildBillText(tx){
+  const lines = [`🏥 Patient Bill`, `Patient: ${tx.patientName}`, `Date: ${fmtDateTime(tx.timestamp)}`, ``];
+  if(tx.items.length){
+    lines.push(`Medicines:`);
+    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${it.pills} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.subtotal)}`));
+    lines.push(``);
+  }
+  if(tx.tests && tx.tests.length){
+    lines.push(`Tests:`);
+    tx.tests.forEach((t,i)=> lines.push(`${i+1}. ${t.name} — ${CURRENCY}${money(t.amount)}`));
+    if(tx.testsDiscount) lines.push(`Tests discount: -${CURRENCY}${money(tx.testsDiscount)}`);
+    lines.push(``);
+  }
+  if(tx.extras && tx.extras.length){
+    lines.push(`Other charges:`);
+    tx.extras.forEach((ex,i)=> lines.push(`${i+1}. Other charge — ${CURRENCY}${money(ex.amount)}`));
+    lines.push(``);
+  }
+  lines.push(`Medicine total: ${CURRENCY}${money(tx.medTotal)}`);
+  if(tx.tests && tx.tests.length) lines.push(`Tests total: ${CURRENCY}${money((tx.testsTotal||0)-(tx.testsDiscount||0))}`);
+  lines.push(`Doctor fee: ${CURRENCY}${money((tx.doctorFee||0)-(tx.feeDiscount||0))}`);
+  if(tx.feeDiscount) lines.push(`Doctor fee discount: -${CURRENCY}${money(tx.feeDiscount)}`);
+  lines.push(`--------------------------`);
+  lines.push(`Grand total: ${CURRENCY}${money(tx.grandTotal)}`);
+  return lines.join("\n");
+}
+
+function renderBill(){
+  const q = bill.query.trim().toLowerCase();
+  // Medicines carrying a Special category are deliberately excluded from this normal
+  // search — they only surface through the separate special search below.
+  const matches = q ? inventory.filter(m=>!m.deleted && !m.specialCategory && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q))).slice(0,6) : [];
+  const selMed = inventory.find(m=>m.id===bill.selectedMedId);
+
+  const sq = bill.specialQuery.trim().toLowerCase();
+  const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && (m.name.toLowerCase().includes(sq)||(m.formula||"").toLowerCase().includes(sq))).slice(0,6) : [];
+  const selSpecialMed = inventory.find(m=>m.id===bill.selectedSpecialMedId);
+
+  let itemsHtml = "";
+  if(bill.items.length){
+    itemsHtml = `<div class="card"><h3 class="mb2" style="font-size:14px;font-weight:700;">This bill</h3>` +
+      bill.items.map((it,idx)=>`
+        <div class="item-row">
+          <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}${it.special?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;vertical-align:middle;">${esc(it.specialCategory||"Special")}</span>`:""}</div>
+          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
+          <div class="flex gap2" style="align-items:center;">
+            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
+            <button onclick="editBillItem(${idx})" class="btn btn-outline" style="padding:5px 12px;font-size:12px;border-radius:999px;">Edit</button>
+            <button onclick="removeBillItem(${idx})" class="icon-del-btn">🗑</button>
+          </div>
+        </div>`).join("") + `</div>`;
+  }
+
+  const testsHtml = `
+    <div class="card">
+      <div class="flex" style="justify-content:space-between;align-items:center;">
+        <h3 style="font-size:14px;font-weight:700;margin:0;">Tests${bill.tests.length?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${bill.tests.length}</span>`:""}</h3>
+        <button class="btn btn-outline flex gap1" style="padding:6px 14px;font-size:12px;align-items:center;" onclick="toggleTestsMenu()">Select tests
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(${bill.testsMenuOpen?180:0}deg);transition:transform .15s;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+      </div>
+      ${bill.testsMenuOpen ? `
+        <div class="mt2 divider-top">
+          <div class="flex" style="justify-content:flex-end;margin-bottom:8px;">
+            <button class="btn btn-outline" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="toggleTestPriceEditor()">${testPriceEditorOpen?"Close":"Edit"}</button>
+          </div>
+          ${testPriceEditorOpen ? `
+            <p class="small faint" style="margin:0 0 8px;">Edit each test's name or amount — used whenever you add it to a bill.</p>
+            ${allTests().map(t=>`
+              <div class="flex gap2 mb2" style="align-items:center;">
+                <input autocomplete="off" autocorrect="off" spellcheck="false" class="flex1" id="testNameDraft-${t.id}" type="text" value="${esc(testNameDraft[t.id]!=null?testNameDraft[t.id]:t.name)}" oninput="onTestNameDraft('${t.id}',this.value)" placeholder="Test name">
+                <input ${NOAC} id="testPriceDraft-${t.id}" type="text" inputmode="decimal" style="width:90px;" value="${esc(testPriceDraft[t.id]||"")}" oninput="onTestPriceDraft('${t.id}',this.value)" placeholder="0">
+                <button style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;padding:0 2px;" onclick="removeCustomTest('${t.id}')">🗑</button>
+              </div>`).join("")}
+            <button class="btn btn-primary" style="width:100%;margin-top:4px;" onclick="saveAllTestPrices()">Save</button>
+            <div class="mt3 divider-top">
+              <p class="small faint" style="margin:0 0 6px;font-weight:600;">Add a new test</p>
+              <div class="flex gap2 mb2">
+                <input autocomplete="off" autocorrect="off" spellcheck="false" class="flex1" id="newTestNameDraft" type="text" value="${esc(newTestNameDraft)}" oninput="onNewTestNameDraft(this.value)" placeholder="Test name">
+                <input ${NOAC} id="newTestPriceDraft" type="text" inputmode="decimal" style="width:90px;" value="${esc(newTestPriceDraft)}" oninput="onNewTestPriceDraft(this.value)" placeholder="Price">
+              </div>
+              <button class="btn btn-outline" style="width:100%;" ${!newTestNameDraft.trim()?"disabled":""} onclick="addNewCustomTest()">+ Add test</button>
+            </div>
+          ` : `
+            <p class="small faint" style="margin:0 0 2px;">Select any number of tests, then add them together.</p>
+            ${allTests().map(t=>`
+              <label class="flex gap2" style="align-items:center;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;">
+                <input type="checkbox" style="width:18px;height:18px;flex-shrink:0;" ${bill.selectedTestIds.includes(t.id)?"checked":""} onchange="toggleBillTestSelected('${t.id}')">
+                <span style="font-size:14px;flex:1;">${esc(t.name)}</span>
+                <span class="small faint">${CURRENCY}${money(testPrices[t.id]||0)}</span>
+              </label>`).join("")}
+            <button class="btn btn-primary mt2" style="width:100%;" ${!bill.selectedTestIds.length?"disabled":""} onclick="addSelectedBillTests()">+ Add selected (${bill.selectedTestIds.length})</button>
+          `}
+        </div>
+      ` : ""}
+      ${bill.tests.length ? bill.tests.map((t,idx)=>`
+        <div class="item-row">
+          <div style="font-size:14px;font-weight:600;">${esc(t.name)}</div>
+          <div class="flex gap2" style="align-items:center;">
+            <input ${NOAC} id="billTestItemAmount-${t.id}" type="text" inputmode="decimal" style="width:72px;text-align:right;padding:6px 8px;font-size:13px;" value="${esc(String(t.amount))}" oninput="onBillTestItemAmount(${idx},this.value)">
+            <button onclick="removeBillTest(${idx})" class="icon-del-btn">🗑</button>
+          </div>
+        </div>`).join("") : ""}
+      ${bill.tests.length ? `
+        <div class="mt2 divider-top8">
+          <label class="field-label">Discount on tests (${CURRENCY.trim()})</label>
+          <input ${NOAC} id="billTestsDiscountInput" type="text" inputmode="decimal" value="${esc(bill.testsDiscount)}" oninput="onBillTestsDiscount(this.value)" placeholder="0">
+        </div>` : ""}
+    </div>`;
+
+  document.getElementById("main").innerHTML = `
+    <div class="card">
+      <label class="field-label">Patient name</label>
+      <input ${NOAC} id="billPatientInput" value="${esc(bill.patient)}" oninput="onBillPatient(this.value)" placeholder="Type patient's name">
+      <div class="flex mt3" style="justify-content:space-between;align-items:center;">
+        <div>
+          <label class="field-label" style="margin-bottom:2px;">Doctor visit fee</label>
+          <div style="font-size:16px;font-weight:700;">${CURRENCY}${money(billFeeGross())}</div>
+          <div class="small" style="color:${bill.feeIncluded?'var(--success)':'var(--faint)'};margin-top:2px;">${bill.feeIncluded?"✓ Added to bill":"Not added to bill"}</div>
+        </div>
+        <div class="flex gap2" style="align-items:center;">
+          <button class="btn btn-outline" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="toggleFeeEdit()">${bill.feeEditing?"Done":"Edit"}</button>
+        </div>
+      </div>
+      ${bill.feeEditing ? `
+        <div class="mt2 divider-top">
+          <label class="field-label" style="margin-bottom:4px;">Doctor visit fee (${CURRENCY.trim()})</label>
+          <input ${NOAC} id="billFeeInput" type="text" inputmode="decimal" value="${esc(bill.fee)}" oninput="onBillFee(this.value)" placeholder="0">
+          ${defaultDoctorFee?`<div class="small faint mt2">Default: ${CURRENCY}${money(defaultDoctorFee)}</div>`:""}
+          <button class="btn btn-primary mt2" style="width:100%;" onclick="saveDefaultDoctorFee()">Save</button>
+        </div>
+      ` : ""}
+      <label class="field-label mt3" style="margin-bottom:4px;">Discount on doctor fee (${CURRENCY.trim()})</label>
+      <div class="flex gap2" style="align-items:center;">
+        <input ${NOAC} id="billFeeDiscountInput" type="text" inputmode="decimal" value="${esc(bill.feeDiscount)}" oninput="onBillFeeDiscount(this.value)" placeholder="0" class="flex1">
+        <button onclick="toggleFeeIncluded()" title="${bill.feeIncluded?'Remove doctor fee from this bill':'Add doctor fee to this bill'}"
+          style="width:36px;height:36px;border-radius:999px;border:none;padding:0;font-size:20px;font-weight:800;line-height:1;cursor:pointer;flex-shrink:0;
+            background:${bill.feeIncluded?'var(--primary)':'var(--primarySoft)'};color:${bill.feeIncluded?'#fff':'var(--primary)'};">+</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="mb2" style="font-size:14px;font-weight:700;">Add medicine</h3>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input ${NOAC} id="billQueryInput" value="${esc(selMed?selMed.name:bill.query)}" oninput="onBillQuery(this.value)" placeholder="Search medicine…">
+        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
+          <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
+            <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
+              <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
+              ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+              <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+            </button>
+            ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
+          </div>`).join("")}</div>` : ""}
+        ${bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : ""}
+      </div>
+
+      <div class="mt3 divider-top">
+        <p class="small faint" style="margin:0 0 6px;">Special-category medicines (hidden from the search above)</p>
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input ${NOAC} id="billSpecialQueryInput" value="${esc(selSpecialMed?selSpecialMed.name:bill.specialQuery)}" oninput="onBillSpecialQuery(this.value)" placeholder="Search special medicine…">
+          ${specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
+            <button onclick="pickBillSpecialMed('${m.id}')">
+              <div style="min-width:0;">
+                <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
+                ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+                <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+              </div>
+            </button>`).join("")}</div>` : ""}
+          ${bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : ""}
+        </div>
+
+        ${selSpecialMed ? `
+          <div class="flex gap2 mt3" style="margin-bottom:2px;">
+            <button class="btn ${bill.applyingFeeMode==='perItem'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setApplyingFeeMode('perItem')">Applying fee per medicine</button>
+            <button class="btn ${bill.applyingFeeMode==='whole'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setApplyingFeeMode('whole')">One applying fee for whole bill</button>
+          </div>
+          ${bill.applyingFeeMode==='whole' ? `
+            <div class="mt2">
+              <label class="field-label">Applying fee for the whole bill (${CURRENCY.trim()})</label>
+              <input ${NOAC} id="billWholeApplyingFeeInput" type="text" inputmode="decimal" value="${esc(bill.wholeApplyingFee)}" oninput="onWholeApplyingFee(this.value)" placeholder="0">
+              <p class="small faint mt2" style="margin-bottom:0;">Added onto the last special medicine you add to this bill.</p>
+            </div>
+          ` : ""}
+          <div class="mt2">
+            <label class="field-label">Medicine / units to give</label>
+            <input ${NOAC} id="billSpecialPillsInput" type="text" inputmode="numeric" value="${esc(bill.specialPills)}" oninput="onBillSpecialPills(this.value)" placeholder="e.g. 1">
+          </div>
+          ${bill.applyingFeeMode==='perItem' ? `
+            <div class="mt2">
+              <label class="field-label">Applying fee for this medicine (${CURRENCY.trim()}, optional)</label>
+              <input ${NOAC} id="billApplyingFeeDraftInput" type="text" inputmode="decimal" value="${esc(bill.applyingFeeDraft)}" oninput="onApplyingFeeDraft(this.value)" placeholder="0">
+            </div>
+          ` : ""}
+          ${billComputedSpecialPills()>0 ? `<p class="small mt2" style="margin-bottom:0;">${CURRENCY}${money(nextBatchUnitPrice(selSpecialMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selSpecialMed)*billComputedSpecialPills())}</p>` : ""}
+          <button class="btn btn-primary mt2" style="width:100%;" ${!canAddSpecialBillItem()?"disabled":""} onclick="addSpecialBillItem()">+ Add special medicine</button>
+        ` : ""}
+      </div>
+
+      ${selMed ? `
+        <div class="flex gap2 mt3">
+          <button class="btn ${bill.qtyMode==='total'?'btn-primary':'btn-outline'}" style="flex:1;padding:8px;font-size:12px;" onclick="setBillQtyMode('total')">Total medicine</button>
+          <button class="btn ${bill.qtyMode==='dose'?'btn-primary':'btn-outline'}" style="flex:1;padding:8px;font-size:12px;" onclick="setBillQtyMode('dose')">Per day × days</button>
+        </div>
+        ${bill.qtyMode==='total' ? `
+          <div class="flex gap2 mt2" style="align-items:flex-end;">
+            <div class="flex1">
+              <label class="field-label">Medicine / tablets to give</label>
+              <input ${NOAC} id="billPillsInput" type="text" inputmode="numeric" value="${esc(bill.pills)}" oninput="onBillPills(this.value)" placeholder="e.g. 10">
+            </div>
+            <button class="btn btn-primary" ${!billComputedPills()?"disabled":""} onclick="addBillItem()">+ Add</button>
+          </div>
+        ` : `
+          <div class="flex gap2 mt3" style="margin-bottom:2px;">
+            <button class="btn ${bill.daysMode==='perMed'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setBillDaysMode('perMed')">Set days per medicine</button>
+            <button class="btn ${bill.daysMode==='same'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setBillDaysMode('same')">Same days for whole bill</button>
+          </div>
+          <div class="flex gap2 mt2" style="align-items:flex-end;">
+            <div class="flex1">
+              <label class="field-label">Medicine per day</label>
+              <input ${NOAC} id="billPerDayInput" type="text" inputmode="numeric" value="${esc(bill.perDay)}" oninput="onBillPerDay(this.value)" placeholder="e.g. 2">
+            </div>
+            ${bill.daysMode==='perMed' ? `
+              <div class="flex1">
+                <label class="field-label">Number of days</label>
+                <input ${NOAC} id="billDaysInput" type="text" inputmode="numeric" value="${esc(bill.days)}" oninput="onBillDays(this.value)" placeholder="e.g. 5">
+              </div>
+            ` : ""}
+            <button class="btn btn-primary" ${!canAddBillItem()?"disabled":""} onclick="addBillItem()">+ Add</button>
+          </div>
+          ${bill.daysMode==='same' && !Number(bill.globalDays) ? `<p class="small mt2">Days not set yet — you can add medicines now and set the days once, any time. Medicine/price fill in for all of them as soon as you do.</p>` : ""}
+          ${billComputedPills()>0 ? `<p class="small mt2">= ${billComputedPills()} medicine total</p>` : ""}
+        `}
+        ${billComputedPills()>0 ? `<p class="small mt2">${CURRENCY}${money(nextBatchUnitPrice(selMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selMed)*billComputedPills())}</p>` : ""}
+      ` : ""}
+    </div>
+
+    ${itemsHtml}
+
+    ${bill.items.some(it=>it.linkedToGlobalDays) ? `
+      <div class="card" style="border:1px solid var(--primarySoft);">
+        <p class="small" style="margin-bottom:6px;">${bill.items.some(it=>it.linkedToGlobalDays && it.pills<=0) ? "Set the days for this bill to fill in medicine &amp; price for the medicines waiting on it." : "Days for this bill — change it anytime and every linked medicine recalculates."}</p>
+        <label class="field-label">Days (applies to every linked medicine)</label>
+        <input ${NOAC} id="billGlobalDaysInput2" type="text" inputmode="numeric" value="${esc(bill.globalDays)}" oninput="onGlobalDays(this.value)" placeholder="e.g. 5">
+      </div>
+    ` : ""}
+
+    ${testsHtml}
+
+    <div class="card">
+      <h3 class="mb2" style="font-size:14px;font-weight:700;">Others (dressing, transport, etc.)</h3>
+      <div class="flex gap2" style="align-items:flex-end;">
+        <div class="flex1">
+          <label class="field-label">Amount</label>
+          <input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="0">
+        </div>
+        <button class="btn btn-primary" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
+      </div>
+      ${bill.extras.length ? bill.extras.map((ex,idx)=>`
+        <div class="item-row">
+          <div style="font-size:14px;font-weight:600;">Other charge ${idx+1}</div>
+          <div class="flex gap2" style="align-items:center;">
+            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(ex.amount)}</span>
+            <button onclick="removeExtraItem(${idx})" class="icon-del-btn">🗑</button>
+          </div>
+        </div>`).join("") : ""}
+    </div>
+
+    <div class="card primary">
+      <div class="row"><span class="lab">Medicine total</span><span class="val">${CURRENCY}${money(billMedTotal()+pendingBillSubtotal()+pendingSpecialBillSubtotal())}</span></div>
+      ${billExtrasTotal()>0?`<div class="row mt2"><span class="lab">Others</span><span class="val">${CURRENCY}${money(billExtrasTotal())}</span></div>`:""}
+      ${bill.tests.length?`<div class="row mt2"><span class="lab">Tests</span><span class="val">${CURRENCY}${money(billTestsGross())}</span></div>`:""}
+      ${billTestsDiscount()>0?`<div class="row mt2"><span class="lab">Tests discount</span><span class="val">-${CURRENCY}${money(billTestsDiscount())}</span></div>`:""}
+      <div class="row mt2"><span class="lab">Doctor fee</span><span class="val">${CURRENCY}${money(bill.feeIncluded?billFeeGross():0)}</span></div>
+      ${bill.feeIncluded && billFeeDiscount()>0?`<div class="row mt2"><span class="lab">Doctor fee discount</span><span class="val">-${CURRENCY}${money(billFeeDiscount())}</span></div>`:""}
+      <div class="mt2" style="border-top:1px solid rgba(255,255,255,.25);padding-top:8px;">
+        <div class="row big"><span class="lab">Grand total</span><span class="val">${CURRENCY}${money(billGrandTotal()+pendingBillSubtotal()+pendingSpecialBillSubtotal())}</span></div>
+      </div>
+      ${pendingBillSubtotal()>0?`<p class="small mt2" style="color:var(--headerSub);">Includes ${esc(selMed?selMed.name:"")} — not added yet, tap + Add below</p>`:""}
+      ${pendingSpecialBillSubtotal()>0?`<p class="small mt2" style="color:var(--headerSub);">Includes ${esc(selSpecialMed?selSpecialMed.name:"")} — not added yet, tap + Add special medicine below</p>`:""}
+    </div>
+
+    <button class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
+      Complete bill &amp; get receipt
+    </button>
+  `;
+}
+
+/* ===================== INVENTORY TAB ===================== */
+function onInvQuery(v){ inv.query=v; scheduleRender(); }
+function searchInvByFormula(formula){
+  inv.query = formula || "";
+  render();
+  const el = document.getElementById("invQueryInput");
+  if(el){ el.focus(); }
+}
+function searchBillByFormula(formula){
+  bill.query = formula || "";
+  bill.selectedMedId = null;
+  render();
+  const el = document.getElementById("billQueryInput");
+  if(el){ el.focus(); }
+}
+function onInvForm(field,v){ inv.form[field]=v; }
+// The merged picker is one <select> covering both lists (see mergedCategoryOptionsHtml), so
+// picking a value has to decide which of the two underlying fields it belongs to — a medicine
+// can only be in ONE of the two right now, so the other is always cleared alongside it.
+function onInvCategoryPicked(v){
+  if(SPECIAL_CATEGORIES.includes(v)){ inv.form.category=""; inv.form.specialCategory=v; }
+  else { inv.form.category=v; inv.form.specialCategory=""; }
+}
+function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10"}; } render(); }
+function addMedicine(){
+  const f = inv.form;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
+  inventory.push({ id:uid(), name:f.name.trim(), category:f.category||"", specialCategory:f.specialCategory||"", formula:f.formula.trim(), mg:f.mg.trim(),
+    mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[],
+    updatedAt:Date.now(), deleted:false });
+  saveInventory();
+  inv.showForm=false;
+  render();
+}
+function deleteMedicine(id){
+  askConfirm("Delete this medicine from inventory?", ()=>{
+    // Soft-delete (keep the record, flag it) rather than removing it outright: this lets the
+    // deletion itself sync to other devices via updatedAt like any other edit. Removing it
+    // outright would just cause it to reappear once another device's data came back in.
+    const m = inventory.find(x=>x.id===id);
+    if(m){ m.deleted = true; m.updatedAt = Date.now(); }
+    saveInventory(); render();
+  });
+}
+function toggleRestock(id){ inv.editId=null; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; render(); }
+function onRestockBoxes(v){ inv.restockBoxes=v; }
+function onRestockExpiry(v){ inv.restockExpiry=v; }
+function onRestockMrp(v){ inv.restockMrp=v; }
+function doRestock(id){
+  const boxes = Number(inv.restockBoxes);
+  if(!boxes||boxes<=0) return;
+  const m = inventory.find(x=>x.id===id);
+  if(m){
+    const mrpVal = (inv.restockMrp!=="" && Number(inv.restockMrp)>0) ? Number(inv.restockMrp) : null;
+    m.batches = m.batches||[];
+    m.batches.push({ id:uid(), boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+    if(mrpVal!=null){ m.mrpPerBox = mrpVal; m.updatedAt = Date.now(); } // new MRP becomes the current default going forward
+    recomputeStock(m);
+  }
+  saveInventory();
+  inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp="";
+  render();
+}
+function openEdit(id){
+  inv.restockId=null;
+  inv.editId = inv.editId===id?null:id;
+  const m = inventory.find(x=>x.id===id);
+  if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
+    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn }; }
+  render();
+}
+function onEditForm(field,v){ inv.editForm[field]=v; }
+function onEditCategoryPicked(v){
+  if(SPECIAL_CATEGORIES.includes(v)){ inv.editForm.category=""; inv.editForm.specialCategory=v; }
+  else { inv.editForm.category=v; inv.editForm.specialCategory=""; }
+}
+function saveEdit(id){
+  const f = inv.editForm;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
+  const m = inventory.find(x=>x.id===id);
+  if(m){
+    m.name=f.name.trim(); m.category=f.category||""; m.specialCategory=f.specialCategory||""; m.formula=f.formula.trim(); m.mg=f.mg.trim();
+    m.mrpPerBox=Number(f.mrp); m.pillsPerBox=Number(f.pillsPerBox);
+    m.lowStockAt=Number(f.lowStockAt)||0;
+    m.updatedAt=Date.now();
+    adjustStockTo(m, Math.max(0,Number(f.stockPills)));
+  }
+  saveInventory();
+  inv.editId=null;
+  render();
+}
+
+function renderInventory(){
+  const q = inv.query.toLowerCase();
+  const filtered = inventory.filter(m=>!m.deleted && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q)));
+
+  const cards = filtered.map(m=>{
+    const pricePerPill = nextBatchUnitPrice(m);
+    const low = !m.noWarn && m.stockPills <= (m.lowStockAt??0);
+    let extra = "";
+    if(inv.restockId===m.id){
+      extra = `
+        <div class="mt2 divider-top8">
+          <div class="flex gap2" style="align-items:flex-end;">
+            <div class="flex1">
+              <label class="small">Boxes/strips received</label>
+              <input ${NOAC} id="restockInput-${m.id}" type="text" inputmode="numeric" value="${esc(inv.restockBoxes)}" oninput="onRestockBoxes(this.value)" placeholder="e.g. 5">
+            </div>
+            <button class="btn btn-primary" onclick="doRestock('${m.id}')">Add</button>
+          </div>
+          <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
+          <input id="restockExpiry-${m.id}" type="date" value="${esc(inv.restockExpiry)}" oninput="onRestockExpiry(this.value)">
+          <label class="small mt2" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
+          <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
+        </div>`;
+    }
+    if(inv.editId===m.id){
+      const f = inv.editForm;
+      extra = `
+        <div class="mt2 divider-top8">
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="editName-${m.id}" value="${esc(f.name)}" oninput="onEditForm('name',this.value)" placeholder="Medicine name" class="flex1">
+            <div class="cat-picker" style="flex:0 0 165px;">
+              <select id="editCategory-${m.id}" onchange="onEditCategoryPicked(this.value)">
+                <option value="" ${!f.category && !f.specialCategory?"selected":""}>Category</option>
+                ${mergedCategoryOptionsHtml(f.specialCategory||f.category)}
+              </select>
+              <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
+            </div>
+          </div>
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onEditForm('formula',this.value)" placeholder="Formula / composition">
+            <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
+          </div>
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
+            <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onEditForm('pillsPerBox',this.value)" placeholder="Medicine per box">
+          </div>
+          <label class="small" style="color:var(--danger);">Current stock (medicine) — correct for expired, damaged, or missing medicine</label>
+          <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
+          <label class="small">Warn me when stock falls to (medicine)</label>
+          <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
+          <div class="flex gap2 mt2">
+            <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
+            <button class="btn btn-primary flex1" onclick="saveEdit('${m.id}')">Save changes</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="card">
+        <div class="flex" style="justify-content:space-between;align-items:flex-start;">
+          <div>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${money(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${money(pricePerPill)}/medicine</p>
+            <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
+          </div>
+          <div class="flex gap1" style="align-items:center;flex-shrink:0;">
+            ${m.formula?`<button onclick='searchInvByFormula(${JSON.stringify(m.formula)})' title="Find other medicines with this formula" style="background:var(--primarySoft);color:var(--primary);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🔎 S.formula</button>`:""}
+            <button onclick="deleteMedicine('${m.id}')" class="icon-del-btn">🗑</button>
+          </div>
+        </div>
+        <div class="flex mt2" style="justify-content:space-between;align-items:center;">
+          <span class="pill-badge" style="background:${low?'var(--dangerSoft)':'var(--successSoft)'};color:${low?'var(--danger)':'var(--success)'};">${m.stockPills} medicine in stock${m.noWarn?" · no warnings":""}</span>
+          <div class="flex gap2">
+            <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
+            <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
+          </div>
+        </div>
+        ${activeBatches(m).length ? `
+          <div class="mt2 divider-top8">
+            <p class="small faint" style="margin:0 0 6px;">Batches (sold nearest-expiry first)</p>
+            ${fefoOrder(m).map(b=>{
+              const d = b.expiryDate ? daysUntil(b.expiryDate) : null;
+              const soon = d!==null && d<=10;
+              return `
+              <div class="flex gap2 mt2" style="align-items:center;">
+                <span class="small" style="min-width:70px;">${b.pillsRemaining} medicine</span>
+                <span class="small faint" style="min-width:60px;">${CURRENCY}${money(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
+                <input type="date" style="flex:1;padding:6px 8px;font-size:12px;" value="${esc(b.expiryDate||"")}" onchange="onBatchExpiryChange('${m.id}','${b.id}',this.value)">
+                ${d!==null ? `<span class="expiry-tag" style="background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
+                <button onclick="disposeBatch('${m.id}','${b.id}')" style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
+              </div>`;
+            }).join("")}
+          </div>` : ""}
+        ${extra}
+      </div>`;
+  }).join("");
+
+  const totalMedicines = inventory.filter(m=>!m.deleted).length;
+  document.getElementById("main").innerHTML = `
+    <div class="row mb2" style="padding:0 2px;">
+      <span class="small" style="font-weight:700;color:var(--muted);">Total medicines</span>
+      <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${totalMedicines}</span>
+    </div>
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
+    </div>
+    ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
+    ${cards}
+  `;
+}
+
+function renderInvFormModal(){
+  const root = document.getElementById("invFormModalRoot");
+  if(!root) return;
+  if(!inv.showForm){ root.innerHTML=""; return; }
+  root.innerHTML = `
+    <div class="modal-overlay" style="align-items:flex-start;padding-top:6vh;" onclick="if(event.target===this) toggleInvForm()">
+      <div class="modal" style="border-radius:16px;max-height:88vh;">
+        <div class="modal-head">
+          <strong>New medicine</strong>
+          <button class="modal-x" onclick="toggleInvForm()">✕</button>
+        </div>
+        <div style="padding:14px 16px;overflow-y:auto;">
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="invName" value="${esc(inv.form.name)}" oninput="onInvForm('name',this.value)" placeholder="Medicine name" class="flex1">
+            <div class="cat-picker" style="flex:0 0 165px;">
+              <select id="invCategory" onchange="onInvCategoryPicked(this.value)">
+                <option value="" ${!inv.form.category && !inv.form.specialCategory?"selected":""}>Category</option>
+                ${mergedCategoryOptionsHtml(inv.form.specialCategory||inv.form.category)}
+              </select>
+              <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
+            </div>
+          </div>
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="invFormula" value="${esc(inv.form.formula)}" oninput="onInvForm('formula',this.value)" placeholder="Formula / composition">
+            <input ${NOAC} id="invMg" value="${esc(inv.form.mg)}" oninput="onInvForm('mg',this.value)" placeholder="Strength (mg)">
+          </div>
+          <div class="flex gap2 mb2">
+            <input ${NOAC} id="invMrp" type="text" inputmode="decimal" value="${esc(inv.form.mrp)}" oninput="onInvForm('mrp',this.value)" placeholder="MRP per box (${CURRENCY.trim()})">
+            <input ${NOAC} id="invPpb" type="text" inputmode="numeric" value="${esc(inv.form.pillsPerBox)}" oninput="onInvForm('pillsPerBox',this.value)" placeholder="Medicine per box">
+          </div>
+          <label class="small">Warn me when stock falls to (medicine)</label>
+          <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline flex1" onclick="toggleInvForm()">Cancel</button>
+          <button class="btn btn-primary flex1" onclick="addMedicine()">Save medicine</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== RECORDS TAB ===================== */
+function visibleTransactions(){ return transactions.filter(t=>!t.deleted); }
+function dayOptions(){
+  const map = new Map();
+  map.set(new Date().toDateString(), Date.now());
+  const curMK = monthKeyOf(Date.now());
+  visibleTransactions().forEach(t=>{
+    if(monthKeyOf(t.timestamp)!==curMK) return; // older months are shown in the month/year folders below instead
+    const k=new Date(t.timestamp).toDateString(); if(!map.has(k)) map.set(k,t.timestamp);
+  });
+  return Array.from(map.entries()).sort((a,b)=>b[1]-a[1]).map(([key,ts])=>({
+    key, label: sameDay(ts,Date.now())?"Today":new Date(ts).toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})
+  }));
+}
+function currentMonthTx(){ const curMK = monthKeyOf(Date.now()); return visibleTransactions().filter(t=>monthKeyOf(t.timestamp)===curMK); }
+/* Manual correction: a number added on top of what's calculated from bills for a given
+   month, kept separate from any single bill so it can never distort stock or a patient's
+   record. Positive adds, negative subtracts. Defaults to 0 (no correction). */
+function getMonthAdjustment(mk){
+  const a = monthAdjustments[mk];
+  return { doctorFee:(a&&a.doctorFee)||0, medTotal:(a&&a.medTotal)||0, testsTotal:(a&&a.testsTotal)||0, othersTotal:(a&&a.othersTotal)||0, updatedAt:(a&&a.updatedAt)||0 };
+}
+function monthAdjustedTotals(mk, tx){
+  const computed = {
+    medTotal: tx.reduce((s,t)=>s+(t.medTotal||0),0),
+    feeTotal: tx.reduce((s,t)=>s+(t.doctorFee||0),0),
+    testsTotal: tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0),
+    extrasTotal: tx.reduce((s,t)=>s+(t.extrasTotal||0),0)
+  };
+  const adj = getMonthAdjustment(mk);
+  const medTotal = computed.medTotal + adj.medTotal;
+  const feeTotal = computed.feeTotal + adj.doctorFee;
+  const testsTotal = computed.testsTotal + adj.testsTotal;
+  const extrasTotal = computed.extrasTotal + adj.othersTotal;
+  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: medTotal+feeTotal+testsTotal+extrasTotal, adj };
+}
+/* Same medicine/fee/tests/others split as monthAdjustedTotals(), but for a single day's
+   transactions and with no manual correction applied — corrections are month-level only. */
+function dayTotals(tx){
+  const medTotal = tx.reduce((s,t)=>s+(t.medTotal||0),0);
+  const feeTotal = tx.reduce((s,t)=>s+(t.doctorFee||0),0);
+  const testsTotal = tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0);
+  const extrasTotal = tx.reduce((s,t)=>s+(t.extrasTotal||0),0);
+  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: medTotal+feeTotal+testsTotal+extrasTotal };
+}
+function toggleDayBreakdown(key){
+  rec.expandedDayBreakdown = rec.expandedDayBreakdown===key ? null : key;
+  render();
+}
+function toggleMonthBreakdown(){
+  rec.showMonthBreakdown = !rec.showMonthBreakdown;
+  if(!rec.showMonthBreakdown) rec.editingMonthBreakdown = false;
+  render();
+}
+function openMonthBreakdownEdit(){
+  const mk = monthKeyOf(Date.now());
+  const adj = getMonthAdjustment(mk);
+  rec.breakdownDraft = {
+    doctorFee: adj.doctorFee ? String(adj.doctorFee) : "",
+    medTotal: adj.medTotal ? String(adj.medTotal) : "",
+    testsTotal: adj.testsTotal ? String(adj.testsTotal) : "",
+    othersTotal: adj.othersTotal ? String(adj.othersTotal) : ""
+  };
+  rec.editingMonthBreakdown = true;
+  render();
+}
+function cancelMonthBreakdownEdit(){ rec.editingMonthBreakdown=false; render(); }
+function onBreakdownDraft(field,v){ rec.breakdownDraft[field]=v; }
+function saveMonthBreakdownEdit(){
+  const mk = monthKeyOf(Date.now());
+  monthAdjustments[mk] = {
+    doctorFee: Number(rec.breakdownDraft.doctorFee)||0,
+    medTotal: Number(rec.breakdownDraft.medTotal)||0,
+    testsTotal: Number(rec.breakdownDraft.testsTotal)||0,
+    othersTotal: Number(rec.breakdownDraft.othersTotal)||0,
+    updatedAt: Date.now()
+  };
+  saveMonthAdjustments();
+  rec.editingMonthBreakdown = false;
+  render();
+  showToast("✓ Correction saved");
+}
+function renderMonthBreakdownModal(){
+  const root = document.getElementById("monthBreakdownModalRoot");
+  if(!root) return;
+  if(!rec.showMonthBreakdown){ root.innerHTML=""; return; }
+  const mk = monthKeyOf(Date.now());
+  const mTx = currentMonthTx();
+  const t = monthAdjustedTotals(mk, mTx);
+  const hasAdj = !!(t.adj.doctorFee || t.adj.medTotal || t.adj.testsTotal || t.adj.othersTotal);
+  const monthLabel = new Date().toLocaleDateString(undefined,{month:"long",year:"numeric"});
+
+  const body = rec.editingMonthBreakdown ? `
+    <p class="small" style="margin:0 0 12px;">Add a correction on top of what's calculated from bills — use a negative number to subtract. This isn't tied to any single bill. Leave blank for no correction.</p>
+    <label class="field-label">Medicine correction (${CURRENCY.trim()})</label>
+    <input ${NOAC} id="bdMedInput" type="text" inputmode="decimal" value="${esc(rec.breakdownDraft.medTotal)}" oninput="onBreakdownDraft('medTotal',this.value)" placeholder="0" class="mb2">
+    <label class="field-label">Doctor fee correction (${CURRENCY.trim()})</label>
+    <input ${NOAC} id="bdFeeInput" type="text" inputmode="decimal" value="${esc(rec.breakdownDraft.doctorFee)}" oninput="onBreakdownDraft('doctorFee',this.value)" placeholder="0" class="mb2">
+    <label class="field-label">Tests correction (${CURRENCY.trim()})</label>
+    <input ${NOAC} id="bdTestsInput" type="text" inputmode="decimal" value="${esc(rec.breakdownDraft.testsTotal)}" oninput="onBreakdownDraft('testsTotal',this.value)" placeholder="0" class="mb2">
+    <label class="field-label">Others correction (${CURRENCY.trim()})</label>
+    <input ${NOAC} id="bdOthersInput" type="text" inputmode="decimal" value="${esc(rec.breakdownDraft.othersTotal)}" oninput="onBreakdownDraft('othersTotal',this.value)" placeholder="0" class="mb2">
+    <div class="flex gap2 mt2">
+      <button class="btn btn-outline flex1" onclick="cancelMonthBreakdownEdit()">Cancel</button>
+      <button class="btn btn-primary flex1" onclick="saveMonthBreakdownEdit()">Save correction</button>
+    </div>
+  ` : `
+    <div class="row" style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <span class="small" style="font-weight:600;">💊 Medicine</span>
+      <span style="font-weight:700;font-size:15px;">${CURRENCY}${money(t.medTotal)}</span>
+    </div>
+    <div class="row" style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <span class="small" style="font-weight:600;">🩺 Doctor fee</span>
+      <span style="font-weight:700;font-size:15px;">${CURRENCY}${money(t.feeTotal)}</span>
+    </div>
+    <div class="row" style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <span class="small" style="font-weight:600;">🧪 Tests</span>
+      <span style="font-weight:700;font-size:15px;">${CURRENCY}${money(t.testsTotal)}</span>
+    </div>
+    <div class="row" style="padding:10px 0;border-bottom:1px solid var(--border);">
+      <span class="small" style="font-weight:600;">📋 Others</span>
+      <span style="font-weight:700;font-size:15px;">${CURRENCY}${money(t.extrasTotal)}</span>
+    </div>
+    <div class="row" style="padding:12px 0 0;">
+      <span style="font-weight:700;">Grand total</span>
+      <span style="font-weight:700;font-size:18px;color:var(--primary);">${CURRENCY}${money(t.grandTotal)}</span>
+    </div>
+    <p class="small faint" style="margin-top:10px;">${mTx.length} bill${mTx.length===1?"":"s"} this month${hasAdj?" · includes a manual correction":""}</p>
+  `;
+
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this && !rec.editingMonthBreakdown) toggleMonthBreakdown()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Payments received — ${esc(monthLabel)}</strong>
+          <div class="flex gap2" style="align-items:center;">
+            ${!rec.editingMonthBreakdown?`<button class="btn btn-outline" style="padding:6px 14px;font-size:12px;border-radius:999px;" onclick="openMonthBreakdownEdit()">Edit</button>`:""}
+            <button class="modal-x" onclick="toggleMonthBreakdown()">✕</button>
+          </div>
+        </div>
+        <div style="padding:14px 16px;">
+          ${body}
+        </div>
+      </div>
+    </div>`;
+}
+function toggleMonthFolder(mk){ rec.expandedMonth = rec.expandedMonth===mk?null:mk; render(); }
+function toggleYearFolder(y){ rec.expandedYear = rec.expandedYear===y?null:y; if(rec.expandedYear===null) rec.expandedMonth=null; render(); }
+function renderRecordArchive(){
+  const curMK = monthKeyOf(Date.now());
+  const curYear = new Date().getFullYear();
+  const others = visibleTransactions().filter(t=>monthKeyOf(t.timestamp)!==curMK);
+  if(!others.length) return "";
+
+  const byMonth = new Map();
+  others.forEach(t=>{
+    const mk = monthKeyOf(t.timestamp);
+    if(!byMonth.has(mk)) byMonth.set(mk, { year:new Date(t.timestamp).getFullYear(), label:monthLabelOf(t.timestamp), tx:[] });
+    byMonth.get(mk).tx.push(t);
+  });
+  const monthEntries = Array.from(byMonth.entries()).sort((a,b)=>b[0].localeCompare(a[0]));
+
+  function monthFolder(mk, g){
+    const open = rec.expandedMonth===mk;
+    const total = g.tx.reduce((s,t)=>s+t.grandTotal,0);
+    const sorted = g.tx.slice().sort((a,b)=>b.timestamp-a.timestamp);
+    return `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <button onclick="toggleMonthFolder('${mk}')" style="width:100%;background:none;border:none;padding:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+          <div style="text-align:left;">
+            <p class="item-title">📅 ${esc(g.label)}</p>
+            <p class="small faint" style="margin:2px 0 0;">${g.tx.length} bill${g.tx.length===1?"":"s"}</p>
+          </div>
+          <div class="flex gap2" style="align-items:center;">
+            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(total)}</span>
+            <span class="faint">${open?"▲":"▼"}</span>
+          </div>
+        </button>
+        ${open?`<div style="padding:0 14px 14px;">${sorted.map(renderTxCard).join("")}</div>`:""}
+      </div>`;
+  }
+
+  const curYearMonths = monthEntries.filter(([mk,g])=>g.year===curYear);
+  const pastYearsMap = new Map();
+  monthEntries.filter(([mk,g])=>g.year!==curYear).forEach(([mk,g])=>{
+    if(!pastYearsMap.has(g.year)) pastYearsMap.set(g.year, []);
+    pastYearsMap.get(g.year).push([mk,g]);
+  });
+  const pastYears = Array.from(pastYearsMap.entries()).sort((a,b)=>b[0]-a[0]);
+
+  const curYearHtml = curYearMonths.map(([mk,g])=>monthFolder(mk,g)).join("");
+
+  const pastYearsHtml = pastYears.map(([year,months])=>{
+    const openY = rec.expandedYear===String(year);
+    const yTotal = months.reduce((s,[mk,g])=>s+g.tx.reduce((s2,t)=>s2+t.grandTotal,0),0);
+    const yCount = months.reduce((s,[mk,g])=>s+g.tx.length,0);
+    return `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <button onclick="toggleYearFolder('${year}')" style="width:100%;background:none;border:none;padding:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+          <div style="text-align:left;">
+            <p class="item-title">🗂 ${year}</p>
+            <p class="small faint" style="margin:2px 0 0;">${yCount} bill${yCount===1?"":"s"}</p>
+          </div>
+          <div class="flex gap2" style="align-items:center;">
+            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(yTotal)}</span>
+            <span class="faint">${openY?"▲":"▼"}</span>
+          </div>
+        </button>
+        ${openY?`<div style="padding:0 14px 14px;">${months.map(([mk,g])=>monthFolder(mk,g)).join("")}</div>`:""}
+      </div>`;
+  }).join("");
+
+  return `
+    <p class="small faint" style="font-weight:700;margin:18px 0 8px;">Earlier records</p>
+    ${curYearHtml}
+    ${pastYearsHtml}
+  `;
+}
+function toggleExpand(id){ rec.expandedId = rec.expandedId===id?null:id; rec.editingId=null; render(); }
+function onRecordsSearch(v){ rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; scheduleRender(); }
+function txDateSearchString(ts){
+  const d = new Date(ts);
+  return (d.toDateString()+" "+d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleDateString()).toLowerCase();
+}
+function txMatchesQuery(t,q){
+  if(!q) return true;
+  return t.patientName.toLowerCase().includes(q) || txDateSearchString(t.timestamp).includes(q);
+}
+function shareDay(dayKey){
+  const opts = dayOptions();
+  const dayLabel = opts.find(d=>d.key===dayKey)?.label||"";
+  const dayTx = visibleTransactions().filter(t=>new Date(t.timestamp).toDateString()===dayKey);
+  const dayTotal = dayTx.reduce((s,t)=>s+t.grandTotal,0);
+  const lines = [`📋 Patients attended — ${dayLabel}`, ``];
+  dayTx.slice().reverse().forEach((t,i)=> lines.push(`${i+1}. ${t.patientName} — ${CURRENCY}${money(t.grandTotal)}`));
+  lines.push(``, `Total (${dayTx.length} patients): ${CURRENCY}${money(dayTotal)}`);
+  openShare(lines.join("\n"));
+}
+function deleteTx(id){
+  askConfirm("Delete this bill record?", ()=>{
+    // Soft-delete (tombstone) rather than removing it outright, so the deletion itself can
+    // sync to other devices via updatedAt instead of the record quietly reappearing once
+    // another device's data comes back in.
+    const t = transactions.find(x=>x.id===id);
+    if(t){ t.deleted = true; t.updatedAt = Date.now(); }
+    saveTransactions(); render();
+  });
+}
+
+/* ---- editing an existing bill ---- */
+function openEditTx(id){
+  const t = transactions.find(x=>x.id===id);
+  if(!t) return;
+  recEdit = { txId:id, patient:t.patientName, fee:String(t.doctorFee), items:t.items.map(it=>({...it})), query:"", pills:"", selectedMedId:null,
+    extras:t.extras?t.extras.map(ex=>({...ex})):[], extrasTotal:t.extrasTotal||0,
+    tests:t.tests?t.tests.map(x=>({...x})):[], testsTotal:t.testsTotal||0, testsDiscount:t.testsDiscount||0, feeDiscount:t.feeDiscount||0 };
+  rec.editingId = id;
+  rec.expandedId = null;
+  render();
+}
+function cancelEditTx(){ rec.editingId=null; render(); }
+function onEditTxPatient(v){ recEdit.patient=v; }
+function onEditTxFee(v){ recEdit.fee=v; scheduleRender(); }
+function onEditTxQuery(v){ recEdit.query=v; recEdit.selectedMedId=null; scheduleRender(); }
+function onEditTxPills(v){ recEdit.pills=v; scheduleRender(); }
+function pickEditTxMed(id){ recEdit.selectedMedId=id; const m=inventory.find(x=>x.id===id); recEdit.query=m?m.name:""; render(); }
+function addEditTxItem(){
+  const med = inventory.find(m=>m.id===recEdit.selectedMedId);
+  const pills = Number(recEdit.pills);
+  if(!med || !pills || pills<=0) return;
+  const pricePerPill = nextBatchUnitPrice(med);
+  recEdit.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills});
+  recEdit.selectedMedId=null; recEdit.query=""; recEdit.pills="";
+  render();
+}
+function removeEditTxItem(idx){ recEdit.items.splice(idx,1); render(); }
+function editTxMedTotal(){ return recEdit.items.reduce((s,it)=>s+it.subtotal,0); }
+function editTxGrandTotal(){ return editTxMedTotal() + (Number(recEdit.fee)||0) - (recEdit.feeDiscount||0) + (recEdit.extrasTotal||0) + (recEdit.testsTotal||0) - (recEdit.testsDiscount||0); }
+function saveEditTx(){
+  const t = transactions.find(x=>x.id===recEdit.txId);
+  if(!t || !recEdit.patient.trim()) return;
+  // give back stock for the old items, then deduct stock for the new items
+  t.items.forEach(oldIt=>{
+    const med = inventory.find(m=>m.id===oldIt.medId);
+    if(med) returnStock(med, oldIt.pills);
+  });
+  recEdit.items.forEach(newIt=>{
+    const med = inventory.find(m=>m.id===newIt.medId);
+    if(med) deductStock(med, newIt.pills);
+  });
+  saveInventory();
+  t.patientName = recEdit.patient.trim();
+  t.doctorFee = Number(recEdit.fee)||0;
+  t.items = recEdit.items;
+  t.medTotal = editTxMedTotal();
+  t.extras = recEdit.extras||[];
+  t.extrasTotal = recEdit.extrasTotal||0;
+  t.tests = recEdit.tests||[];
+  t.testsTotal = recEdit.testsTotal||0;
+  t.testsDiscount = recEdit.testsDiscount||0;
+  t.feeDiscount = recEdit.feeDiscount||0;
+  t.grandTotal = editTxGrandTotal();
+  t.updatedAt = Date.now();
+  saveTransactions();
+  rec.editingId = null;
+  render();
+  showToast("✓ Bill updated");
+}
+
+function renderTxEditForm(t){
+  const q = recEdit.query.trim().toLowerCase();
+  const matches = q ? inventory.filter(m=>!m.deleted && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q))).slice(0,6) : [];
+  const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
+  return `
+    <div class="mt3 divider-top">
+      <label class="field-label">Patient name</label>
+      <input ${NOAC} id="editTxPatient-${t.id}" value="${esc(recEdit.patient)}" oninput="onEditTxPatient(this.value)" class="mb2">
+      <label class="field-label">Doctor visit fee (${CURRENCY.trim()})</label>
+      <input ${NOAC} id="editTxFee-${t.id}" type="text" inputmode="decimal" value="${esc(recEdit.fee)}" oninput="onEditTxFee(this.value)" class="mb2">
+
+      <label class="field-label">Add / adjust medicine</label>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input ${NOAC} id="editTxQuery-${t.id}" value="${esc(selMed?selMed.name:recEdit.query)}" oninput="onEditTxQuery(this.value)" placeholder="Search medicine…">
+        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
+          <button onclick="pickEditTxMed('${m.id}')">
+            <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
+            <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+          </button>`).join("")}</div>` : ""}
+      </div>
+      ${selMed ? `
+        <div class="flex gap2 mt2" style="align-items:flex-end;">
+          <div class="flex1">
+            <label class="small">Medicine / tablets</label>
+            <input ${NOAC} id="editTxPills-${t.id}" type="text" inputmode="numeric" value="${esc(recEdit.pills)}" oninput="onEditTxPills(this.value)" placeholder="e.g. 10">
+          </div>
+          <button class="btn btn-primary" ${(!recEdit.pills||Number(recEdit.pills)<=0)?"disabled":""} onclick="addEditTxItem()">+ Add</button>
+        </div>` : ""}
+
+      ${recEdit.items.map((it,idx)=>`
+        <div class="item-row">
+          <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}</div>
+          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
+          <div class="flex gap2" style="align-items:center;">
+            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
+            <button onclick="removeEditTxItem(${idx})" class="icon-del-btn">🗑</button>
+          </div>
+        </div>`).join("")}
+
+      <div class="row mt2" style="font-size:13px;color:var(--muted);">
+        <span>Medicine total</span><span>${CURRENCY}${money(editTxMedTotal())}</span>
+      </div>
+      ${recEdit.extrasTotal>0?`<div class="row" style="font-size:13px;color:var(--muted);"><span>Others</span><span>${CURRENCY}${money(recEdit.extrasTotal)}</span></div>`:""}
+      <div class="row" style="font-size:14px;font-weight:700;margin-top:4px;">
+        <span>Grand total</span><span>${CURRENCY}${money(editTxGrandTotal())}</span>
+      </div>
+
+      <div class="flex gap2 mt3">
+        <button class="btn btn-outline flex1" onclick="cancelEditTx()">Cancel</button>
+        <button class="btn btn-primary flex1" ${!recEdit.patient.trim()?"disabled":""} onclick="saveEditTx()">Save changes</button>
+      </div>
+    </div>`;
+}
+
+function renderTxCard(t){
+  const editing = rec.editingId===t.id;
+  return `
+    <div class="card">
+      <button onclick="toggleExpand('${t.id}')" style="width:100%;background:none;border:none;padding:0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+        <div style="text-align:left;">
+          <p style="font-weight:700;font-size:14px;margin:0;color:var(--text);">${esc(t.patientName)}</p>
+          <p class="small faint" style="margin:2px 0 0;">${fmtDateTime(t.timestamp)}</p>
+        </div>
+        <div class="flex gap2" style="align-items:center;">
+          <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(t.grandTotal)}</span>
+          <span class="faint">${(rec.expandedId===t.id||editing)?"▲":"▼"}</span>
+        </div>
+      </button>
+      ${editing ? renderTxEditForm(t) : (rec.expandedId===t.id ? `
+        <div class="mt3 divider-top">
+          ${t.items.map(it=>`<div class="row small" style="color:var(--muted);margin-bottom:4px;"><span>${esc(it.name)} × ${it.pills}</span><span>${CURRENCY}${money(it.subtotal)}</span></div>`).join("")}
+          ${t.tests&&t.tests.length?t.tests.map(tt=>`<div class="row small" style="color:var(--muted);margin-bottom:4px;"><span>${esc(tt.name)}</span><span>${CURRENCY}${money(tt.amount)}</span></div>`).join(""):""}
+          ${t.testsDiscount?`<div class="row small" style="color:var(--success);margin-bottom:4px;"><span>Tests discount</span><span>-${CURRENCY}${money(t.testsDiscount)}</span></div>`:""}
+          ${t.extras&&t.extras.length?t.extras.map((ex,i)=>`<div class="row small" style="color:var(--muted);margin-bottom:4px;"><span>${esc(ex.label)||`Other charge ${i+1}`}</span><span>${CURRENCY}${money(ex.amount)}</span></div>`).join(""):""}
+          <div class="row small" style="color:var(--muted);border-top:1px solid var(--border);padding-top:4px;"><span>Doctor fee</span><span>${CURRENCY}${money(t.doctorFee)}</span></div>
+          ${t.feeDiscount?`<div class="row small" style="color:var(--success);margin-bottom:4px;"><span>Doctor fee discount</span><span>-${CURRENCY}${money(t.feeDiscount)}</span></div>`:""}
+          <div class="flex gap2 mt3">
+            <button class="btn btn-success flex1" style="font-size:12px;padding:8px;" onclick='openShare(${JSON.stringify(buildBillText(t))})'>📤 Share bill</button>
+            <button class="btn btn-outline" style="padding:8px 12px;border-radius:999px;" onclick="openEditTx('${t.id}')">Edit</button>
+            <button class="btn btn-outline" style="padding:8px 12px;" onclick="deleteTx('${t.id}')">🗑</button>
+          </div>
+        </div>` : "")}
+    </div>`;
+}
+
+function renderRecords(){
+  if(visibleTransactions().length===0){
+    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
+    return;
+  }
+
+  const searchBar = `
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
+    </div>`;
+
+  const q = rec.searchQuery.trim().toLowerCase();
+  if(q){
+    const matched = visibleTransactions().filter(t=>txMatchesQuery(t,q)).sort((a,b)=>b.timestamp-a.timestamp);
+    document.getElementById("main").innerHTML = searchBar +
+      (matched.length===0
+        ? `<p class="small faint" style="text-align:center;padding:32px 0;">No bills match "${esc(rec.searchQuery)}".</p>`
+        : `<p class="small faint mb2">${matched.length} result${matched.length===1?"":"s"}</p>` + matched.map(renderTxCard).join(""));
+    return;
+  }
+
+  const opts = dayOptions();
+
+  const mTx = currentMonthTx();
+  const mTotal = monthAdjustedTotals(monthKeyOf(Date.now()), mTx).grandTotal;
+  const monthStat = `
+    <button onclick="toggleMonthBreakdown()" class="card" style="background:var(--primarySoft);border:none;width:100%;text-align:left;cursor:pointer;padding:14px;">
+      <div class="row">
+        <span class="small" style="font-weight:700;color:var(--primary);">Total sales this month</span>
+        <span style="font-weight:700;font-size:16px;color:var(--primary);">${CURRENCY}${money(mTotal)}</span>
+      </div>
+      <p class="small faint" style="margin:2px 0 0;">${mTx.length} bill${mTx.length===1?"":"s"} this month · tap for breakdown</p>
+    </button>`;
+
+  // Every day in the current month that has bills (plus today, even if empty) is shown
+  // stacked here in one continuous list — most recent first — instead of behind a picker,
+  // so previous days' records are visible without needing to select them from a dropdown.
+  const daysHtml = opts.map(d=>{
+    const dayTx = visibleTransactions().filter(t=>new Date(t.timestamp).toDateString()===d.key);
+    const dayTotal = dayTx.reduce((s,t)=>s+t.grandTotal,0);
+    const divideOpen = rec.expandedDayBreakdown===d.key;
+    const dt = divideOpen ? dayTotals(dayTx) : null;
+    return `
+      <div class="card primary">
+        <p style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--headerSub);margin:0 0 8px;">Single record — ${d.label}</p>
+        ${dayTx.length===0 ? `<p style="color:var(--headerSub);font-size:14px;">No patients recorded for this day.</p>` :
+          dayTx.slice().reverse().map((t,i)=>`
+            <div class="row" style="margin-bottom:6px;font-size:14px;">
+              <span>${i+1}. ${esc(t.patientName)}</span><span style="font-weight:700;">${CURRENCY}${money(t.grandTotal)}</span>
+            </div>`).join("")
+        }
+        <div class="mt2" style="border-top:1px solid rgba(255,255,255,.3);padding-top:8px;">
+          <div class="row big"><span>Total · ${dayTx.length} patients</span><span>${CURRENCY}${money(dayTotal)}</span></div>
+        </div>
+        ${dayTx.length>0?`
+        <button onclick="toggleDayBreakdown('${d.key}')" class="flex gap1" style="width:100%;background:none;border:none;color:#fff;opacity:.9;padding:8px 0 0;margin:0;cursor:pointer;font-size:12px;font-weight:600;align-items:center;justify-content:center;">
+          Sales divide
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(${divideOpen?180:0}deg);transition:transform .15s;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>` : ""}
+        ${divideOpen ? `
+        <div class="mt2" style="border-top:1px solid rgba(255,255,255,.3);padding-top:8px;">
+          <div class="row" style="font-size:13px;padding:4px 0;"><span>💊 Medicine</span><span style="font-weight:700;">${CURRENCY}${money(dt.medTotal)}</span></div>
+          <div class="row" style="font-size:13px;padding:4px 0;"><span>🧪 Tests</span><span style="font-weight:700;">${CURRENCY}${money(dt.testsTotal)}</span></div>
+          <div class="row" style="font-size:13px;padding:4px 0;"><span>🩺 Doctor fee</span><span style="font-weight:700;">${CURRENCY}${money(dt.feeTotal)}</span></div>
+          <div class="row" style="font-size:13px;padding:4px 0;"><span>📋 Others</span><span style="font-weight:700;">${CURRENCY}${money(dt.extrasTotal)}</span></div>
+        </div>` : ""}
+        ${dayTx.length>0?`<button class="btn mt3" style="width:100%;background:rgba(255,255,255,.18);color:#fff;" onclick="shareDay('${d.key}')">📤 Share this day's record</button>`:""}
+      </div>
+      ${dayTx.map(renderTxCard).join("")}
+    `;
+  }).join("");
+
+  document.getElementById("main").innerHTML = searchBar + monthStat + daysHtml + renderRecordArchive();
+}
+
+/* ===================== LOW STOCK TAB ===================== */
+function shareLowStock(){
+  const list = lowStockList();
+  const lines = [`⚠️ Out of stock / low stock`, `As of ${fmtDateTime(Date.now())}`, ``];
+  list.forEach((m,i)=>{
+    const strength = [m.formula,m.mg].filter(Boolean).join(" · ");
+    lines.push(`${i+1}. ${m.name}${strength?` (${strength})`:""} — ${m.stockPills} medicine left`);
+  });
+  openShare(lines.join("\n"));
+}
+function toggleWarnBack(id){
+  const m = inventory.find(x=>x.id===id);
+  if(m){ m.noWarn = false; m.updatedAt = Date.now(); }
+  saveInventory();
+  render();
+}
+function dismissLowStock(id){
+  const m = inventory.find(x=>x.id===id);
+  if(m){ m.noWarn = true; m.updatedAt = Date.now(); }
+  saveInventory();
+  render();
+}
+function renderStock(){
+  const list = lowStockList();
+  const hidden = inventory.filter(m=>!m.deleted && m.noWarn && m.stockPills <= (m.lowStockAt ?? 0));
+
+  const hiddenHtml = hidden.length ? `
+    <p class="small" style="font-weight:700;color:var(--warning);margin:${list.length?"18px":"0"} 0 8px;">
+      ⚠ These are actually low too, but their warning is turned off
+    </p>
+    ${hidden.map(m=>`
+      <div class="card" style="border-color:#F0DCB0;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <p class="small faint" style="margin:2px 0 0;">${m.stockPills} medicine left</p>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;" onclick="toggleWarnBack('${m.id}')">Turn warning back on</button>
+        </div>
+      </div>`).join("")}` : "";
+
+  const expiring = expiringBatches();
+  const expiringHtml = expiring.length ? `
+    <p class="small" style="font-weight:700;color:var(--danger);margin:${list.length||hidden.length?"18px":"0"} 0 8px;">
+      ⏳ Expiring within 10 days
+    </p>
+    ${expiring.map(({med:m,batch:b,daysLeft})=>`
+      <div class="card" style="border-color:#F3C6BE;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <p class="small" style="margin:2px 0 0;color:var(--danger);font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="disposeBatch('${m.id}','${b.id}')">Medicine disposed</button>
+        </div>
+      </div>`).join("")}` : "";
+
+  if(list.length===0 && hidden.length===0 && expiring.length===0){
+    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">All medicines are sufficiently stocked and nothing is expiring soon. 👍</p>`;
+    return;
+  }
+
+  document.getElementById("main").innerHTML = `
+    ${list.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
+    ${list.map(m=>`
+      <div class="card" style="border-color:#F3C6BE;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <span style="font-size:12px;font-weight:700;color:var(--danger);">${m.stockPills} medicine left</span>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="dismissLowStock('${m.id}')">We'll buy it later</button>
+        </div>
+      </div>`).join("")}
+    ${hiddenHtml}
+    ${expiringHtml}
+  `;
+}
+
+/* ===================== NOTEPAD TAB (multiple notes, one notepad per profile) ===================== */
+function switchProfile(id){
+  currentProfileId = id;
+  localStorage.setItem("clinic_current_profile", id);
+  loadNotesForCurrentProfile();
+  notesUi.openId=null;
+  render();
+}
+function toggleAddProfile(){
+  notesUi.addingProfile = !notesUi.addingProfile;
+  notesUi.newProfileName = "";
+  render();
+}
+function visibleProfiles(){ return profiles.filter(p=>!p.deleted); }
+function onNewProfileName(v){ notesUi.newProfileName=v; }
+function addProfile(){
+  const name = notesUi.newProfileName.trim();
+  if(!name) return;
+  const p = { id:uid(), name, updatedAt:Date.now() };
+  profiles.push(p);
+  saveProfiles();
+  notesUi.addingProfile = false;
+  switchProfile(p.id);
+}
+function deleteProfile(id){
+  const p = profiles.find(x=>x.id===id);
+  if(!p) return;
+  askConfirm(`Remove "${p.name}" and delete all of their notes? This cannot be undone.`, ()=>{
+    // Soft-delete (tombstone) so the removal itself can sync to other devices, same as
+    // medicines/bills/notes — otherwise it just reappears once another device's data syncs back.
+    p.deleted = true; p.updatedAt = Date.now();
+    saveProfiles();
+    try{ localStorage.removeItem("clinic_notes_"+id); }catch(e){}
+    if(currentProfileId===id){
+      const remaining = visibleProfiles();
+      currentProfileId = remaining[0] ? remaining[0].id : null;
+      if(currentProfileId) localStorage.setItem("clinic_current_profile", currentProfileId);
+      else localStorage.removeItem("clinic_current_profile");
+      loadNotesForCurrentProfile();
+    }
+    notesUi.openId=null;
+    render();
+  });
+}
+function onNotesSearch(v){ notesUi.searchQuery=v; scheduleRender(); }
+function openNewNote(){ notesUi.openId="new"; notesUi.draftTitle=""; notesUi.draftBody=""; render(); }
+function openExistingNote(id){
+  const n = notes.find(x=>x.id===id);
+  notesUi.openId=id; notesUi.draftTitle=n?n.title:""; notesUi.draftBody=n?n.body:"";
+  render();
+}
+function onNoteTitle(v){ notesUi.draftTitle=v; }
+function onNoteBody(v){ notesUi.draftBody=v; }
+function backFromNote(){ saveDraftNote(); }
+function saveDraftNote(){
+  if(!notesUi.draftTitle.trim() && !notesUi.draftBody.trim()){ notesUi.openId=null; render(); return; }
+  const title = notesUi.draftTitle.trim() || "Untitled note";
+  if(notesUi.openId==="new"){
+    notes.unshift({ id:uid(), title, body:notesUi.draftBody, updatedAt:Date.now() });
+  } else {
+    const n = notes.find(x=>x.id===notesUi.openId);
+    if(n){ n.title=title; n.body=notesUi.draftBody; n.updatedAt=Date.now(); }
+  }
+  saveNotes();
+  notesUi.openId=null;
+  render();
+}
+function deleteNote(id){
+  askConfirm("Delete this note?", ()=>{
+    const n = notes.find(x=>x.id===id);
+    if(n){ n.deleted = true; n.updatedAt = Date.now(); }
+    saveNotes();
+    if(notesUi.openId===id) notesUi.openId=null;
+    render();
+  });
+}
+function shareNote(id){
+  let title, body;
+  if(id==="draft"){ title=notesUi.draftTitle||"Untitled note"; body=notesUi.draftBody; }
+  else { const n=notes.find(x=>x.id===id); title=n.title; body=n.body; }
+  openShare(`📝 ${title}\n\n${body}`);
+}
+
+function renderNotes(){
+  if(visibleProfiles().length===0){
+    document.getElementById("main").innerHTML = `
+      <div class="card" style="text-align:center;">
+        <p style="font-weight:700;margin:0 0 6px;">Who's writing notes?</p>
+        <p class="small faint" style="margin:0 0 12px;">Each person gets their own private notepad on this device.</p>
+        <input ${NOAC} id="firstProfileName" value="${esc(notesUi.newProfileName)}" oninput="onNewProfileName(this.value)" placeholder="Your name" class="mb2">
+        <button class="btn btn-primary" style="width:100%;" onclick="addProfile()">Start my notepad</button>
+      </div>`;
+    return;
+  }
+
+  const profileSwitcher = `
+    <div class="card" style="padding:10px 14px;">
+      <label class="field-label" style="margin-bottom:6px;">Notepad for</label>
+      <div class="flex gap2" style="align-items:center;">
+        <select id="profileSelect" onchange="switchProfile(this.value)" style="flex:1;">
+          ${visibleProfiles().map(p=>`<option value="${p.id}" ${p.id===currentProfileId?"selected":""}>${esc(p.name)}</option>`).join("")}
+        </select>
+        <button class="btn btn-outline" style="padding:10px 12px;white-space:nowrap;" onclick="toggleAddProfile()">${notesUi.addingProfile?"✕":"+ Add"}</button>
+        <button class="btn btn-outline" style="padding:10px 12px;color:var(--danger);" onclick="deleteProfile('${currentProfileId}')" title="Remove this person">🗑</button>
+      </div>
+      ${notesUi.addingProfile ? `
+        <div class="flex gap2 mt2">
+          <input ${NOAC} id="newProfileNameInput" value="${esc(notesUi.newProfileName)}" oninput="onNewProfileName(this.value)" placeholder="New person's name" class="flex1">
+          <button class="btn btn-primary" onclick="addProfile()">Add</button>
+        </div>` : ""}
+    </div>`;
+
+  if(notesUi.openId!==null){
+    const isNew = notesUi.openId==="new";
+    document.getElementById("main").innerHTML = profileSwitcher + `
+      <button onclick="backFromNote()" style="background:none;border:none;color:var(--primary);font-weight:600;font-size:14px;cursor:pointer;padding:0;margin-bottom:12px;">← Back</button>
+      <input ${NOAC} id="noteTitleInput" value="${esc(notesUi.draftTitle)}" oninput="onNoteTitle(this.value)" placeholder="Note title" style="font-weight:700;" class="mb2">
+      <textarea ${NOAC} id="noteBodyInput" oninput="onNoteBody(this.value)" placeholder="Write here — supplier calls, reminders, things to order, notes for the next shift…" style="min-height:40vh;">${esc(notesUi.draftBody)}</textarea>
+      <div class="flex gap2 mt3">
+        <button class="btn btn-primary flex1" onclick="saveDraftNote()">Save note</button>
+        ${!isNew?`<button class="btn btn-success" onclick="shareNote('${notesUi.openId}')">📤 Share</button>`:""}
+      </div>
+      ${!isNew?`<button class="btn" style="width:100%;background:none;color:var(--danger);margin-top:8px;" onclick="deleteNote('${notesUi.openId}')">🗑 Delete note</button>`:""}
+    `;
+    return;
+  }
+
+  const sorted = notes
+    .filter(n=>{
+      if(n.deleted) return false;
+      const q = notesUi.searchQuery.trim().toLowerCase();
+      if(!q) return true;
+      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
+    })
+    .sort((a,b)=>b.updatedAt-a.updatedAt);
+  document.getElementById("main").innerHTML = profileSwitcher + `
+    <button class="btn-dashed mb2" onclick="openNewNote()">+ New note</button>
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="notesSearchInput" value="${esc(notesUi.searchQuery)}" oninput="onNotesSearch(this.value)" placeholder="Search notes by topic or text…">
+    </div>
+
+    ${sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:""}
+    ${sorted.map(n=>`
+      <div class="card">
+        <button onclick="openExistingNote('${n.id}')" style="width:100%;text-align:left;background:none;border:none;padding:0;cursor:pointer;">
+          <p class="item-title">${esc(n.title)}</p>
+          ${n.body?`<p class="small" style="color:var(--muted);margin:4px 0 0;">${esc(n.body.slice(0,120))}${n.body.length>120?"…":""}</p>`:""}
+          <p style="font-size:11px;color:var(--faint);margin:6px 0 0;">${fmtDateTime(n.updatedAt)}</p>
+        </button>
+        <div class="flex gap2 mt2">
+          <button class="btn btn-success flex1" style="padding:6px;font-size:12px;" onclick="shareNote('${n.id}')">📤 Share</button>
+          <button class="btn btn-outline" style="padding:6px 12px;" onclick="deleteNote('${n.id}')">🗑</button>
+        </div>
+      </div>`).join("")}
+    <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes. Medicines, bills, and records are shared with everyone on this device.</p>
+  `;
+}
+
+/* ===================== BACKUP & RESTORE ===================== */
+/* Everything in this app already lives in the phone's storage (localStorage), which
+   survives closing the app/browser and restarting the phone. The real risk is someone
+   clearing browser/site data, or reinstalling the browser — that does wipe it. Export
+   makes a real file in your phone's Downloads/Files app, completely outside the
+   browser, so you always have a copy to restore from no matter what happens to it. */
+function mergeById(localArr, incomingArr){
+  const map = new Map();
+  (localArr||[]).forEach(x=>map.set(x.id,x));
+  (incomingArr||[]).forEach(x=>{ if(!map.has(x.id)) map.set(x.id,x); });
+  return Array.from(map.values());
+}
+function mergeInventory(localInv, incomingInv){
+  const result = (localInv||[]).map(m=>({...m, batches:(m.batches||[]).slice()}));
+  (incomingInv||[]).forEach(im=>{
+    let match = result.find(m=>m.id===im.id);
+    if(!match) match = result.find(m=>m.name.trim().toLowerCase()===im.name.trim().toLowerCase());
+    if(match){
+      match.batches = mergeById(match.batches, im.batches);
+      match.category = match.category || im.category || "";
+      match.specialCategory = match.specialCategory || im.specialCategory || "";
+      match.formula = match.formula || im.formula || "";
+      match.mg = match.mg || im.mg || "";
+      match.deleted = match.deleted || im.deleted;
+      recomputeStock(match);
+    } else {
+      const copy = {...im, batches:(im.batches||[]).slice()};
+      recomputeStock(copy);
+      result.push(copy);
+    }
+  });
+  return result;
+}
+/* ---- LIVE-SYNC-ONLY reconciliation ----
+   mergeInventory (above) is deliberately additive/never-overwrite: it's built for the offline
+   backup file, which combines two phones that may have been apart for weeks, so it must never
+   let one side's file silently clobber real edits the other side made. Live cloud sync is a
+   different problem — it's the same shared dataset, seconds apart, and a sale/restock/edit on
+   one phone MUST overwrite the stale copy on the other. So for the cloud path we reconcile by
+   "whoever touched it most recently wins", using the updatedAt timestamps stamped on every
+   medicine-level edit and every batch-level stock change. */
+function reconcileBatchesForSync(localBatches, remoteBatches){
+  const remoteMap = new Map((remoteBatches||[]).map(b=>[b.id,b]));
+  const seen = new Set();
+  const result = (localBatches||[]).map(lb=>{
+    seen.add(lb.id);
+    const rb = remoteMap.get(lb.id);
+    if(!rb) return lb; // batch only exists locally (e.g. restocked here) — keep it
+    const lt = lb.updatedAt||lb.addedAt||0, rt = rb.updatedAt||rb.addedAt||0;
+    return rt>lt ? {...rb} : lb; // newer side's version of THIS batch wins
+  });
+  (remoteBatches||[]).forEach(rb=>{
+    if(!seen.has(rb.id)) result.push({...rb}); // batch only exists remotely — add it
+  });
+  return result;
+}
+function pickNewerMedicine(a,b){
+  // Scalar fields (name/price/etc.) come from whichever side edited most recently.
+  // Batches (actual stock) are reconciled independently and separately above, so a restock
+  // never gets lost just because the OTHER device happens to "win" on the scalar fields.
+  const aT = a.updatedAt||0, bT = b.updatedAt||0;
+  const base = aT>=bT ? a : b;
+  return {
+    id: a.id, name: base.name, category: base.category||"", specialCategory: base.specialCategory||"", formula: base.formula||"", mg: base.mg||"",
+    mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox,
+    lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, deleted: !!base.deleted,
+    updatedAt: Math.max(aT,bT),
+    batches: reconcileBatchesForSync(a.batches, b.batches)
+  };
+}
+function reconcileInventoryForSync(localInv, remoteInv){
+  const remoteMap = new Map((remoteInv||[]).map(m=>[m.id,m]));
+  const seen = new Set();
+  const result = (localInv||[]).map(lm=>{
+    seen.add(lm.id);
+    const rm = remoteMap.get(lm.id);
+    return rm ? pickNewerMedicine(lm, rm) : lm;
+  });
+  (remoteInv||[]).forEach(rm=>{
+    if(!seen.has(rm.id)) result.push({...rm, batches:(rm.batches||[]).slice()});
+  });
+  result.forEach(recomputeStock);
+  return result;
+}
+// Last-write-wins merge by id, for the LIVE cloud path only (bills, notes, profiles). Unlike
+// mergeById (additive-only — used by the offline backup file, see below), this actually lets a
+// newer edit or a soft-delete tombstone on one device overwrite the stale copy on another,
+// instead of the always-newer local/remote scan just re-adding whatever the other side still has.
+function mergeByIdForSync(localArr, incomingArr){
+  const incomingMap = new Map((incomingArr||[]).map(x=>[x.id,x]));
+  const seen = new Set();
+  const result = (localArr||[]).map(l=>{
+    seen.add(l.id);
+    const r = incomingMap.get(l.id);
+    if(!r) return l;
+    const lt = l.updatedAt||l.timestamp||0, rt = r.updatedAt||r.timestamp||0;
+    return rt>lt ? r : l;
+  });
+  (incomingArr||[]).forEach(r=>{ if(!seen.has(r.id)) result.push(r); });
+  return result;
+}
+// Monthly correction totals are a plain {month: {...}} object, not an id-keyed array, so they
+// get their own merge: per month key, keep whichever side's correction was saved most recently.
+// Simple scalar setting, same last-write-wins shape as everything else here: whichever side
+// touched it more recently wins outright — no need for per-field merging like the test
+// catalog has, since it's a single number, not a list of independent items.
+function mergeDefaultDoctorFee(data){
+  const incomingTs = data.defaultDoctorFeeUpdatedAt || 0;
+  if(incomingTs > defaultDoctorFeeUpdatedAt){
+    defaultDoctorFee = data.defaultDoctorFee || 0;
+    defaultDoctorFeeUpdatedAt = incomingTs;
+    saveDefaultDoctorFeeStorage();
+    saveDefaultDoctorFeeUpdatedAt();
+    // bill.fee is copied from defaultDoctorFee only once, at the moment a New Bill screen is
+    // created (see newBillState()) — usually before sync has even had a chance to run, since
+    // that happens at app startup. So defaultDoctorFee itself merging correctly isn't enough:
+    // the already-displayed fee field has no way to react to a value that arrives later and
+    // would otherwise keep showing a stale number forever, until the user happened to start a
+    // brand new bill or edit the fee by hand. Refresh it now — but ONLY when the current bill
+    // is still completely untouched (no patient, no items/tests/extras, not mid-edit), so a
+    // bill the user has actually started is never silently changed under them.
+    if(typeof bill!=="undefined" && bill && !bill.patient.trim() && bill.items.length===0 && bill.extras.length===0 && bill.tests.length===0 && !bill.feeEditing){
+      bill.fee = defaultDoctorFee ? String(defaultDoctorFee) : "";
+    }
+  }
+}
+function mergeMonthAdjustments(localAdj, incomingAdj){
+  const result = {...(localAdj||{})};
+  Object.entries(incomingAdj||{}).forEach(([mk,ia])=>{
+    const la = result[mk];
+    if(!la || (ia.updatedAt||0) > (la.updatedAt||0)) result[mk] = ia;
+  });
+  return result;
+}
+// Test catalog & pricing (custom tests, renamed/hidden built-ins, and prices) is synced, one
+// test at a time, by that test's own testItemUpdatedAt entry — NOT as one all-or-nothing
+// bundle. The old version compared a single shared timestamp for the whole catalog, so if
+// Phone A added "Uric Acid" (bumping the shared time) while Phone B had, at any point, made
+// its OWN unrelated test edit with a later timestamp, B's next sync would completely
+// overwrite the catalog with its own version — silently discarding Uric Acid and anything
+// else A had added or priced, and vice-versa. Comparing per test id instead means each
+// test's own history decides its own outcome, so two devices' different additions/prices
+// combine instead of one wiping out the other.
+function mergeTestSettings(data){
+  const incomingItemTs = data.testItemUpdatedAt || {};
+  // Old backup files / not-yet-updated devices have no per-id times at all — for those,
+  // fall back to their whole-bundle time as a stand-in per-id time for every id they have
+  // data for, so merging against them still behaves sensibly.
+  const incomingBundleTs = data.testSettingsUpdatedAt || 0;
+  const incomingCustomById = {}; (data.customTests||[]).forEach(t=>{ incomingCustomById[t.id]=t; });
+  const localCustomById = {}; customTests.forEach(t=>{ localCustomById[t.id]=t; });
+  const incomingNameOverrides = data.testNameOverrides || {};
+  const incomingHiddenSet = new Set(data.hiddenBuiltInTestIds || []);
+  const localHiddenSet = new Set(hiddenBuiltInTestIds);
+  const incomingPrices = data.testPrices || {};
+
+  const ids = new Set([
+    ...TEST_CATALOG.map(t=>t.id),
+    ...customTests.map(t=>t.id),
+    ...(data.customTests||[]).map(t=>t.id)
+  ]);
+
+  const mergedCustomById = {};
+  const mergedNameOverrides = {};
+  const mergedHidden = [];
+  const mergedPrices = {};
+  const mergedItemTs = {...testItemUpdatedAt};
+
+  ids.forEach(id=>{
+    const localTs = testItemUpdatedAt[id] || 0;
+    const hasIncomingData = incomingCustomById[id]!=null || incomingNameOverrides[id]!=null || incomingHiddenSet.has(id) || incomingPrices[id]!=null;
+    const inTs = incomingItemTs[id] || (hasIncomingData ? incomingBundleTs : 0);
+    const incomingWins = inTs > localTs;
+    mergedItemTs[id] = incomingWins ? inTs : localTs;
+
+    const winningCustom = incomingWins ? incomingCustomById[id] : localCustomById[id];
+    if(winningCustom) mergedCustomById[id] = winningCustom;
+
+    const winningOverride = incomingWins ? incomingNameOverrides[id] : testNameOverrides[id];
+    if(winningOverride!=null) mergedNameOverrides[id] = winningOverride;
+
+    const winningHidden = incomingWins ? incomingHiddenSet.has(id) : localHiddenSet.has(id);
+    if(winningHidden) mergedHidden.push(id);
+
+    const winningPrice = incomingWins ? incomingPrices[id] : testPrices[id];
+    if(winningPrice!=null) mergedPrices[id] = winningPrice;
+  });
+
+  customTests = Object.values(mergedCustomById);
+  testNameOverrides = mergedNameOverrides;
+  hiddenBuiltInTestIds = mergedHidden;
+  testPrices = mergedPrices;
+  testItemUpdatedAt = mergedItemTs;
+  testSettingsUpdatedAt = Math.max(testSettingsUpdatedAt, incomingBundleTs); // legacy marker only
+
+  saveCustomTests(); saveTestNameOverrides(); saveHiddenBuiltInTests(); saveTestPrices(); saveTestSettingsUpdatedAt(); saveTestItemUpdatedAt();
+}
+
+function mergeDataInto(data, inventoryMergeFn, live){
+  inventory = inventoryMergeFn(inventory, data.inventory);
+
+  if(live){
+    transactions = mergeByIdForSync(transactions, data.transactions);
+  } else {
+    transactions = mergeById(transactions, data.transactions);
+  }
+  transactions.sort((a,b)=>b.timestamp-a.timestamp);
+
+  if(live){
+    profiles = mergeByIdForSync(profiles, data.profiles);
+  } else {
+    const profResult = (profiles||[]).slice();
+    (data.profiles||[]).forEach(ip=>{
+      let match = profResult.find(p=>p.id===ip.id);
+      if(!match) match = profResult.find(p=>p.name.trim().toLowerCase()===ip.name.trim().toLowerCase());
+      if(!match) profResult.push(ip);
+    });
+    profiles = profResult;
+  }
+
+  const incomingNotes = data.notesByProfile || {};
+  profiles.forEach(p=>{
+    let localNotes;
+    try{ localNotes = JSON.parse(localStorage.getItem("clinic_notes_"+p.id)||"[]"); }catch(e){ localNotes=[]; }
+    const merged = live ? mergeByIdForSync(localNotes, incomingNotes[p.id]) : mergeById(localNotes, incomingNotes[p.id]);
+    merged.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+    try{ localStorage.setItem("clinic_notes_"+p.id, JSON.stringify(merged)); }catch(e){}
+  });
+
+  // Monthly corrections: keyed by month, not an array of records — for each month, whichever
+  // side touched it most recently wins. Safe either way since it's just an override number,
+  // never a quantity that could be double-counted or lost.
+  monthAdjustments = mergeMonthAdjustments(monthAdjustments, data.monthAdjustments);
+  mergeTestSettings(data);
+  mergeDefaultDoctorFee(data);
+
+  saveInventory(); saveTransactions(); saveProfiles(); saveMonthAdjustments();
+  if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
+    currentProfileId = null;
+  }
+  if(!currentProfileId && visibleProfiles()[0]){
+    currentProfileId = visibleProfiles()[0].id;
+    localStorage.setItem("clinic_current_profile", currentProfileId);
+  }
+  loadNotesForCurrentProfile();
+}
+// Offline backup file import — unchanged, additive/never-overwrite merge. Two phones may have
+// been apart for weeks, so this must never let one side's file silently delete or clobber
+// something real the other side entered independently.
+function mergeBackupInto(data){ mergeDataInto(data, mergeInventory, false); }
+// Live Firestore sync — last-write-wins for inventory, bills, notes, and profiles, so an edit,
+// restock, sale, warning toggle, or DELETE made on one phone correctly propagates to the other
+// instead of being silently ignored (or the deleted item quietly reappearing a second later).
+function mergeCloudSnapshotInto(data){ mergeDataInto(data, reconcileInventoryForSync, true); }
+function toggleBackupModal(){ backupUi.open = !backupUi.open; render(); }
+
+/* ===================== LIVE CLOUD SYNC (Firebase) ===================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyD6JhqZdhAui5FCUtrjvWUxZZ9fgUt6HFA",
+  authDomain: "counter-book-clinic-5e3fb.firebaseapp.com",
+  projectId: "counter-book-clinic-5e3fb",
+  storageBucket: "counter-book-clinic-5e3fb.firebasestorage.app",
+  messagingSenderId: "1049776302686",
+  appId: "1:1049776302686:web:923de37321767ca13c22cf"
+};
+// Must match the code checked in your Firestore security rules — see chat for the rules text.
+const SYNC_CODE = "counterbook-9214";
+
+let fbDb = null, syncStatus = "offline", suppressPush = false, syncDebounceTimer = null;
+// pushInFlight: true only while OUR OWN pushToCloud() call is actively running. The listener
+// below checks this before touching the badge, so the two never fight over the same status —
+// that fight was what made the badge flash "Offline" right after completing a bill, and could
+// also leave it stuck since whichever one wrote last "won" unpredictably.
+let pushInFlight = false;
+// snapshotUnsubscribe: handle for the current onSnapshot listener. startCloudSync() can be
+// called again later (see the reconnect path below) — without closing the previous listener
+// first, each retry left an extra listener running forever, all reacting to every future
+// change. That's a likely cause of unreliable cross-device sync, not just a badge glitch.
+let snapshotUnsubscribe = null;
+// lastSyncError: the actual error Firebase reported (code + message), shown in a banner so it
+// can be diagnosed on a phone with no access to browser dev tools.
+let lastSyncError = null;
+try{
+  const fbApp = firebase.initializeApp(firebaseConfig);
+  fbDb = firebase.firestore();
+}catch(e){ console.error("Firebase init failed", e); }
+
+function cloudDocRef(){ return fbDb.collection("sync").doc("state"); }
+function buildFullStatePayload(){
+  return {
+    syncCode: SYNC_CODE,
+    inventory, transactions, profiles, monthAdjustments,
+    notesByProfile: collectAllNotes(),
+    customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
+    defaultDoctorFee, defaultDoctorFeeUpdatedAt,
+    updatedAt: Date.now()
+  };
+}
+function renderSyncBadge(){
+  const el = document.getElementById("syncBadge");
+  if(!el) return;
+  const map = { syncing:"☁ Syncing…", synced:"☁ Synced", cached:"☁ Offline (cached)", offline:"☁ Offline", error:"☁ Sync error" };
+  el.textContent = map[syncStatus] || "";
+  el.style.opacity = (syncStatus==="synced" || syncStatus==="syncing") ? ".85" : ".6";
+}
+function renderCloudSizeBadge(){
+  const el = document.getElementById("cloudSizeBadge");
+  if(!el) return;
+  const bytes = estimatedCloudDataSize();
+  el.textContent = (bytes!=null && fbDb) ? `(${formatBytes(bytes)})` : "";
+}
+function formatSyncError(e){
+  if(!e) return "Unknown error";
+  const code = e.code ? `[${e.code}] ` : "";
+  const msg = e.message || String(e);
+  return code + msg;
+}
+function setSyncError(e){
+  lastSyncError = formatSyncError(e);
+  renderSyncBanner();
+}
+function clearSyncError(){
+  if(!lastSyncError) return;
+  lastSyncError = null;
+  renderSyncBanner();
+}
+function dismissSyncError(){ lastSyncError = null; renderSyncBanner(); }
+function copySyncError(){
+  if(!lastSyncError) return;
+  const text = lastSyncError;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>showToast("✓ Error copied")).catch(()=>showToast(text));
+  } else { showToast(text); }
+}
+function renderSyncBanner(){
+  const el = document.getElementById("banner");
+  if(!el) return;
+  if(!lastSyncError){ el.style.display="none"; el.innerHTML=""; return; }
+  el.style.display="flex";
+  el.innerHTML = `
+    <span style="flex:1;word-break:break-word;">⚠ Cloud sync problem: ${esc(lastSyncError)}</span>
+    <button onclick="copySyncError()" style="background:none;border:1px solid currentColor;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;color:inherit;cursor:pointer;">Copy</button>
+    <button onclick="dismissSyncError()" style="background:none;border:none;color:inherit;font-weight:700;cursor:pointer;font-size:14px;">✕</button>`;
+}
+function applyRemoteSnapshot(data){
+  if(!data) return;
+  suppressPush = true;
+  mergeCloudSnapshotInto(data);
+  suppressPush = false;
+  render();
+}
+function schedulePushToCloud(){
+  if(!fbDb || suppressPush) return;
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(pushToCloud, 1200);
+}
+// Wraps a Firestore promise so a genuinely dead connection resolves to "Offline" within 10s
+// instead of hanging forever — Firestore's own promises don't reject when offline, they just
+// never resolve, which is exactly what forced a manual refresh to recover before.
+function withTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error("timed out")), ms))
+  ]);
+}
+// Firestore rejects any field whose value is literally `undefined` (unlike `null`, which is
+// fine) and rejects the ENTIRE write the moment it finds one, however deeply buried. The bugs
+// above (missing category/formula/mg on older medicine records) were one way that could sneak
+// in — this is a safety net so no other undiscovered case can silently break every sync again.
+// A JSON round-trip is a simple, thorough way to strip these out anywhere in the structure:
+// it drops undefined object properties and turns undefined array entries into null, both of
+// which Firestore accepts fine.
+function sanitizeForFirestore(obj){ return JSON.parse(JSON.stringify(obj)); }
+async function pushToCloud(){
+  if(!fbDb) return;
+  pushInFlight = true;
+  // If we were already showing "Synced" before this push (e.g. right after completing a
+  // bill), keep showing "Synced" through the push instead of flashing "Syncing…" — the
+  // badge should only visibly change if something actually goes wrong (see catch below).
+  // A push starting from any other state (offline/cached/error/initial) still shows the
+  // normal "Syncing…" transition, since that's a real state change worth surfacing.
+  const wasSynced = (syncStatus === "synced");
+  if(!wasSynced){ syncStatus = "syncing"; renderSyncBadge(); }
+  try{
+    const snap = await withTimeout(cloudDocRef().get(), 10000);
+    if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; }
+    await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload())), 10000);
+    syncStatus = "synced";
+    clearSyncError();
+  }catch(e){ syncStatus = "offline"; setSyncError(e); }
+  pushInFlight = false;
+  renderSyncBadge();
+}
+// The realtime onSnapshot listener needs a persistent connection, which some mobile browser
+// contexts (especially a file opened directly rather than through an app with an already-warm
+// connection) are slow to establish or don't establish at all — leaving the screen showing
+// blank/default data indefinitely even though the real data is sitting right there in the
+// cloud. A plain one-off request doesn't need that persistent connection and gets through in
+// those same conditions (this is exactly why adding a test — which triggers pushToCloud()'s own
+// one-off get() — immediately "fixed" the display: the listener was still stuck, but a plain
+// fetch wasn't). Doing the same one-off fetch proactively at startup means real data shows up
+// right away without needing any interaction to force it.
+async function initialCloudFetch(){
+  if(!fbDb) return;
+  try{
+    const snap = await withTimeout(cloudDocRef().get(), 10000);
+    if(snap.exists) applyRemoteSnapshot(snap.data());
+  }catch(e){
+    // No special handling needed — the realtime listener below keeps retrying regardless,
+    // and this was only ever a best-effort head start.
+  }
+}
+function startCloudSync(){
+  if(!fbDb) { syncStatus="offline"; renderSyncBadge(); return; }
+  if(snapshotUnsubscribe){ snapshotUnsubscribe(); snapshotUnsubscribe = null; }
+  syncStatus="syncing"; renderSyncBadge();
+  initialCloudFetch();
+  snapshotUnsubscribe = cloudDocRef().onSnapshot(
+    snap=>{
+      if(snap.exists) applyRemoteSnapshot(snap.data());
+      // Firestore fires this listener once immediately from local cache (even with zero
+      // internet) and again later once it actually reaches the server. Without checking
+      // fromCache, the badge would say "Synced" on that first cache-only firing even while
+      // fully offline. Only the non-cache firing means data has actually been confirmed
+      // against the server.
+      //
+      // While pushToCloud() is actively driving the badge for a write we just made, this
+      // listener stands down completely and lets pushToCloud() set the definitive final
+      // status itself. Otherwise this listener is the source of truth — e.g. a change
+      // arriving live from another device, or a genuine, ongoing offline state.
+      if(!pushInFlight){
+        syncStatus = snap.metadata.fromCache ? "cached" : "synced";
+        renderSyncBadge();
+        if(!snap.metadata.fromCache) clearSyncError();
+      }
+    },
+    async err=>{
+      // This is the FIRST real error Firestore reported for the listener itself — surface it
+      // immediately, since it's often more informative than whatever the retry below hits.
+      setSyncError(err);
+      // A single failed listener attempt does NOT tell us the document is missing — it could
+      // just as easily be a transient network blip, which happens especially often right when
+      // the app first loads (e.g. opened directly as a local file, before the browser's network
+      // stack is fully ready — much more likely than when opened via an app that already has a
+      // warm connection). The old code here treated ANY error as "doc doesn't exist yet" and
+      // immediately WROTE this device's current state over the shared cloud document — on a
+      // fresh load that state is still the empty defaults (0 custom tests, all prices 0), so a
+      // single mistimed hiccup could silently wipe every other device's real data. This is
+      // exactly the bug reported: tests/prices sometimes showing blank depending on how/when
+      // the file was opened, with nothing actually wrong with the file itself.
+      // Fix: do one plain read first, and only create the document if that read positively
+      // confirms nothing exists yet. If the read also fails, we still don't know either way —
+      // so do nothing and stay offline rather than guess and risk overwriting real data.
+      try{
+        const snap = await withTimeout(cloudDocRef().get(), 10000);
+        if(snap.exists){
+          // Document is there — the listener itself just hiccuped, not a missing-doc case.
+          // Restart listening; never touch the data.
+          startCloudSync();
+        } else {
+          // Confirmed: genuinely no shared document exists anywhere yet. Safe to create it
+          // from this device's current state since there is nothing real to lose.
+          await cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload()));
+          startCloudSync();
+        }
+      }catch(e){ syncStatus="offline"; setSyncError(e); renderSyncBadge(); }
+    }
+  );
+}
+function collectAllNotes(){
+  const out = {};
+  profiles.forEach(p=>{
+    try{ out[p.id] = JSON.parse(localStorage.getItem("clinic_notes_"+p.id)||"[]"); }catch(e){ out[p.id]=[]; }
+  });
+  return out;
+}
+function exportBackup(){
+  const payload = {
+    version: 1,
+    exportedAt: Date.now(),
+    inventory, transactions, profiles, monthAdjustments,
+    notesByProfile: collectAllNotes(),
+    customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
+    defaultDoctorFee, defaultDoctorFeeUpdatedAt
+  };
+  const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0,10);
+  a.href = url; a.download = `counter-book-backup-${stamp}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  showToast("✓ Backup file downloaded");
+}
+function triggerImportPicker(){ document.getElementById("backupFileInput").click(); }
+function onBackupFileSelected(evt){
+  const file = evt.target.files && evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    let data;
+    try{ data = JSON.parse(reader.result); }catch(e){ showToast("⚠ That file isn't a valid backup"); evt.target.value=""; return; }
+    if(!data || !Array.isArray(data.inventory) || !Array.isArray(data.transactions)){
+      showToast("⚠ That file isn't a valid backup"); evt.target.value=""; return;
+    }
+    askConfirm("Combine this backup with what's already on this device? Bills, medicines, stock and notes from both will be kept — nothing on this device will be lost.", ()=>{
+      mergeBackupInto(data);
+      evt.target.value = "";
+      render();
+      showToast("✓ Merged — downloading the combined file to send back to the other phone");
+      setTimeout(exportBackup, 600);
+    });
+  };
+  reader.readAsText(file);
+}
+function formatBytes(n){
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/(1024*1024)).toFixed(2) + " MB";
+}
+// estimatedCloudDataSize() JSON-stringifies the whole app state, and render() calls it on
+// EVERY render — including every single keystroke. Recomputing that on every keystroke is
+// wasted work for a number that only needs to be "close enough" (it's already labelled an
+// estimate, not a live reading). Cache it for a second so typing stays snappy; the badge is
+// still fresh within ~1s of any real change.
+let _cloudSizeCache = { bytes: null, at: 0 };
+function estimatedCloudDataSize(){
+  const now = Date.now();
+  if(now - _cloudSizeCache.at < 1000) return _cloudSizeCache.bytes;
+  // This mirrors buildFullStatePayload() — the exact object pushed to Firestore — so
+  // measuring its JSON size gives a close real-world estimate of what's stored in the cloud,
+  // even though Firestore itself doesn't expose a "how big is my data" API to client apps.
+  try{
+    const payload = buildFullStatePayload();
+    const bytes = new Blob([JSON.stringify(payload)]).size;
+    _cloudSizeCache = { bytes, at: now };
+    return bytes;
+  }catch(e){ _cloudSizeCache = { bytes: null, at: now }; return null; }
+}
+function renderBackupModal(){
+  const root = document.getElementById("backupModalRoot");
+  if(!root) return;
+  if(!backupUi.open){ root.innerHTML=""; return; }
+  const sizeBytes = estimatedCloudDataSize();
+  const sizePct = sizeBytes!=null ? (sizeBytes / (1024*1024*1024) * 100) : null;
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) toggleBackupModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Backup &amp; Restore</strong>
+          <button class="modal-x" onclick="toggleBackupModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">
+          ${sizeBytes!=null ? `
+          <div class="card" style="background:var(--primarySoft);border:none;margin-bottom:12px;">
+            <div class="row">
+              <span class="small" style="font-weight:700;color:var(--primary);">Estimated cloud data used</span>
+              <span style="font-weight:700;font-size:15px;color:var(--primary);">${formatBytes(sizeBytes)}</span>
+            </div>
+            <p class="small faint" style="margin:4px 0 0;">≈ ${sizePct.toFixed(4)}% of the 1 GB free storage limit — an estimate based on your data, not a live reading from Google's servers.</p>
+          </div>` : ""}
+          <p class="small" style="margin:0 0 12px;">Your data is already saved on this phone and survives closing the app or restarting your phone. The only real risk is clearing browser/site data — download a backup now and then and keep it somewhere safe.</p>
+          <p class="small" style="margin:0 0 12px;color:var(--primary);">To sync two phones with no internet: export on Phone A → send the file over Bluetooth/Nearby Share → import on Phone B. It merges automatically — bills, stock and notes from both phones are combined, nothing is lost or double-counted — and B will then download a combined file for you to send back to A the same way.</p>
+          <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="exportBackup()">⬇ Download backup file</button>
+          <button class="btn btn-outline" style="width:100%;" onclick="triggerImportPicker()">⬆ Import &amp; merge backup file</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== FULLSCREEN ===================== */
+function toggleFullscreen(){
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen?.().catch(()=>{});
+  } else {
+    document.exitFullscreen?.();
+  }
+}
+
+/* ===================== INIT ===================== */
+loadAll();
+bill = newBillState();
+render();
+startCloudSync();
+</script>
+<script>
+// Registers the service worker (sw.js, same folder) so the app is cached on first load and
+// works fully offline afterward — needed once the app is loaded from a real URL (GitHub Pages)
+// instead of a local file, since that's what fixed localStorage but on its own would otherwise
+// require internet on every open.
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
