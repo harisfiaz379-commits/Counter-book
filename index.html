@@ -2,8 +2,32 @@
 <html lang="en">
 <head>
 <script>
-// TEMPORARY DIAGNOSTIC — shows any JS error directly on the page instead of a silent blank
-// screen. Remove once the cause is found and fixed.
+// TEMPORARY DIAGNOSTIC — actively tests which storage APIs actually work in this WebView,
+// since the same "localStorage is null" error happened on BOTH file:// and https://, which
+// rules out the opaque-origin theory and points to something else (WebView settings, device
+// privacy settings, etc). Uses a blocking alert() so results are guaranteed visible BEFORE the
+// app's own script runs (and possibly crashes) — DOM-injection would have been at risk of
+// being covered up by the crash's own full-screen error overlay.
+(function(){
+  function testStorage(name, fn){
+    try{
+      const v = fn();
+      return name + ': OK (' + (typeof v) + ')';
+    }catch(e){
+      return name + ': FAILED — ' + e.name + ': ' + e.message;
+    }
+  }
+  const results = [];
+  results.push(testStorage('window.localStorage exists', ()=>typeof window.localStorage));
+  results.push(testStorage('localStorage.setItem/getItem', ()=>{ localStorage.setItem('__t','1'); const v=localStorage.getItem('__t'); localStorage.removeItem('__t'); return v; }));
+  results.push(testStorage('window.sessionStorage exists', ()=>typeof window.sessionStorage));
+  results.push(testStorage('sessionStorage.setItem/getItem', ()=>{ sessionStorage.setItem('__t','1'); const v=sessionStorage.getItem('__t'); sessionStorage.removeItem('__t'); return v; }));
+  results.push(testStorage('window.indexedDB exists', ()=>typeof window.indexedDB));
+  results.push(testStorage('document.cookie writable', ()=>{ document.cookie='__t=1'; return document.cookie; }));
+  results.push('User-Agent: ' + navigator.userAgent);
+  results.push('Location: ' + window.location.href);
+  alert('STORAGE PROBE RESULTS:\n\n' + results.join('\n'));
+})();
 function showJsError(label, msg, line, col, stack){
   var el = document.createElement('div');
   el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;color:#900;padding:16px;font-family:monospace;font-size:13px;white-space:pre-wrap;overflow:auto;z-index:99999;';
