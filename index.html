@@ -210,6 +210,7 @@
     <div class="flex gap2" style="align-items:center;">
       <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
       <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
+      <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <button id="backupBtn" onclick="toggleBackupModal()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">💾 Backup</button>
       <button id="fullscreenBtn" onclick="toggleFullscreen()">⛶ Full screen</button>
     </div>
@@ -818,6 +819,22 @@ function setTab(t){ tab=t; render(); }
 function openShare(text){ shareText=text; render(); }
 function closeShare(){ shareText=null; render(); }
 function shareWhatsApp(){ window.open("https://wa.me/?text="+encodeURIComponent(shareText),"_blank"); }
+// Lets the user pick ANY installed app (not just WhatsApp) via the native Android share
+// sheet. Inside the App Inventor app, that's done through Sharing1.ShareMessage on the
+// native side (Blocks picks this up on WebViewStringChange, prefix "SHARE_TEXT:"). In a
+// normal browser, the Web Share API (navigator.share) gives the same native picker; if
+// neither is available, fall back to the old WhatsApp-only link so nothing breaks.
+function shareToAnyApp(){
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("SHARE_TEXT:" + shareText);
+    return;
+  }
+  if(navigator.share){
+    navigator.share({text: shareText}).catch(()=>{});
+    return;
+  }
+  shareWhatsApp();
+}
 function copyShare(){
   navigator.clipboard.writeText(shareText).then(()=>{
     const btn = document.getElementById("copyBtnLabel");
@@ -837,7 +854,7 @@ function renderShareModal(){
         <div class="modal-body">${esc(shareText)}</div>
         <div class="modal-actions">
           <button class="btn btn-outline flex1" onclick="copyShare()"><span id="copyBtnLabel">Copy text</span></button>
-          <button class="btn btn-success flex1" onclick="shareWhatsApp()">Share to WhatsApp</button>
+          <button class="btn btn-success flex1" onclick="shareToAnyApp()">📤 Share…</button>
         </div>
       </div>
     </div>`;
