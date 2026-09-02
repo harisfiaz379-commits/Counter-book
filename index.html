@@ -212,6 +212,7 @@
       <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <button id="backupBtn" onclick="toggleBackupModal()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">💾 Backup</button>
+      <button id="receiptSettingsBtn" onclick="editReceiptSettings()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🧾 Receipt setup</button>
       <button id="fullscreenBtn" onclick="toggleFullscreen()">⛶ Full screen</button>
     </div>
   </header>
@@ -265,8 +266,9 @@ let newTestPriceDraft = ""; // transient: price input for adding a new test in t
 
 /* transient (not persisted) UI state */
 function newBillState(){
-  return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", selectedMedId:null, qtyMode:"total", daysMode:"perMed", perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
+  return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", itemDiscount:"", selectedMedId:null, qtyMode:"total", daysMode:"perMed", perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
     tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", feeEditing:false, testsMenuOpen:false, feeIncluded:false,
+    paymentMode:"Cash", remarks:"",
     // Special-category medicines: a second, separate search/add flow (see specialMatches()
     // in renderBill) for medicines flagged with a specialCategory, which are deliberately
     // excluded from the normal medicine search above. applyingFeeMode is per-bill: "perItem"
@@ -1046,6 +1048,9 @@ function onBillPatient(v){ bill.patient=v; scheduleRender(); }
 function onBillFee(v){ bill.fee=v; scheduleRender(); }
 function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; scheduleRender(); }
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
+function onBillItemDiscount(v){ bill.itemDiscount=v; scheduleRender(); }
+function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
+function onBillRemarks(v){ bill.remarks=v; }
 function onBillPerDay(v){ bill.perDay=v; scheduleRender(); }
 function onBillDays(v){ bill.days=v; scheduleRender(); }
 function setBillQtyMode(mode){ bill.qtyMode=mode; render(); }
@@ -1087,23 +1092,24 @@ function addBillItem(){
   const med = inventory.find(m=>m.id===bill.selectedMedId);
   if(!med || !canAddBillItem()) return;
   const pricePerPill = nextBatchUnitPrice(med);
+  const discount = Math.max(0, Number(bill.itemDiscount)||0);
   if(bill.qtyMode==="total"){
     const pills = Number(bill.pills)||0;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note:"", perDay:null, linkedToGlobalDays:false});
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, discount, subtotal:Math.max(0,pricePerPill*pills-discount), note:"", perDay:null, linkedToGlobalDays:false});
   } else if(bill.daysMode==="same"){
     const perDay = Number(bill.perDay)||0;
     const days = Number(bill.globalDays)||0;
     const pills = perDay*days;
     const note = days>0 ? `${perDay}/day × ${days}d` : `${perDay}/day × (set days below)`;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:true});
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, discount, subtotal:Math.max(0,pricePerPill*pills-discount), note, perDay, linkedToGlobalDays:true});
   } else {
     const perDay = Number(bill.perDay)||0;
     const days = Number(bill.days)||0;
     const pills = perDay*days;
     const note = `${perDay}/day × ${days}d`;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:false});
+    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, discount, subtotal:Math.max(0,pricePerPill*pills-discount), note, perDay, linkedToGlobalDays:false});
   }
-  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days="";
+  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.itemDiscount=""; bill.perDay=""; bill.days="";
   render();
 }
 function removeBillItem(idx){
@@ -1236,19 +1242,23 @@ function completeBill(){
     doctorFee: bill.feeIncluded?billFeeGross():0, feeDiscount: bill.feeIncluded?billFeeDiscount():0, items:bill.items, medTotal:billMedTotal(),
     extras:bill.extras, extrasTotal:billExtrasTotal(),
     tests:bill.tests, testsTotal:billTestsGross(), testsDiscount:billTestsDiscount(),
+    paymentMode: bill.paymentMode||"Cash", remarks: (bill.remarks||"").trim(),
     grandTotal:billGrandTotal() };
   transactions.unshift(tx);
   saveTransactions();
+  printReceipt(tx);
   bill = newBillState();
   render();
   showToast("✓ Bill saved — find it anytime in Records");
 }
 
 function buildBillText(tx){
-  const lines = [`🏥 Patient Bill`, `Patient: ${tx.patientName}`, `Date: ${fmtDateTime(tx.timestamp)}`, ``];
+  const lines = [`🏥 Patient Bill`, `Patient: ${tx.patientName}`, `Date: ${fmtDateTime(tx.timestamp)}`, `Mode of Payment: ${tx.paymentMode||"Cash"}`];
+  if(tx.remarks) lines.push(`Remarks: ${tx.remarks}`);
+  lines.push(``);
   if(tx.items.length){
     lines.push(`Medicines:`);
-    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${it.pills} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.subtotal)}`));
+    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${it.pills} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.pricePerPill*it.pills)}${it.discount>0?` (discount -${CURRENCY}${money(it.discount)})`:""}`));
     lines.push(``);
   }
   if(tx.tests && tx.tests.length){
@@ -1271,6 +1281,110 @@ function buildBillText(tx){
   return lines.join("\n");
 }
 
+// --- Thermal receipt printing (ESC/POS) -------------------------------------------------
+// Almost every cheap thermal receipt printer — Bluetooth, WiFi, or USB alike — understands
+// the same ESC/POS command language, so we build ONE byte sequence here and every transport
+// (Bluetooth first, others later) just has the job of delivering these exact bytes.
+// Bytes are represented as a JS string where each character's code IS the byte value
+// (0–255) — this is the simplest way to smuggle raw binary through the WebViewString bridge,
+// which only carries text. On the App Inventor side, BluetoothClient1.CharacterEncoding must
+// be set to "ISO-8859-1" so each character is sent as exactly one byte, unchanged.
+const PRINTER_PAPER_CHARS = 32; // 32 chars/line ≈ 58mm paper. Change to 48 for 80mm paper.
+
+function padLR(left, right, width){
+  left = String(left); right = String(right);
+  const space = Math.max(1, width - left.length - right.length);
+  if(space < 1) return (left + " " + right).slice(0, width);
+  return left + " ".repeat(space) + right;
+}
+
+// --- Receipt shop details (name/address/phone shown at the top of every printed receipt) --
+function getReceiptSettings(){
+  let s = {}; try{ s = JSON.parse(localStorage.getItem("clinic_receipt_settings")||"{}"); }catch(e){}
+  return { shopName: s.shopName || "Counter Book", address: s.address || "", phone: s.phone || "" };
+}
+function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
+function editReceiptSettings(){
+  const cur = getReceiptSettings();
+  const shopName = window.prompt("Shop / clinic name (printed at the top of every receipt):", cur.shopName);
+  if(shopName===null) return;
+  const address = window.prompt("Address (optional, leave blank to skip):", cur.address);
+  if(address===null) return;
+  const phone = window.prompt("Phone number (optional, leave blank to skip):", cur.phone);
+  if(phone===null) return;
+  saveReceiptSettings({ shopName: shopName.trim()||"Counter Book", address: address.trim(), phone: phone.trim() });
+  showToast("✓ Receipt details saved");
+}
+
+function buildEscPosReceipt(tx){
+  const ESC = "\x1B", GS = "\x1D", W = PRINTER_PAPER_CHARS;
+  const init = ESC + "@";                 // reset printer to defaults
+  const center = ESC + "a" + "\x01";
+  const left = ESC + "a" + "\x00";
+  const boldOn = ESC + "E" + "\x01";
+  const boldOff = ESC + "E" + "\x00";
+  const doubleOn = GS + "!" + "\x11";      // double width+height, for the shop name
+  const doubleOff = GS + "!" + "\x00";
+  const divider = "-".repeat(W) + "\n";
+  const feedAndCut = "\n\n\n" + GS + "V" + "\x00"; // feed 3 lines then full cut
+  const shop = getReceiptSettings();
+  const invoiceNo = (tx.id||"").slice(-6).toUpperCase();
+
+  let r = init + center;
+  r += doubleOn + boldOn + shop.shopName + "\n" + boldOff + doubleOff;
+  if(shop.address) r += shop.address + "\n";
+  if(shop.phone) r += shop.phone + "\n";
+  r += left + divider;
+  r += padLR(`Invoice #${invoiceNo}`, fmtDateTime(tx.timestamp), W) + "\n";
+  r += `Patient: ${tx.patientName}\n`;
+  r += `Mode of Payment: ${tx.paymentMode||"Cash"}\n`;
+  if(tx.remarks) r += `Remarks: ${tx.remarks}\n`;
+  r += divider;
+
+  let totalQty = 0;
+  if(tx.items.length){
+    tx.items.forEach(it=>{
+      totalQty += it.pills;
+      r += `${it.name}${it.note?` (${it.note})`:""}\n`;
+      r += padLR(`  ${it.pills} x ${CURRENCY}${money(it.pricePerPill)}`, `${CURRENCY}${money(it.pricePerPill*it.pills)}`, W) + "\n";
+      if(it.discount>0) r += padLR(`  Discount`, `-${CURRENCY}${money(it.discount)}`, W) + "\n";
+    });
+    r += divider;
+  }
+  if(tx.tests && tx.tests.length){
+    tx.tests.forEach(t=> r += padLR(t.name, `${CURRENCY}${money(t.amount)}`, W) + "\n");
+    if(tx.testsDiscount) r += padLR("Tests discount", `-${CURRENCY}${money(tx.testsDiscount)}`, W) + "\n";
+    r += divider;
+  }
+  if(tx.extras && tx.extras.length){
+    tx.extras.forEach((ex,i)=> r += padLR(ex.label || `Other charge ${i+1}`, `${CURRENCY}${money(ex.amount)}`, W) + "\n");
+    r += divider;
+  }
+
+  r += padLR("Medicine total", `${CURRENCY}${money(tx.medTotal)}`, W) + "\n";
+  if(tx.tests && tx.tests.length) r += padLR("Tests total", `${CURRENCY}${money((tx.testsTotal||0)-(tx.testsDiscount||0))}`, W) + "\n";
+  r += padLR("Doctor fee", `${CURRENCY}${money((tx.doctorFee||0)-(tx.feeDiscount||0))}`, W) + "\n";
+  if(tx.feeDiscount) r += padLR("Doctor fee discount", `-${CURRENCY}${money(tx.feeDiscount)}`, W) + "\n";
+  r += divider;
+  if(totalQty) r += padLR("Total Qty", String(totalQty), W) + "\n";
+  r += boldOn + padLR("PAYABLE", `${CURRENCY}${money(tx.grandTotal)}`, W) + boldOff + "\n";
+  r += divider + center + "Thank you!\n" + left;
+  r += feedAndCut;
+  return r;
+}
+
+// Hands the raw ESC/POS bytes to the native app over the bridge, prefixed "PRINT:" so
+// App Inventor's WebViewStringChange handler can route it to whichever printer transport
+// is configured (Bluetooth first; WiFi/USB/BLE can be added later using this same message).
+function printReceipt(tx){
+  const escpos = buildEscPosReceipt(tx);
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("PRINT:" + escpos);
+  }else{
+    showToast("Printing isn't available outside the app");
+  }
+}
+
 function renderBill(){
   const q = bill.query.trim().toLowerCase();
   // Medicines carrying a Special category are deliberately excluded from this normal
@@ -1288,7 +1402,7 @@ function renderBill(){
       bill.items.map((it,idx)=>`
         <div class="item-row">
           <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}${it.special?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;vertical-align:middle;">${esc(it.specialCategory||"Special")}</span>`:""}</div>
-          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
+          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}${it.discount>0?` · discount -${CURRENCY}${money(it.discount)}`:""}</div></div>
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
             <button onclick="editBillItem(${idx})" class="btn btn-outline" style="padding:5px 12px;font-size:12px;border-radius:999px;">Edit</button>
@@ -1480,6 +1594,10 @@ function renderBill(){
           ${billComputedPills()>0 ? `<p class="small mt2">= ${billComputedPills()} medicine total</p>` : ""}
         `}
         ${billComputedPills()>0 ? `<p class="small mt2">${CURRENCY}${money(nextBatchUnitPrice(selMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selMed)*billComputedPills())}</p>` : ""}
+        <div class="mt2">
+          <label class="field-label">Discount on this medicine (${CURRENCY.trim()}, optional)</label>
+          <input ${NOAC} id="billItemDiscountInput" type="text" inputmode="decimal" value="${esc(bill.itemDiscount)}" oninput="onBillItemDiscount(this.value)" placeholder="0">
+        </div>
       ` : ""}
     </div>
 
@@ -1526,6 +1644,15 @@ function renderBill(){
       </div>
       ${pendingBillSubtotal()>0?`<p class="small mt2" style="color:var(--headerSub);">Includes ${esc(selMed?selMed.name:"")} — not added yet, tap + Add below</p>`:""}
       ${pendingSpecialBillSubtotal()>0?`<p class="small mt2" style="color:var(--headerSub);">Includes ${esc(selSpecialMed?selSpecialMed.name:"")} — not added yet, tap + Add special medicine below</p>`:""}
+    </div>
+
+    <div class="card">
+      <h3 class="mb2" style="font-size:14px;font-weight:700;">Mode of Payment</h3>
+      <div class="flex gap2">
+        ${["Cash","Card","Other"].map(mode=>`<button class="btn ${bill.paymentMode===mode?'btn-primary':'btn-outline'}" style="flex:1;padding:8px;font-size:12px;" onclick="onBillPaymentMode('${mode}')">${mode}</button>`).join("")}
+      </div>
+      <label class="field-label mt3">Remarks (optional, printed on receipt)</label>
+      <input ${NOAC} id="billRemarksInput" type="text" value="${esc(bill.remarks)}" oninput="onBillRemarks(this.value)" placeholder="e.g. Dr. Salman">
     </div>
 
     <button class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
@@ -2167,6 +2294,7 @@ function renderTxCard(t){
           ${t.feeDiscount?`<div class="row small" style="color:var(--success);margin-bottom:4px;"><span>Doctor fee discount</span><span>-${CURRENCY}${money(t.feeDiscount)}</span></div>`:""}
           <div class="flex gap2 mt3">
             <button class="btn btn-success flex1" style="font-size:12px;padding:8px;" onclick='openShare(${JSON.stringify(buildBillText(t))})'>📤 Share bill</button>
+            <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='printReceipt(${JSON.stringify(t)})'>🖨 Print</button>
             <button class="btn btn-outline" style="padding:8px 12px;border-radius:999px;" onclick="openEditTx('${t.id}')">Edit</button>
             <button class="btn btn-outline" style="padding:8px 12px;" onclick="deleteTx('${t.id}')">🗑</button>
           </div>
