@@ -226,6 +226,7 @@
 <div id="confirmModalRoot"></div>
 <div id="invFormModalRoot"></div>
 <div id="backupModalRoot"></div>
+<div id="printerModalRoot"></div>
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
 <div id="toast" class="hidden"></div>
@@ -285,6 +286,7 @@ let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:""
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
 let backupUi = { open:false };
+let printerUi = { open:false, transport:null, wifiIp:"", wifiPort:"9100" };
 let rec = { expandedId:null, searchQuery:"", editingId:null, expandedMonth:null, expandedYear:null, showMonthBreakdown:false, editingMonthBreakdown:false, breakdownDraft:{doctorFee:"",medTotal:"",testsTotal:"",othersTotal:""}, expandedDayBreakdown:null };
 let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:null };
 let notesUi = { openId:null, draftTitle:"", draftBody:"", addingProfile:false, newProfileName:"", searchQuery:"" };
@@ -777,6 +779,7 @@ function render(){
   renderConfirmModal();
   renderInvFormModal();
   renderBackupModal();
+  renderPrinterModal();
   renderMonthBreakdownModal();
   renderCategoryModal();
 
@@ -1379,21 +1382,62 @@ function buildEscPosReceipt(tx){
 // is configured (Bluetooth first; WiFi/USB/BLE can be added later using this same message).
 function printReceipt(tx){
   const escpos = buildEscPosReceipt(tx);
-  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
-    window.AppInventor.setWebViewString("PRINT:" + escpos);
-  }else{
+  if(!window.AppInventor || typeof window.AppInventor.setWebViewString !== "function"){
     showToast("Printing isn't available outside the app");
+    return;
+  }
+  const transport = localStorage.getItem("clinic_printer_transport") || "";
+  if(transport === "wifi"){
+    window.AppInventor.setWebViewString("PRINT_WIFI:" + escpos);
+  } else if(transport === "ble"){
+    window.AppInventor.setWebViewString("PRINT_BLE:" + escpos);
+  } else {
+    // Default / unset falls back to Bluetooth — matches the original Phase 1 behavior.
+    window.AppInventor.setWebViewString("PRINT:" + escpos);
   }
 }
-// Asks the native app to open its printer picker (paired Bluetooth devices for now;
-// WiFi/USB/BLE choices can be added to the same picker later without changing this call).
-function selectPrinter(){
+// Opens the in-page "Printer Settings" modal (Bluetooth device picker or WiFi IP/port entry).
+function selectPrinter(){ printerUi.open = !printerUi.open; render(); }
+function choosePrinterTransport(t){
+  printerUi.transport = t;
+  render();
+}
+function pickBluetoothPrinter(){
+  localStorage.setItem("clinic_printer_transport", "bluetooth");
   if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
     window.AppInventor.setWebViewString("SELECT_PRINTER");
-  }else{
-    showToast("Printer selection isn't available outside the app");
   }
+  printerUi.open = false;
+  render();
 }
+function pickBlePrinter(){
+  // Sends a bridge message so the App Inventor side can eventually trigger a BLE scan/pick UI
+  // and reply with the chosen device's address once that block wiring exists (deferred until
+  // a real BLE printer is on hand to read its service/characteristic UUIDs from).
+  localStorage.setItem("clinic_printer_transport", "ble");
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("SELECT_BLE_PRINTER");
+  }
+  printerUi.open = false;
+  showToast("✓ BLE printer selected");
+  render();
+}
+function saveWifiPrinter(){
+  const ip = (printerUi.wifiIp||"").trim();
+  const port = (printerUi.wifiPort||"9100").trim() || "9100";
+  if(!ip){ showToast("Enter the printer's IP address first"); return; }
+  localStorage.setItem("clinic_printer_transport", "wifi");
+  localStorage.setItem("clinic_printer_wifi_ip", ip);
+  localStorage.setItem("clinic_printer_wifi_port", port);
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("WIFI_SET:" + ip + "|" + port);
+  }
+  printerUi.open = false;
+  showToast("✓ WiFi printer saved");
+  render();
+}
+function onWifiIp(v){ printerUi.wifiIp = v; }
+function onWifiPort(v){ printerUi.wifiPort = v; }
 
 function renderBill(){
   const q = bill.query.trim().toLowerCase();
@@ -3198,6 +3242,35 @@ function estimatedCloudDataSize(){
     _cloudSizeCache = { bytes, at: now };
     return bytes;
   }catch(e){ _cloudSizeCache = { bytes: null, at: now }; return null; }
+}
+function renderPrinterModal(){
+  const root = document.getElementById("printerModalRoot");
+  if(!root) return;
+  if(!printerUi.open){ root.innerHTML=""; return; }
+  const savedTransport = localStorage.getItem("clinic_printer_transport") || "";
+  const savedIp = localStorage.getItem("clinic_printer_wifi_ip") || "";
+  const savedPort = localStorage.getItem("clinic_printer_wifi_port") || "9100";
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) selectPrinter()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Printer Settings</strong>
+          <button class="modal-x" onclick="selectPrinter()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">
+          ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
+          <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="pickBluetoothPrinter()">📶 Bluetooth printer</button>
+          <p class="small faint" style="margin:0 0 6px;">— or —</p>
+          <label class="field-label">WiFi printer IP address</label>
+          <input ${NOAC} type="text" value="${esc(printerUi.wifiIp||savedIp)}" oninput="onWifiIp(this.value)" placeholder="e.g. 192.168.1.50" style="margin-bottom:8px;">
+          <label class="field-label">Port (usually 9100)</label>
+          <input ${NOAC} type="text" inputmode="numeric" value="${esc(printerUi.wifiPort||savedPort)}" oninput="onWifiPort(this.value)" placeholder="9100" style="margin-bottom:10px;">
+          <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="saveWifiPrinter()">🌐 Save WiFi printer</button>
+          <p class="small faint" style="margin:0 0 6px;">— or —</p>
+          <button class="btn btn-outline" style="width:100%;" onclick="pickBlePrinter()">🔷 BLE printer</button>
+        </div>
+      </div>
+    </div>`;
 }
 function renderBackupModal(){
   const root = document.getElementById("backupModalRoot");
