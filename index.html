@@ -1391,6 +1391,8 @@ function printReceipt(tx){
     window.AppInventor.setWebViewString("PRINT_WIFI:" + escpos);
   } else if(transport === "ble"){
     window.AppInventor.setWebViewString("PRINT_BLE:" + escpos);
+  } else if(transport === "usb"){
+    window.AppInventor.setWebViewString("PRINT_USB:" + escpos);
   } else {
     // Default / unset falls back to Bluetooth — matches the original Phase 1 behavior.
     window.AppInventor.setWebViewString("PRINT:" + escpos);
@@ -1420,6 +1422,20 @@ function pickBlePrinter(){
   }
   printerUi.open = false;
   showToast("✓ BLE printer selected");
+  render();
+}
+function pickUsbPrinter(){
+  // Sends a bridge message so the App Inventor side can attempt a USB/OTG connection via the
+  // SerialOTG extension (Phase 4). Since USB devices are physically plugged in rather than
+  // scanned/paired, this just tells the native side to try opening whatever serial device is
+  // currently connected via the OTG adapter — actual wiring deferred until a real USB printer
+  // is on hand to confirm its chip type (CDC/FTDI/CP210x/etc) and correct baud rate.
+  localStorage.setItem("clinic_printer_transport", "usb");
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("SELECT_USB_PRINTER");
+  }
+  printerUi.open = false;
+  showToast("✓ USB printer selected");
   render();
 }
 function saveWifiPrinter(){
@@ -3258,7 +3274,7 @@ function renderPrinterModal(){
           <button class="modal-x" onclick="selectPrinter()">✕</button>
         </div>
         <div style="padding:14px 16px;">
-          ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
+          ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":savedTransport==="usb"?"USB":"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="pickBluetoothPrinter()">📶 Bluetooth printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <label class="field-label">WiFi printer IP address</label>
@@ -3267,7 +3283,9 @@ function renderPrinterModal(){
           <input ${NOAC} type="text" inputmode="numeric" value="${esc(printerUi.wifiPort||savedPort)}" oninput="onWifiPort(this.value)" placeholder="9100" style="margin-bottom:10px;">
           <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="saveWifiPrinter()">🌐 Save WiFi printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
-          <button class="btn btn-outline" style="width:100%;" onclick="pickBlePrinter()">🔷 BLE printer</button>
+          <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="pickBlePrinter()">🔷 BLE printer</button>
+          <p class="small faint" style="margin:0 0 6px;">— or —</p>
+          <button class="btn btn-outline" style="width:100%;" onclick="pickUsbPrinter()">🔌 USB printer</button>
         </div>
       </div>
     </div>`;
