@@ -1393,6 +1393,8 @@ function printReceipt(tx){
     window.AppInventor.setWebViewString("PRINT_BLE:" + escpos);
   } else if(transport === "usb"){
     window.AppInventor.setWebViewString("PRINT_USB:" + escpos);
+  } else if(transport === "cloud"){
+    window.AppInventor.setWebViewString("PRINT_CLOUD:" + escpos);
   } else {
     // Default / unset falls back to Bluetooth — matches the original Phase 1 behavior.
     window.AppInventor.setWebViewString("PRINT:" + escpos);
@@ -1452,6 +1454,19 @@ function saveWifiPrinter(){
   showToast("✓ WiFi printer saved");
   render();
 }
+function saveCloudPrinter(){
+  const url = (printerUi.cloudUrl||"").trim();
+  if(!url){ showToast("Enter the print server URL first"); return; }
+  localStorage.setItem("clinic_printer_transport", "cloud");
+  localStorage.setItem("clinic_printer_cloud_url", url);
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    window.AppInventor.setWebViewString("CLOUD_SET:" + url);
+  }
+  printerUi.open = false;
+  showToast("✓ Cloud printer saved");
+  render();
+}
+function onCloudUrl(v){ printerUi.cloudUrl = v; }
 function onWifiIp(v){ printerUi.wifiIp = v; }
 function onWifiPort(v){ printerUi.wifiPort = v; }
 
@@ -3266,6 +3281,7 @@ function renderPrinterModal(){
   const savedTransport = localStorage.getItem("clinic_printer_transport") || "";
   const savedIp = localStorage.getItem("clinic_printer_wifi_ip") || "";
   const savedPort = localStorage.getItem("clinic_printer_wifi_port") || "9100";
+  const savedCloudUrl = localStorage.getItem("clinic_printer_cloud_url") || "";
   root.innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) selectPrinter()">
       <div class="modal">
@@ -3274,7 +3290,7 @@ function renderPrinterModal(){
           <button class="modal-x" onclick="selectPrinter()">✕</button>
         </div>
         <div style="padding:14px 16px;">
-          ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":savedTransport==="usb"?"USB":"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
+          ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":savedTransport==="usb"?"USB":savedTransport==="cloud"?`Cloud (${esc(savedCloudUrl)})`:"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="pickBluetoothPrinter()">📶 Bluetooth printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <label class="field-label">WiFi printer IP address</label>
@@ -3285,7 +3301,11 @@ function renderPrinterModal(){
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="pickBlePrinter()">🔷 BLE printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
-          <button class="btn btn-outline" style="width:100%;" onclick="pickUsbPrinter()">🔌 USB printer</button>
+          <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="pickUsbPrinter()">🔌 USB printer</button>
+          <p class="small faint" style="margin:0 0 6px;">— or —</p>
+          <label class="field-label">Cloud print server URL</label>
+          <input ${NOAC} type="text" value="${esc(printerUi.cloudUrl||savedCloudUrl)}" oninput="onCloudUrl(this.value)" placeholder="e.g. https://myprintserver.com/print" style="margin-bottom:10px;">
+          <button class="btn btn-outline" style="width:100%;" onclick="saveCloudPrinter()">☁️ Save Cloud printer</button>
         </div>
       </div>
     </div>`;
