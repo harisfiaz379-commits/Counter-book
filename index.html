@@ -68,22 +68,10 @@
   }
   window.__localStorageReady = hydrate().then(install).catch(install);
 })();
-(function(){
-  // The Full Screen button can't work inside the App Inventor WebView app (confirmed via
-  // on-device testing: document.fullscreenEnabled is false there), so hide it there specifically
-  // — it still works normally in a regular browser tab, where this stays untouched.
-  var isAppInventorWebView = /; wv\)/.test(navigator.userAgent) && !!window.AppInventor;
-  if(isAppInventorWebView){
-    window.addEventListener("DOMContentLoaded", function(){
-      var btn = document.getElementById("fullscreenBtn");
-      if(btn) btn.style.display = "none";
-    });
-  }
-})();
 </script>
 
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -101,14 +89,12 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;background:var(--page);color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
-  #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;}
-  header{background:var(--header);color:#fff;padding:18px 16px 14px;position:sticky;top:0;z-index:30;
-    box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;}
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-x:hidden;}
+  #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;}
+  header{background:var(--header);color:#fff;padding:18px 16px 14px;position:fixed;top:0;left:0;right:0;width:100%;z-index:30;
+    box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;}
   header h1{margin:0;font-size:18px;font-weight:700;}
   header p{margin:2px 0 0;font-size:12px;color:var(--headerSub);}
-  #fullscreenBtn{background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;
-    padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;}
   #banner{font-size:12px;padding:8px 16px;background:var(--warningSoft);color:var(--warning);
     border-bottom:1px solid #F0DCB0;display:none;align-items:center;gap:6px;}
   main{flex:1;padding:14px 12px 100px;max-width:560px;margin:0 auto;width:100%;}
@@ -203,18 +189,24 @@
 <body>
 <div id="app">
   <header>
-    <div>
+    <div style="padding-right:170px;">
       <h1>Counter Book</h1>
       <p>Dispensing &amp; billing</p>
+      <div class="flex gap2 mt2" style="align-items:center;">
+        <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
+        <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
+      </div>
     </div>
-    <div class="flex gap2" style="align-items:center;">
-      <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
-      <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
+    <div style="position:absolute;top:14px;right:16px;display:flex;gap:8px;align-items:center;">
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
-      <button id="printerBtn" onclick="selectPrinter()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🖨 Printer</button>
-      <button id="backupBtn" onclick="toggleBackupModal()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">💾 Backup</button>
-      <button id="receiptSettingsBtn" onclick="editReceiptSettings()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🧾 Receipt setup</button>
-      <button id="fullscreenBtn" onclick="toggleFullscreen()">⛶ Full screen</button>
+      <div style="position:relative;">
+        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">⋮ More</button>
+        <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;">
+          <button onclick="closeHeaderMenu();selectPrinter();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;">🖨 Printer</button>
+          <button onclick="closeHeaderMenu();toggleBackupModal();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;border-top:1px solid var(--border);">💾 Backup</button>
+          <button onclick="closeHeaderMenu();editReceiptSettings();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;border-top:1px solid var(--border);">🧾 Receipt setup</button>
+        </div>
+      </div>
     </div>
   </header>
   <div id="banner"></div>
@@ -250,6 +242,8 @@ let shareText = null;
 let testPrices = {}; // { testId: permanentAmount } — set via the "Edit" panel, synced across devices
 let defaultDoctorFee = 0; // permanent default for the doctor visit fee — synced across devices (see defaultDoctorFeeUpdatedAt/mergeDefaultDoctorFee)
 let defaultDoctorFeeUpdatedAt = 0; // timestamp of the last real edit, used for last-write-wins merging across devices
+let defaultDoctorName = ""; // permanent default doctor name — auto-fills Remarks on each new bill; local-only (not cloud-synced), like MED_CATEGORIES
+let remarksUi = { editing:false, draft:"" }; // controls the small inline "edit default doctor name" panel under Remarks
 let customTests = []; // [{id,name}] — tests added by the user beyond the built-in TEST_CATALOG, synced across devices
 let testNameOverrides = {}; // { testId: renamedName } — user-renamed built-in TEST_CATALOG entries, synced across devices
 let hiddenBuiltInTestIds = []; // ids of built-in TEST_CATALOG entries the user removed from their list — kept out of allTests(), synced across devices
@@ -270,7 +264,7 @@ let newTestPriceDraft = ""; // transient: price input for adding a new test in t
 function newBillState(){
   return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", itemDiscount:"", selectedMedId:null, qtyMode:"total", daysMode:"perMed", perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
     tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", feeEditing:false, testsMenuOpen:false, feeIncluded:false,
-    paymentMode:"Cash", remarks:"",
+    paymentMode:"Cash", remarks: defaultDoctorName || "",
     // Special-category medicines: a second, separate search/add flow (see specialMatches()
     // in renderBill) for medicines flagged with a specialCategory, which are deliberately
     // excluded from the normal medicine search above. applyingFeeMode is per-bill: "perItem"
@@ -353,6 +347,7 @@ function loadAll(){
   try{ testPrices = JSON.parse(localStorage.getItem("clinic_test_prices")||"{}"); }catch(e){ testPrices={}; }
   try{ defaultDoctorFee = Number(localStorage.getItem("clinic_default_doctor_fee"))||0; }catch(e){ defaultDoctorFee=0; }
   try{ defaultDoctorFeeUpdatedAt = Number(localStorage.getItem("clinic_default_doctor_fee_updated_at"))||0; }catch(e){ defaultDoctorFeeUpdatedAt=0; }
+  try{ defaultDoctorName = localStorage.getItem("clinic_default_doctor_name") || ""; }catch(e){ defaultDoctorName=""; }
   try{ customTests = JSON.parse(localStorage.getItem("clinic_custom_tests")||"[]"); }catch(e){ customTests=[]; }
   try{ testNameOverrides = JSON.parse(localStorage.getItem("clinic_test_name_overrides")||"{}"); }catch(e){ testNameOverrides={}; }
   try{ hiddenBuiltInTestIds = JSON.parse(localStorage.getItem("clinic_hidden_tests")||"[]"); }catch(e){ hiddenBuiltInTestIds=[]; }
@@ -761,6 +756,16 @@ function scheduleRender(){
   requestAnimationFrame(()=>{ renderScheduled = false; render(); });
 }
 /* ===================== RENDER (with focus preservation) ===================== */
+function syncHeaderOffset(){
+  // header is position:fixed (see CSS) so it's out of normal document flow; without this,
+  // page content would render underneath it. Measures the actual rendered height (which varies
+  // since the button row can wrap to 2 lines on narrow screens) and pushes #app down to match.
+  const h = document.querySelector("header");
+  const app = document.getElementById("app");
+  if(h && app){ app.style.paddingTop = h.offsetHeight + "px"; }
+}
+window.addEventListener("resize", syncHeaderOffset);
+
 function render(){
   const active = document.activeElement;
   const id = active && active.id;
@@ -793,6 +798,7 @@ function render(){
       if(selStart!=null && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
     }
   }
+  syncHeaderOffset();
 }
 
 function renderBanner(){
@@ -1055,6 +1061,19 @@ function onBillPills(v){ bill.pills=v; scheduleRender(); }
 function onBillItemDiscount(v){ bill.itemDiscount=v; scheduleRender(); }
 function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
 function onBillRemarks(v){ bill.remarks=v; }
+function toggleRemarksEdit(){
+  remarksUi.editing = !remarksUi.editing;
+  if(remarksUi.editing) remarksUi.draft = defaultDoctorName;
+  render();
+}
+function onDefaultDoctorNameDraft(v){ remarksUi.draft = v; }
+function saveDefaultDoctorName(){
+  defaultDoctorName = (remarksUi.draft||"").trim();
+  try{ localStorage.setItem("clinic_default_doctor_name", defaultDoctorName); }catch(e){}
+  remarksUi.editing = false;
+  showToast("✓ Default doctor name saved");
+  render();
+}
 function onBillPerDay(v){ bill.perDay=v; scheduleRender(); }
 function onBillDays(v){ bill.days=v; scheduleRender(); }
 function setBillQtyMode(mode){ bill.qtyMode=mode; render(); }
@@ -1734,10 +1753,20 @@ function renderBill(){
     <div class="card">
       <h3 class="mb2" style="font-size:14px;font-weight:700;">Mode of Payment</h3>
       <div class="flex gap2">
-        ${["Cash","Card","Other"].map(mode=>`<button class="btn ${bill.paymentMode===mode?'btn-primary':'btn-outline'}" style="flex:1;padding:8px;font-size:12px;" onclick="onBillPaymentMode('${mode}')">${mode}</button>`).join("")}
+        ${["Cash","JazzCash","Other"].map(mode=>`<button class="btn ${bill.paymentMode===mode?'btn-primary':'btn-outline'}" style="flex:1;padding:8px;font-size:12px;" onclick="onBillPaymentMode('${mode}')">${mode}</button>`).join("")}
       </div>
-      <label class="field-label mt3">Remarks (optional, printed on receipt)</label>
-      <input ${NOAC} id="billRemarksInput" type="text" value="${esc(bill.remarks)}" oninput="onBillRemarks(this.value)" placeholder="e.g. Dr. Salman">
+      <div class="flex mt3" style="justify-content:space-between;align-items:center;">
+        <label class="field-label" style="margin:0;">Remarks (optional, printed on receipt)</label>
+        <button class="btn btn-outline" style="padding:4px 12px;font-size:11px;border-radius:999px;flex-shrink:0;" onclick="toggleRemarksEdit()">${remarksUi.editing?"Done":"Edit default"}</button>
+      </div>
+      ${remarksUi.editing ? `
+        <div class="mt2 divider-top">
+          <label class="field-label" style="margin-bottom:4px;">Default doctor name (auto-fills Remarks on every new bill)</label>
+          <input ${NOAC} id="defaultDoctorNameInput" type="text" value="${esc(remarksUi.draft)}" oninput="onDefaultDoctorNameDraft(this.value)" placeholder="e.g. Dr. Salman">
+          <button class="btn btn-primary mt2" style="width:100%;" onclick="saveDefaultDoctorName()">Save</button>
+        </div>
+      ` : ""}
+      <input ${NOAC} id="billRemarksInput" type="text" value="${esc(bill.remarks)}" oninput="onBillRemarks(this.value)" placeholder="e.g. Dr. Salman" class="${remarksUi.editing?'mt2':''}">
     </div>
 
     <button class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
@@ -2959,6 +2988,24 @@ function mergeBackupInto(data){ mergeDataInto(data, mergeInventory, false); }
 // instead of being silently ignored (or the deleted item quietly reappearing a second later).
 function mergeCloudSnapshotInto(data){ mergeDataInto(data, reconcileInventoryForSync, true); }
 function toggleBackupModal(){ backupUi.open = !backupUi.open; render(); }
+function toggleHeaderMenu(){
+  const d = document.getElementById("headerMenuDropdown");
+  if(d) d.classList.toggle("hidden");
+}
+function closeHeaderMenu(){
+  const d = document.getElementById("headerMenuDropdown");
+  if(d) d.classList.add("hidden");
+}
+// Closes the header menu when tapping anywhere outside it (the dropdown itself lives outside
+// the render() cycle, in static header HTML, so this is a plain DOM listener rather than state).
+document.addEventListener("click", function(e){
+  const menuBtn = document.getElementById("headerMenuBtn");
+  const dropdown = document.getElementById("headerMenuDropdown");
+  if(!dropdown || dropdown.classList.contains("hidden")) return;
+  if(menuBtn && (menuBtn===e.target || menuBtn.contains(e.target))) return;
+  if(dropdown===e.target || dropdown.contains(e.target)) return;
+  dropdown.classList.add("hidden");
+});
 
 /* ===================== LIVE CLOUD SYNC (Firebase) ===================== */
 const firebaseConfig = {
@@ -3339,15 +3386,6 @@ function renderBackupModal(){
         </div>
       </div>
     </div>`;
-}
-
-/* ===================== FULLSCREEN ===================== */
-function toggleFullscreen(){
-  if(!document.fullscreenElement){
-    document.documentElement.requestFullscreen?.().catch(()=>{});
-  } else {
-    document.exitFullscreen?.();
-  }
 }
 
 /* ===================== INIT ===================== */
