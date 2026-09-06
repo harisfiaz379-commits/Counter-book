@@ -201,11 +201,7 @@
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <div style="position:relative;">
         <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">⋮ More</button>
-        <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;">
-          <button onclick="closeHeaderMenu();selectPrinter();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;">🖨 Printer</button>
-          <button onclick="closeHeaderMenu();toggleBackupModal();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;border-top:1px solid var(--border);">💾 Backup</button>
-          <button onclick="closeHeaderMenu();editReceiptSettings();" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;border-top:1px solid var(--border);">🧾 Receipt setup</button>
-        </div>
+        <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;"></div>
       </div>
     </div>
   </header>
@@ -221,6 +217,7 @@
 <div id="printerModalRoot"></div>
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
+<div id="manageUsersModalRoot"></div>
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
 
@@ -283,7 +280,11 @@ let backupUi = { open:false };
 let printerUi = { open:false, transport:null, wifiIp:"", wifiPort:"9100" };
 let rec = { expandedId:null, searchQuery:"", editingId:null, expandedMonth:null, expandedYear:null, showMonthBreakdown:false, editingMonthBreakdown:false, breakdownDraft:{doctorFee:"",medTotal:"",testsTotal:"",othersTotal:""}, expandedDayBreakdown:null };
 let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:null };
-let notesUi = { openId:null, draftTitle:"", draftBody:"", addingProfile:false, newProfileName:"", searchQuery:"" };
+let notesUi = { openId:null, draftTitle:"", draftBody:"", searchQuery:"" };
+let sessionAuthed = false; // whether someone has entered a correct PIN this session; persists until "Switch User" is tapped
+let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock screen
+let setupUi = { name:"", pin:"" }; // state for the very-first-run "set up Admin" screen
+let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", editingId:null, editRole:"", editPin:"" }; // admin-only "Manage Users" screen
 
 /* ===================== HELPERS ===================== */
 let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
@@ -386,10 +387,13 @@ function loadAll(){
     }
   }
 
-  currentProfileId = localStorage.getItem("clinic_current_profile") || (visibleProfiles()[0] ? visibleProfiles()[0].id : null);
+  currentProfileId = localStorage.getItem("clinic_current_profile") || null;
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
-    currentProfileId = visibleProfiles()[0] ? visibleProfiles()[0].id : null;
+    currentProfileId = null;
   }
+  // Login state persists across app restarts until "Switch User" is tapped — but only counts
+  // if currentProfileId is actually still valid (e.g. not true right after that profile was deleted).
+  try{ sessionAuthed = localStorage.getItem("clinic_session_authed")==="1" && !!currentProfileId; }catch(e){ sessionAuthed=false; }
   loadNotesForCurrentProfile();
 }
 function saveInventory(){
@@ -773,6 +777,25 @@ function render(){
   const selEnd = active && typeof active.selectionEnd==="number" ? active.selectionEnd : null;
 
   renderBanner();
+  renderHeaderMenu();
+
+  // Gate everything behind login: first-run shows "set up Admin"; otherwise shows the PIN
+  // login screen until sessionAuthed. Both skip tabs/nav entirely — nothing else renders.
+  if(visibleProfiles().length===0){
+    document.getElementById("nav").innerHTML = "";
+    const fab0 = document.getElementById("invFab"); if(fab0) fab0.className="hidden";
+    renderSetupAdmin();
+    syncHeaderOffset();
+    return;
+  }
+  if(!sessionAuthed){
+    document.getElementById("nav").innerHTML = "";
+    const fab0 = document.getElementById("invFab"); if(fab0) fab0.className="hidden";
+    renderLogin();
+    syncHeaderOffset();
+    return;
+  }
+
   renderNav();
   renderCloudSizeBadge();
   if(tab==="bill") renderBill();
@@ -787,6 +810,7 @@ function render(){
   renderPrinterModal();
   renderMonthBreakdownModal();
   renderCategoryModal();
+  renderManageUsersModal();
 
   const fab = document.getElementById("invFab");
   if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
@@ -1328,6 +1352,7 @@ function getReceiptSettings(){
 }
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
 function editReceiptSettings(){
+  if(!can("receiptSetup")){ showToast("Only Admin can change receipt settings"); return; }
   const cur = getReceiptSettings();
   const shopName = window.prompt("Shop / clinic name (printed at the top of every receipt):", cur.shopName);
   if(shopName===null) return;
@@ -1420,7 +1445,10 @@ function printReceipt(tx){
   }
 }
 // Opens the in-page "Printer Settings" modal (Bluetooth device picker or WiFi IP/port entry).
-function selectPrinter(){ printerUi.open = !printerUi.open; render(); }
+function selectPrinter(){
+  if(!can("printer")){ showToast("Only Admin can change printer settings"); return; }
+  printerUi.open = !printerUi.open; render();
+}
 function choosePrinterTransport(t){
   printerUi.transport = t;
   render();
@@ -2070,6 +2098,7 @@ function toggleDayBreakdown(key){
   render();
 }
 function toggleMonthBreakdown(){
+  if(!can("monthlyTotal")) return;
   rec.showMonthBreakdown = !rec.showMonthBreakdown;
   if(!rec.showMonthBreakdown) rec.editingMonthBreakdown = false;
   render();
@@ -2442,14 +2471,14 @@ function renderRecords(){
 
   const mTx = currentMonthTx();
   const mTotal = monthAdjustedTotals(monthKeyOf(Date.now()), mTx).grandTotal;
-  const monthStat = `
+  const monthStat = can("monthlyTotal") ? `
     <button onclick="toggleMonthBreakdown()" class="card" style="background:var(--primarySoft);border:none;width:100%;text-align:left;cursor:pointer;padding:14px;">
       <div class="row">
         <span class="small" style="font-weight:700;color:var(--primary);">Total sales this month</span>
         <span style="font-weight:700;font-size:16px;color:var(--primary);">${CURRENCY}${money(mTotal)}</span>
       </div>
       <p class="small faint" style="margin:2px 0 0;">${mTx.length} bill${mTx.length===1?"":"s"} this month · tap for breakdown</p>
-    </button>`;
+    </button>` : "";
 
   // Every day in the current month that has bills (plus today, even if empty) is shown
   // stacked here in one continuous list — most recent first — instead of behind a picker,
@@ -2574,50 +2603,238 @@ function renderStock(){
   `;
 }
 
-/* ===================== NOTEPAD TAB (multiple notes, one notepad per profile) ===================== */
-function switchProfile(id){
-  currentProfileId = id;
-  localStorage.setItem("clinic_current_profile", id);
-  loadNotesForCurrentProfile();
-  notesUi.openId=null;
-  render();
-}
-function toggleAddProfile(){
-  notesUi.addingProfile = !notesUi.addingProfile;
-  notesUi.newProfileName = "";
-  render();
-}
+/* ===================== USERS / ROLES / LOGIN ===================== */
 function visibleProfiles(){ return profiles.filter(p=>!p.deleted); }
-function onNewProfileName(v){ notesUi.newProfileName=v; }
-function addProfile(){
-  const name = notesUi.newProfileName.trim();
-  if(!name) return;
-  const p = { id:uid(), name, updatedAt:Date.now() };
+function currentRole(){
+  const p = profiles.find(x=>x.id===currentProfileId);
+  return p ? p.role : null;
+}
+// The 3 gated actions confirmed with the user: Printer Settings + Receipt setup are Admin-only;
+// the Monthly Total Sales summary is hidden from Receptionist. Everything else (New Bill, Records
+// view/edit, daily/individual sales, Inventory view+edit, Backup, Notepad) is open to all 3 roles.
+function can(action){
+  const role = currentRole();
+  if(action==="printer") return role==="admin";
+  if(action==="receiptSetup") return role==="admin";
+  if(action==="monthlyTotal") return role==="admin" || role==="doctor";
+  if(action==="manageUsers") return role==="admin";
+  return true;
+}
+function activateProfile(id){
+  currentProfileId = id;
+  sessionAuthed = true;
+  try{
+    localStorage.setItem("clinic_current_profile", id);
+    localStorage.setItem("clinic_session_authed", "1");
+  }catch(e){}
+  loadNotesForCurrentProfile();
+}
+
+/* ---- First-run only: create the Admin account ---- */
+function onSetupName(v){ setupUi.name=v; }
+function onSetupPin(v){ setupUi.pin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function submitSetupAdmin(){
+  const name = setupUi.name.trim();
+  const pin = setupUi.pin.trim();
+  if(!name){ showToast("Enter your name first"); return; }
+  if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
+  const p = { id:uid(), name, role:"admin", pin, updatedAt:Date.now() };
   profiles.push(p);
   saveProfiles();
-  notesUi.addingProfile = false;
-  switchProfile(p.id);
+  activateProfile(p.id);
+  setupUi = { name:"", pin:"" };
+  render();
 }
-function deleteProfile(id){
+
+/* ---- Login/lock screen, shown whenever sessionAuthed is false ---- */
+function pickLoginProfile(id){ loginUi.pickedId=id; loginUi.pin=""; loginUi.error=""; render(); }
+function onLoginPin(v){ loginUi.pin=v.replace(/[^0-9]/g,"").slice(0,6); loginUi.error=""; }
+function submitLogin(){
+  const p = profiles.find(x=>x.id===loginUi.pickedId);
+  if(!p){ loginUi.error="Pick your name first"; render(); return; }
+  if((p.pin||"")!==loginUi.pin){ loginUi.error="Wrong PIN — try again"; loginUi.pin=""; render(); return; }
+  activateProfile(p.id);
+  loginUi = { pickedId:"", pin:"", error:"" };
+  render();
+}
+function logoutUser(){
+  sessionAuthed = false;
+  try{ localStorage.setItem("clinic_session_authed", "0"); }catch(e){}
+  loginUi = { pickedId:"", pin:"", error:"" };
+  render();
+}
+function renderSetupAdmin(){
+  document.getElementById("main").innerHTML = `
+    <div class="card" style="max-width:340px;margin:40px auto 0;text-align:center;">
+      <p style="font-weight:700;font-size:16px;margin:0 0 4px;">Welcome to Counter Book</p>
+      <p class="small faint" style="margin:0 0 16px;">Let's set up your Admin account first — this is the account with full access to everything.</p>
+      <label class="field-label" style="text-align:left;">Your name</label>
+      <input ${NOAC} id="setupNameInput" value="${esc(setupUi.name)}" oninput="onSetupName(this.value)" placeholder="e.g. Haris" class="mb2">
+      <label class="field-label" style="text-align:left;">Choose a PIN (4-6 digits)</label>
+      <input ${NOAC} id="setupPinInput" type="password" inputmode="numeric" value="${esc(setupUi.pin)}" oninput="onSetupPin(this.value)" placeholder="••••" class="mb2">
+      <button class="btn btn-primary" style="width:100%;" onclick="submitSetupAdmin()">Create Admin account</button>
+    </div>`;
+}
+function renderLogin(){
+  const list = visibleProfiles();
+  const picked = list.find(p=>p.id===loginUi.pickedId);
+  document.getElementById("main").innerHTML = `
+    <div class="card" style="max-width:340px;margin:40px auto 0;">
+      <p style="font-weight:700;font-size:16px;margin:0 0 4px;text-align:center;">Who's logging in?</p>
+      <div class="mt2" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">
+        ${list.map(p=>`<button class="btn ${p.id===loginUi.pickedId?'btn-primary':'btn-outline'}" style="padding:8px 14px;" onclick="pickLoginProfile('${p.id}')">${esc(p.name)}</button>`).join("")}
+      </div>
+      ${picked ? `
+        <label class="field-label mt3" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
+        <input ${NOAC} id="loginPinInput" type="password" inputmode="numeric" value="${esc(loginUi.pin)}" oninput="onLoginPin(this.value)" placeholder="••••" class="mb2">
+        ${loginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(loginUi.error)}</p>`:""}
+        <button class="btn btn-primary" style="width:100%;" onclick="submitLogin()">Log in</button>
+      ` : ""}
+    </div>`;
+}
+
+/* ---- Admin-only: Manage Users screen (add/edit role+PIN/remove) ---- */
+function toggleAddUser(){
+  manageUi.addingUser = !manageUi.addingUser;
+  manageUi.newName=""; manageUi.newRole="receptionist"; manageUi.newPin="";
+  render();
+}
+function onNewUserName(v){ manageUi.newName=v; }
+function onNewUserRole(v){ manageUi.newRole=v; }
+function onNewUserPin(v){ manageUi.newPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function addUserProfile(){
+  if(!can("manageUsers")) return;
+  const name = manageUi.newName.trim();
+  const pin = manageUi.newPin.trim();
+  if(!name){ showToast("Enter a name first"); return; }
+  if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
+  const p = { id:uid(), name, role:manageUi.newRole, pin, updatedAt:Date.now() };
+  profiles.push(p);
+  saveProfiles();
+  manageUi.addingUser=false;
+  showToast(`✓ ${name} added`);
+  render();
+}
+function startEditUser(id){
   const p = profiles.find(x=>x.id===id);
   if(!p) return;
-  askConfirm(`Remove "${p.name}" and delete all of their notes? This cannot be undone.`, ()=>{
+  manageUi.editingId = id;
+  manageUi.editRole = p.role;
+  manageUi.editPin = p.pin || "";
+  render();
+}
+function cancelEditUser(){ manageUi.editingId=null; render(); }
+function onEditUserRole(v){ manageUi.editRole=v; }
+function onEditUserPin(v){ manageUi.editPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function saveEditUser(){
+  if(!can("manageUsers")) return;
+  const p = profiles.find(x=>x.id===manageUi.editingId);
+  if(!p) return;
+  if(manageUi.editPin.trim().length<4){ showToast("PIN must be at least 4 digits"); return; }
+  if(p.role==="admin" && manageUi.editRole!=="admin" && visibleProfiles().filter(x=>x.role==="admin").length<=1){
+    showToast("Can't demote the only Admin account");
+    return;
+  }
+  p.role = manageUi.editRole;
+  p.pin = manageUi.editPin.trim();
+  p.updatedAt = Date.now();
+  saveProfiles();
+  manageUi.editingId=null;
+  showToast("✓ Updated");
+  render();
+}
+function deleteProfile(id){
+  if(!can("manageUsers")) return;
+  const p = profiles.find(x=>x.id===id);
+  if(!p) return;
+  if(p.role==="admin" && visibleProfiles().filter(x=>x.role==="admin").length<=1){
+    showToast("Can't remove the only Admin account");
+    return;
+  }
+  askConfirm(`Remove "${p.name}"? They will no longer be able to log in, and their private notes will be deleted. This cannot be undone.`, ()=>{
     // Soft-delete (tombstone) so the removal itself can sync to other devices, same as
     // medicines/bills/notes — otherwise it just reappears once another device's data syncs back.
     p.deleted = true; p.updatedAt = Date.now();
     saveProfiles();
     try{ localStorage.removeItem("clinic_notes_"+id); }catch(e){}
     if(currentProfileId===id){
-      const remaining = visibleProfiles();
-      currentProfileId = remaining[0] ? remaining[0].id : null;
-      if(currentProfileId) localStorage.setItem("clinic_current_profile", currentProfileId);
-      else localStorage.removeItem("clinic_current_profile");
+      // They just removed their own currently-logged-in account — force a fresh login rather
+      // than leaving a dangling identity or silently switching to someone else's account.
+      currentProfileId = null;
+      sessionAuthed = false;
+      try{
+        localStorage.removeItem("clinic_current_profile");
+        localStorage.setItem("clinic_session_authed", "0");
+      }catch(e){}
       loadNotesForCurrentProfile();
     }
-    notesUi.openId=null;
+    manageUi.editingId=null;
     render();
   });
 }
+function toggleManageUsersModal(){
+  if(!can("manageUsers")) return;
+  manageUi.open = !manageUi.open;
+  if(!manageUi.open){ manageUi.addingUser=false; manageUi.editingId=null; }
+  render();
+}
+function renderManageUsersModal(){
+  const root = document.getElementById("manageUsersModalRoot");
+  if(!root) return;
+  if(!manageUi.open){ root.innerHTML=""; return; }
+  const list = visibleProfiles();
+  const roleOptionsHtml = (selected) => ["admin","doctor","receptionist"].map(r=>
+    `<option value="${r}" ${selected===r?"selected":""}>${r.charAt(0).toUpperCase()+r.slice(1)}</option>`).join("");
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) toggleManageUsersModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Manage Users</strong>
+          <button class="modal-x" onclick="toggleManageUsersModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
+          ${list.map(p=>`
+            <div class="card" style="padding:10px 14px;">
+              ${manageUi.editingId===p.id ? `
+                <p style="font-weight:700;margin:0 0 8px;">${esc(p.name)}</p>
+                <label class="field-label">Role</label>
+                <select onchange="onEditUserRole(this.value)" class="mb2">${roleOptionsHtml(manageUi.editRole)}</select>
+                <label class="field-label">PIN (4-6 digits)</label>
+                <input ${NOAC} type="password" inputmode="numeric" value="${esc(manageUi.editPin)}" oninput="onEditUserPin(this.value)" class="mb2">
+                <div class="flex gap2">
+                  <button class="btn btn-primary flex1" onclick="saveEditUser()">Save</button>
+                  <button class="btn btn-outline" onclick="cancelEditUser()">Cancel</button>
+                </div>
+              ` : `
+                <div class="row">
+                  <div>
+                    <p style="font-weight:700;margin:0;">${esc(p.name)}${p.id===currentProfileId?' <span class="small faint">(you)</span>':""}</p>
+                    <p class="small faint" style="margin:2px 0 0;text-transform:capitalize;">${esc(p.role||"—")}</p>
+                  </div>
+                  <div class="flex gap2">
+                    <button class="btn btn-outline" style="padding:6px 12px;" onclick="startEditUser('${p.id}')">Edit</button>
+                    <button class="btn btn-outline" style="padding:6px 12px;color:var(--danger);" onclick="deleteProfile('${p.id}')">🗑</button>
+                  </div>
+                </div>
+              `}
+            </div>`).join("")}
+          ${manageUi.addingUser ? `
+            <div class="card" style="padding:10px 14px;">
+              <label class="field-label">Name</label>
+              <input ${NOAC} id="newUserNameInput" value="${esc(manageUi.newName)}" oninput="onNewUserName(this.value)" placeholder="e.g. Ayesha" class="mb2">
+              <label class="field-label">Role</label>
+              <select onchange="onNewUserRole(this.value)" class="mb2">${roleOptionsHtml(manageUi.newRole)}</select>
+              <label class="field-label">PIN (4-6 digits)</label>
+              <input ${NOAC} id="newUserPinInput" type="password" inputmode="numeric" value="${esc(manageUi.newPin)}" oninput="onNewUserPin(this.value)" class="mb2">
+              <button class="btn btn-primary" style="width:100%;" onclick="addUserProfile()">Add user</button>
+            </div>
+          ` : `<button class="btn-dashed" style="width:100%;" onclick="toggleAddUser()">+ Add user</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== NOTEPAD TAB (multiple notes, one private notepad per logged-in user) ===================== */
 function onNotesSearch(v){ notesUi.searchQuery=v; scheduleRender(); }
 function openNewNote(){ notesUi.openId="new"; notesUi.draftTitle=""; notesUi.draftBody=""; render(); }
 function openExistingNote(id){
@@ -2658,37 +2875,14 @@ function shareNote(id){
 }
 
 function renderNotes(){
-  if(visibleProfiles().length===0){
-    document.getElementById("main").innerHTML = `
-      <div class="card" style="text-align:center;">
-        <p style="font-weight:700;margin:0 0 6px;">Who's writing notes?</p>
-        <p class="small faint" style="margin:0 0 12px;">Each person gets their own private notepad on this device.</p>
-        <input ${NOAC} id="firstProfileName" value="${esc(notesUi.newProfileName)}" oninput="onNewProfileName(this.value)" placeholder="Your name" class="mb2">
-        <button class="btn btn-primary" style="width:100%;" onclick="addProfile()">Start my notepad</button>
-      </div>`;
-    return;
-  }
-
-  const profileSwitcher = `
+  const meLabel = `
     <div class="card" style="padding:10px 14px;">
-      <label class="field-label" style="margin-bottom:6px;">Notepad for</label>
-      <div class="flex gap2" style="align-items:center;">
-        <select id="profileSelect" onchange="switchProfile(this.value)" style="flex:1;">
-          ${visibleProfiles().map(p=>`<option value="${p.id}" ${p.id===currentProfileId?"selected":""}>${esc(p.name)}</option>`).join("")}
-        </select>
-        <button class="btn btn-outline" style="padding:10px 12px;white-space:nowrap;" onclick="toggleAddProfile()">${notesUi.addingProfile?"✕":"+ Add"}</button>
-        <button class="btn btn-outline" style="padding:10px 12px;color:var(--danger);" onclick="deleteProfile('${currentProfileId}')" title="Remove this person">🗑</button>
-      </div>
-      ${notesUi.addingProfile ? `
-        <div class="flex gap2 mt2">
-          <input ${NOAC} id="newProfileNameInput" value="${esc(notesUi.newProfileName)}" oninput="onNewProfileName(this.value)" placeholder="New person's name" class="flex1">
-          <button class="btn btn-primary" onclick="addProfile()">Add</button>
-        </div>` : ""}
+      <p class="small faint" style="margin:0;">Notepad for <strong style="color:var(--text);">${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")}</strong> — private to you, not visible to other logged-in users on this device.</p>
     </div>`;
 
   if(notesUi.openId!==null){
     const isNew = notesUi.openId==="new";
-    document.getElementById("main").innerHTML = profileSwitcher + `
+    document.getElementById("main").innerHTML = meLabel + `
       <button onclick="backFromNote()" style="background:none;border:none;color:var(--primary);font-weight:600;font-size:14px;cursor:pointer;padding:0;margin-bottom:12px;">← Back</button>
       <input ${NOAC} id="noteTitleInput" value="${esc(notesUi.draftTitle)}" oninput="onNoteTitle(this.value)" placeholder="Note title" style="font-weight:700;" class="mb2">
       <textarea ${NOAC} id="noteBodyInput" oninput="onNoteBody(this.value)" placeholder="Write here — supplier calls, reminders, things to order, notes for the next shift…" style="min-height:40vh;">${esc(notesUi.draftBody)}</textarea>
@@ -2709,7 +2903,7 @@ function renderNotes(){
       return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
     })
     .sort((a,b)=>b.updatedAt-a.updatedAt);
-  document.getElementById("main").innerHTML = profileSwitcher + `
+  document.getElementById("main").innerHTML = meLabel + `
     <button class="btn-dashed mb2" onclick="openNewNote()">+ New note</button>
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
@@ -2971,11 +3165,11 @@ function mergeDataInto(data, inventoryMergeFn, live){
 
   saveInventory(); saveTransactions(); saveProfiles(); saveMonthAdjustments();
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
+    // The logged-in profile was deleted (e.g. by an admin on another device) — force a re-login
+    // rather than silently auto-picking a different profile, since that would bypass the PIN gate.
     currentProfileId = null;
-  }
-  if(!currentProfileId && visibleProfiles()[0]){
-    currentProfileId = visibleProfiles()[0].id;
-    localStorage.setItem("clinic_current_profile", currentProfileId);
+    sessionAuthed = false;
+    try{ localStorage.setItem("clinic_session_authed", "0"); }catch(e){}
   }
   loadNotesForCurrentProfile();
 }
@@ -2995,6 +3189,20 @@ function toggleHeaderMenu(){
 function closeHeaderMenu(){
   const d = document.getElementById("headerMenuDropdown");
   if(d) d.classList.add("hidden");
+}
+function renderHeaderMenu(){
+  const el = document.getElementById("headerMenuDropdown");
+  if(!el) return;
+  if(!currentProfileId || !sessionAuthed){ el.innerHTML=""; return; }
+  const items = [];
+  if(can("printer")) items.push({label:"🖨 Printer", action:"selectPrinter()"});
+  items.push({label:"💾 Backup", action:"toggleBackupModal()"});
+  if(can("receiptSetup")) items.push({label:"🧾 Receipt setup", action:"editReceiptSettings()"});
+  if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
+  items.push({label:"🔁 Switch User", action:"logoutUser()", danger:true});
+  el.innerHTML = items.map((it,i)=>`
+    <button onclick="closeHeaderMenu();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
+  `).join("");
 }
 // Closes the header menu when tapping anywhere outside it (the dropdown itself lives outside
 // the render() cycle, in static header HTML, so this is a plain DOM listener rather than state).
