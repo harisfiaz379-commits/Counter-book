@@ -1912,6 +1912,10 @@ function doRestock(id){
     m.batches.push({ id:uid(), boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
     if(mrpVal!=null){ m.mrpPerBox = mrpVal; m.updatedAt = Date.now(); } // new MRP becomes the current default going forward
     recomputeStock(m);
+    // A restock resolves whatever low-stock situation led to "we'll buy it later" being tapped
+    // earlier — clear that suppression now so future low-stock warnings for this medicine work
+    // again, instead of staying silently switched off forever.
+    if(m.noWarn && m.stockPills > (m.lowStockAt??0)){ m.noWarn = false; m.updatedAt = Date.now(); }
   }
   saveInventory();
   inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp="";
@@ -1953,6 +1957,7 @@ function renderInventory(){
   const cards = filtered.map(m=>{
     const pricePerPill = nextBatchUnitPrice(m);
     const low = !m.noWarn && m.stockPills <= (m.lowStockAt??0);
+    const isExpired = activeBatches(m).some(b=>b.expiryDate && daysUntil(b.expiryDate)!==null && daysUntil(b.expiryDate)<0);
     let extra = "";
     if(inv.restockId===m.id){
       extra = `
@@ -2017,7 +2022,7 @@ function renderInventory(){
           </div>
         </div>
         <div class="flex mt2" style="justify-content:space-between;align-items:center;">
-          <span class="pill-badge" style="background:${low?'var(--dangerSoft)':'var(--successSoft)'};color:${low?'var(--danger)':'var(--success)'};">${m.stockPills} medicine in stock${m.noWarn?" · no warnings":""}</span>
+          <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${m.stockPills} medicine in stock${isExpired?" · expired":""}</span>
           <div class="flex gap2">
             <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
             <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
@@ -2772,8 +2777,8 @@ function renderLogin(){
     <div class="card" style="max-width:340px;margin:40px auto 0;">
       <p style="font-weight:700;font-size:16px;margin:0 0 4px;text-align:center;">Who's logging in?</p>
       <div class="mt2" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">
+        <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Add new person</button>
         ${list.map(p=>`<button class="btn ${p.id===loginUi.pickedId?'btn-primary':'btn-outline'}" style="padding:8px 14px;" onclick="pickLoginProfile('${p.id}')">${esc(p.name)}</button>`).join("")}
-        <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Add new user</button>
       </div>
       ${picked ? `
         <label class="field-label mt3" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
