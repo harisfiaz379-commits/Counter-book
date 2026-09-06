@@ -218,6 +218,7 @@
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
 <div id="manageUsersModalRoot"></div>
+<div id="forgotPinModalRoot"></div>
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
 
@@ -283,8 +284,9 @@ let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:
 let notesUi = { openId:null, draftTitle:"", draftBody:"", searchQuery:"" };
 let sessionAuthed = false; // whether someone has entered a correct PIN this session; persists until "Switch User" is tapped
 let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock screen
-let setupUi = { name:"", pin:"" }; // state for the very-first-run "set up Admin" screen
+let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
 let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", editingId:null, editRole:"", editPin:"" }; // admin-only "Manage Users" screen
+let forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" }; // Admin-only "Forgot PIN" recovery flow on the login screen
 
 /* ===================== HELPERS ===================== */
 let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
@@ -319,6 +321,40 @@ function allTests(){
     .concat(customTests);
 }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+/* ---- Admin PIN recovery: security question + one-time recovery code ---- */
+const SECURITY_QUESTIONS = [
+  "What was the name of your first pet?",
+  "What city were you born in?",
+  "What is your mother's maiden name?",
+  "What was the name of your first school?",
+  "What was your childhood nickname?"
+];
+function normalizeAnswer(s){ return String(s||"").trim().toLowerCase(); }
+function normalizeCode(s){ return String(s||"").replace(/[^A-Za-z0-9]/g,"").toLowerCase(); }
+async function hashSecret(s){
+  try{
+    const enc = new TextEncoder().encode(String(s));
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }catch(e){
+    // Very old/broken WebViews without SubtleCrypto: fall back to a simple non-cryptographic
+    // hash so recovery still works, just with weaker guessing-resistance.
+    let h = 0; const str = String(s);
+    for(let i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i))|0; }
+    return "fb:"+h;
+  }
+}
+function genRecoveryCode(){
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous 0/O, 1/I/L
+  const getRand = (typeof crypto!=="undefined" && crypto.getRandomValues) ? ()=>{ const a=new Uint32Array(1); crypto.getRandomValues(a); return a[0]; } : ()=>Math.floor(Math.random()*4294967296);
+  let out = "";
+  for(let i=0;i<10;i++){
+    out += chars[getRand()%chars.length];
+    if(i===3||i===7) out += "-";
+  }
+  return out; // e.g. "7F3K-9QX2-RT"
+}
 function money(n){ const v=Number(n)||0; return v.toFixed(2).replace(/\.00$/,""); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtDateTime(ts){
@@ -792,6 +828,7 @@ function render(){
     document.getElementById("nav").innerHTML = "";
     const fab0 = document.getElementById("invFab"); if(fab0) fab0.className="hidden";
     renderLogin();
+    renderForgotPinModal();
     syncHeaderOffset();
     return;
   }
@@ -2633,16 +2670,35 @@ function activateProfile(id){
 /* ---- First-run only: create the Admin account ---- */
 function onSetupName(v){ setupUi.name=v; }
 function onSetupPin(v){ setupUi.pin=v.replace(/[^0-9]/g,"").slice(0,6); }
-function submitSetupAdmin(){
+function onSetupQuestion(v){ setupUi.question=v; render(); }
+function onSetupCustomQuestion(v){ setupUi.customQuestion=v; }
+function onSetupAnswer(v){ setupUi.answer=v; }
+async function submitSetupAdmin(){
   const name = setupUi.name.trim();
   const pin = setupUi.pin.trim();
+  const question = (setupUi.question==="custom" ? setupUi.customQuestion.trim() : setupUi.question);
+  const answer = setupUi.answer.trim();
   if(!name){ showToast("Enter your name first"); return; }
   if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
-  const p = { id:uid(), name, role:"admin", pin, updatedAt:Date.now() };
+  if(!question){ showToast("Choose or type a security question"); return; }
+  if(!answer){ showToast("Enter an answer to your security question"); return; }
+  const code = genRecoveryCode();
+  const [answerHash, codeHash] = await Promise.all([
+    hashSecret(normalizeAnswer(answer)),
+    hashSecret(normalizeCode(code))
+  ]);
+  const p = { id:uid(), name, role:"admin", pin, securityQuestion:question, securityAnswerHash:answerHash, recoveryCodeHash:codeHash, updatedAt:Date.now() };
   profiles.push(p);
   saveProfiles();
-  activateProfile(p.id);
-  setupUi = { name:"", pin:"" };
+  setupUi.step = "code";
+  setupUi.generatedCode = code;
+  setupUi.pendingProfileId = p.id;
+  render();
+}
+function finishSetupAdmin(){
+  const id = setupUi.pendingProfileId;
+  setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" };
+  activateProfile(id);
   render();
 }
 
@@ -2664,6 +2720,17 @@ function logoutUser(){
   render();
 }
 function renderSetupAdmin(){
+  if(setupUi.step==="code"){
+    document.getElementById("main").innerHTML = `
+      <div class="card" style="max-width:340px;margin:40px auto 0;text-align:center;">
+        <p style="font-weight:700;font-size:16px;margin:0 0 4px;">Save your recovery code</p>
+        <p class="small faint" style="margin:0 0 14px;">If you ever forget your PIN, this code (or your security question) can get you back in. It's shown only this once — write it down somewhere safe now.</p>
+        <p style="font-family:monospace;font-size:20px;font-weight:700;letter-spacing:1px;background:var(--bg2,#f0f0f0);border-radius:8px;padding:14px 8px;margin:0 0 16px;">${esc(setupUi.generatedCode)}</p>
+        <button class="btn btn-primary" style="width:100%;" onclick="finishSetupAdmin()">I've saved this — continue</button>
+      </div>`;
+    return;
+  }
+  const questionIsCustom = setupUi.question==="custom";
   document.getElementById("main").innerHTML = `
     <div class="card" style="max-width:340px;margin:40px auto 0;text-align:center;">
       <p style="font-weight:700;font-size:16px;margin:0 0 4px;">Welcome to Counter Book</p>
@@ -2672,6 +2739,15 @@ function renderSetupAdmin(){
       <input ${NOAC} id="setupNameInput" value="${esc(setupUi.name)}" oninput="onSetupName(this.value)" placeholder="e.g. Haris" class="mb2">
       <label class="field-label" style="text-align:left;">Choose a PIN (4-6 digits)</label>
       <input ${NOAC} id="setupPinInput" type="password" inputmode="numeric" value="${esc(setupUi.pin)}" oninput="onSetupPin(this.value)" placeholder="••••" class="mb2">
+      <label class="field-label" style="text-align:left;">Security question (for PIN recovery)</label>
+      <select onchange="onSetupQuestion(this.value)" class="mb2">
+        <option value="" ${!setupUi.question?"selected":""} disabled>Choose a question…</option>
+        ${SECURITY_QUESTIONS.map(q=>`<option value="${esc(q)}" ${setupUi.question===q?"selected":""}>${esc(q)}</option>`).join("")}
+        <option value="custom" ${questionIsCustom?"selected":""}>Write my own question…</option>
+      </select>
+      ${questionIsCustom?`<input ${NOAC} value="${esc(setupUi.customQuestion)}" oninput="onSetupCustomQuestion(this.value)" placeholder="Type your own question" class="mb2">`:""}
+      <label class="field-label" style="text-align:left;">Answer</label>
+      <input ${NOAC} value="${esc(setupUi.answer)}" oninput="onSetupAnswer(this.value)" placeholder="Answer only you'd know" class="mb2">
       <button class="btn btn-primary" style="width:100%;" onclick="submitSetupAdmin()">Create Admin account</button>
     </div>`;
 }
@@ -2689,7 +2765,114 @@ function renderLogin(){
         <input ${NOAC} id="loginPinInput" type="password" inputmode="numeric" value="${esc(loginUi.pin)}" oninput="onLoginPin(this.value)" placeholder="••••" class="mb2">
         ${loginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(loginUi.error)}</p>`:""}
         <button class="btn btn-primary" style="width:100%;" onclick="submitLogin()">Log in</button>
+        ${picked.role==="admin"?`<button style="background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;margin-top:10px;cursor:pointer;padding:0;" onclick="openForgotPin('${picked.id}')">Forgot PIN?</button>`:""}
       ` : ""}
+    </div>`;
+}
+
+/* ---- Admin-only: "Forgot PIN" recovery, reachable from the login screen ---- */
+function openForgotPin(profileId){
+  const p = profiles.find(x=>x.id===profileId);
+  const hasRecovery = !!(p && (p.securityQuestion || p.recoveryCodeHash));
+  forgotUi = { open:true, profileId, step:hasRecovery?"choose":"none", answer:"", code:"", newPin:"", confirmPin:"", error:"" };
+  render();
+}
+function closeForgotPin(){ forgotUi.open=false; render(); }
+function chooseForgotMethod(method){ forgotUi.step=method; forgotUi.error=""; render(); }
+function onForgotAnswer(v){ forgotUi.answer=v; }
+function onForgotCode(v){ forgotUi.code=v; }
+async function verifyForgotAnswer(){
+  const p = profiles.find(x=>x.id===forgotUi.profileId);
+  if(!p){ forgotUi.error="Something went wrong — try again."; render(); return; }
+  const hash = await hashSecret(normalizeAnswer(forgotUi.answer));
+  if(!forgotUi.answer.trim() || hash!==p.securityAnswerHash){
+    forgotUi.error = "That doesn't match. Try again, or use your recovery code instead.";
+    render();
+    return;
+  }
+  forgotUi.step = "newpin";
+  forgotUi.error = "";
+  render();
+}
+async function verifyForgotCode(){
+  const p = profiles.find(x=>x.id===forgotUi.profileId);
+  if(!p){ forgotUi.error="Something went wrong — try again."; render(); return; }
+  const hash = await hashSecret(normalizeCode(forgotUi.code));
+  if(!forgotUi.code.trim() || hash!==p.recoveryCodeHash){
+    forgotUi.error = "That code doesn't match. Double-check it, or try your security question instead.";
+    render();
+    return;
+  }
+  forgotUi.step = "newpin";
+  forgotUi.error = "";
+  render();
+}
+function onForgotNewPin(v){ forgotUi.newPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function onForgotConfirmPin(v){ forgotUi.confirmPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function submitForgotNewPin(){
+  const p = profiles.find(x=>x.id===forgotUi.profileId);
+  if(!p){ forgotUi.error="Something went wrong — try again."; render(); return; }
+  if(forgotUi.newPin.length<4){ forgotUi.error="PIN must be at least 4 digits"; render(); return; }
+  if(forgotUi.newPin!==forgotUi.confirmPin){ forgotUi.error="PINs don't match"; render(); return; }
+  p.pin = forgotUi.newPin;
+  p.updatedAt = Date.now();
+  saveProfiles();
+  forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" };
+  loginUi = { pickedId:"", pin:"", error:"" };
+  showToast("✓ PIN reset — you're logged in");
+  activateProfile(p.id);
+  render();
+}
+function renderForgotPinModal(){
+  const root = document.getElementById("forgotPinModalRoot");
+  if(!root) return;
+  if(!forgotUi.open){ root.innerHTML=""; return; }
+  const p = profiles.find(x=>x.id===forgotUi.profileId);
+  let body = "";
+  if(forgotUi.step==="none" || !p){
+    body = `<p class="small faint" style="margin:0;">No recovery method is set up for this account yet. Ask another Admin to reset your PIN from Manage Users, or set up a recovery question/code for this account once you're logged in.</p>`;
+  } else if(forgotUi.step==="choose"){
+    body = `
+      <p class="small faint" style="margin:0 0 12px;">How would you like to verify it's you?</p>
+      ${p.securityQuestion?`<button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="chooseForgotMethod('question')">❓ Answer my security question</button>`:""}
+      ${p.recoveryCodeHash?`<button class="btn btn-outline" style="width:100%;" onclick="chooseForgotMethod('code')">🔑 Use my recovery code</button>`:""}
+    `;
+  } else if(forgotUi.step==="question"){
+    body = `
+      <label class="field-label" style="text-align:left;">${esc(p.securityQuestion)}</label>
+      <input ${NOAC} value="${esc(forgotUi.answer)}" oninput="onForgotAnswer(this.value)" placeholder="Your answer" class="mb2">
+      ${forgotUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(forgotUi.error)}</p>`:""}
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="verifyForgotAnswer()">Verify</button>
+      ${p.recoveryCodeHash?`<button class="btn btn-outline" style="width:100%;" onclick="chooseForgotMethod('code')">Use recovery code instead</button>`:""}
+    `;
+  } else if(forgotUi.step==="code"){
+    body = `
+      <label class="field-label" style="text-align:left;">Recovery code</label>
+      <input ${NOAC} value="${esc(forgotUi.code)}" oninput="onForgotCode(this.value)" placeholder="e.g. 7F3K-9QX2-RT" class="mb2" style="text-transform:uppercase;">
+      ${forgotUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(forgotUi.error)}</p>`:""}
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="verifyForgotCode()">Verify</button>
+      ${p.securityQuestion?`<button class="btn btn-outline" style="width:100%;" onclick="chooseForgotMethod('question')">Use security question instead</button>`:""}
+    `;
+  } else if(forgotUi.step==="newpin"){
+    body = `
+      <p class="small faint" style="margin:0 0 12px;">Verified! Choose a new PIN.</p>
+      <label class="field-label" style="text-align:left;">New PIN (4-6 digits)</label>
+      <input ${NOAC} type="password" inputmode="numeric" value="${esc(forgotUi.newPin)}" oninput="onForgotNewPin(this.value)" placeholder="••••" class="mb2">
+      <label class="field-label" style="text-align:left;">Confirm new PIN</label>
+      <input ${NOAC} type="password" inputmode="numeric" value="${esc(forgotUi.confirmPin)}" oninput="onForgotConfirmPin(this.value)" placeholder="••••" class="mb2">
+      ${forgotUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(forgotUi.error)}</p>`:""}
+      <button class="btn btn-primary" style="width:100%;" onclick="submitForgotNewPin()">Reset PIN &amp; log in</button>
+    `;
+  }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeForgotPin()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Reset PIN for ${esc(p?p.name:"")}</strong>
+          <button class="modal-x" onclick="closeForgotPin()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">${body}</div>
+      </div>
     </div>`;
 }
 
@@ -2772,6 +2955,30 @@ function deleteProfile(id){
     render();
   });
 }
+async function manageRecoveryInfo(id){
+  if(!can("manageUsers")) return;
+  const p = profiles.find(x=>x.id===id);
+  if(!p || p.role!=="admin") return;
+  const question = window.prompt("Security question (used if this Admin forgets their PIN):", p.securityQuestion || SECURITY_QUESTIONS[0]);
+  if(question===null) return;
+  if(!question.trim()){ showToast("A security question is required"); return; }
+  const answer = window.prompt(`Answer to "${question.trim()}":`, "");
+  if(answer===null) return;
+  if(!answer.trim()){ showToast("An answer is required"); return; }
+  const code = genRecoveryCode();
+  const [answerHash, codeHash] = await Promise.all([
+    hashSecret(normalizeAnswer(answer)),
+    hashSecret(normalizeCode(code))
+  ]);
+  p.securityQuestion = question.trim();
+  p.securityAnswerHash = answerHash;
+  p.recoveryCodeHash = codeHash;
+  p.updatedAt = Date.now();
+  saveProfiles();
+  window.alert("New recovery code — write this down now, it won't be shown again:\n\n"+code);
+  showToast(`✓ Recovery info updated for ${p.name}`);
+  render();
+}
 function toggleManageUsersModal(){
   if(!can("manageUsers")) return;
   manageUi.open = !manageUi.open;
@@ -2812,6 +3019,7 @@ function renderManageUsersModal(){
                     <p class="small faint" style="margin:2px 0 0;text-transform:capitalize;">${esc(p.role||"—")}</p>
                   </div>
                   <div class="flex gap2">
+                    ${p.role==="admin"?`<button class="btn btn-outline" style="padding:6px 12px;" onclick="manageRecoveryInfo('${p.id}')">🔑</button>`:""}
                     <button class="btn btn-outline" style="padding:6px 12px;" onclick="startEditUser('${p.id}')">Edit</button>
                     <button class="btn btn-outline" style="padding:6px 12px;color:var(--danger);" onclick="deleteProfile('${p.id}')">🗑</button>
                   </div>
