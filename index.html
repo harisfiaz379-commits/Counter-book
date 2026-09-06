@@ -200,7 +200,7 @@
     <div style="position:absolute;top:14px;right:16px;display:flex;gap:8px;align-items:center;">
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <div style="position:relative;">
-        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">⋮ More</button>
+        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
         <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;"></div>
       </div>
     </div>
@@ -219,6 +219,7 @@
 <div id="categoryModalRoot"></div>
 <div id="manageUsersModalRoot"></div>
 <div id="forgotPinModalRoot"></div>
+<div id="addUserLoginModalRoot"></div>
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
 
@@ -240,7 +241,8 @@ let shareText = null;
 let testPrices = {}; // { testId: permanentAmount } — set via the "Edit" panel, synced across devices
 let defaultDoctorFee = 0; // permanent default for the doctor visit fee — synced across devices (see defaultDoctorFeeUpdatedAt/mergeDefaultDoctorFee)
 let defaultDoctorFeeUpdatedAt = 0; // timestamp of the last real edit, used for last-write-wins merging across devices
-let defaultDoctorName = ""; // permanent default doctor name — auto-fills Remarks on each new bill; local-only (not cloud-synced), like MED_CATEGORIES
+let defaultDoctorName = ""; // permanent default doctor name — auto-fills Remarks on each new bill; synced across devices (see defaultDoctorNameUpdatedAt/mergeDefaultDoctorName)
+let defaultDoctorNameUpdatedAt = 0; // timestamp of the last real edit, used for last-write-wins merging across devices
 let remarksUi = { editing:false, draft:"" }; // controls the small inline "edit default doctor name" panel under Remarks
 let customTests = []; // [{id,name}] — tests added by the user beyond the built-in TEST_CATALOG, synced across devices
 let testNameOverrides = {}; // { testId: renamedName } — user-renamed built-in TEST_CATALOG entries, synced across devices
@@ -287,6 +289,7 @@ let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock scr
 let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
 let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", editingId:null, editRole:"", editPin:"" }; // admin-only "Manage Users" screen
 let forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" }; // Admin-only "Forgot PIN" recovery flow on the login screen
+let addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"" }; // "+ Add new user" flow reachable from the login screen — gated behind a live Admin PIN check (NOT can(), which reflects whoever last logged in, not who's actually present right now)
 
 /* ===================== HELPERS ===================== */
 let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
@@ -385,6 +388,7 @@ function loadAll(){
   try{ defaultDoctorFee = Number(localStorage.getItem("clinic_default_doctor_fee"))||0; }catch(e){ defaultDoctorFee=0; }
   try{ defaultDoctorFeeUpdatedAt = Number(localStorage.getItem("clinic_default_doctor_fee_updated_at"))||0; }catch(e){ defaultDoctorFeeUpdatedAt=0; }
   try{ defaultDoctorName = localStorage.getItem("clinic_default_doctor_name") || ""; }catch(e){ defaultDoctorName=""; }
+  try{ defaultDoctorNameUpdatedAt = Number(localStorage.getItem("clinic_default_doctor_name_updated_at"))||0; }catch(e){ defaultDoctorNameUpdatedAt=0; }
   try{ customTests = JSON.parse(localStorage.getItem("clinic_custom_tests")||"[]"); }catch(e){ customTests=[]; }
   try{ testNameOverrides = JSON.parse(localStorage.getItem("clinic_test_name_overrides")||"{}"); }catch(e){ testNameOverrides={}; }
   try{ hiddenBuiltInTestIds = JSON.parse(localStorage.getItem("clinic_hidden_tests")||"[]"); }catch(e){ hiddenBuiltInTestIds=[]; }
@@ -472,6 +476,12 @@ function saveDefaultDoctorFeeStorage(){
 }
 function saveDefaultDoctorFeeUpdatedAt(){
   try{ localStorage.setItem("clinic_default_doctor_fee_updated_at", String(defaultDoctorFeeUpdatedAt)); }catch(e){}
+}
+function saveDefaultDoctorNameStorage(){
+  try{ localStorage.setItem("clinic_default_doctor_name", defaultDoctorName); }catch(e){}
+}
+function saveDefaultDoctorNameUpdatedAt(){
+  try{ localStorage.setItem("clinic_default_doctor_name_updated_at", String(defaultDoctorNameUpdatedAt)); }catch(e){}
 }
 function saveCustomTests(){
   try{ localStorage.setItem("clinic_custom_tests", JSON.stringify(customTests)); }catch(e){}
@@ -829,6 +839,7 @@ function render(){
     const fab0 = document.getElementById("invFab"); if(fab0) fab0.className="hidden";
     renderLogin();
     renderForgotPinModal();
+    renderAddUserLoginModal();
     syncHeaderOffset();
     return;
   }
@@ -1130,7 +1141,10 @@ function toggleRemarksEdit(){
 function onDefaultDoctorNameDraft(v){ remarksUi.draft = v; }
 function saveDefaultDoctorName(){
   defaultDoctorName = (remarksUi.draft||"").trim();
-  try{ localStorage.setItem("clinic_default_doctor_name", defaultDoctorName); }catch(e){}
+  defaultDoctorNameUpdatedAt = Date.now();
+  saveDefaultDoctorNameStorage();
+  saveDefaultDoctorNameUpdatedAt();
+  schedulePushToCloud();
   remarksUi.editing = false;
   showToast("✓ Default doctor name saved");
   render();
@@ -2253,14 +2267,14 @@ function renderRecordArchive(){
     const total = g.tx.reduce((s,t)=>s+t.grandTotal,0);
     const sorted = g.tx.slice().sort((a,b)=>b.timestamp-a.timestamp);
     return `
-      <div class="card" style="padding:0;overflow:hidden;">
+      <div class="card" style="padding:0;overflow:hidden;background:var(--primarySoft);">
         <button onclick="toggleMonthFolder('${mk}')" style="width:100%;background:none;border:none;padding:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
           <div style="text-align:left;">
             <p class="item-title">📅 ${esc(g.label)}</p>
             <p class="small faint" style="margin:2px 0 0;">${g.tx.length} bill${g.tx.length===1?"":"s"}</p>
           </div>
           <div class="flex gap2" style="align-items:center;">
-            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(total)}</span>
+            ${can("monthlyTotal")?`<span style="font-weight:700;font-size:14px;">${CURRENCY}${money(total)}</span>`:""}
             <span class="faint">${open?"▲":"▼"}</span>
           </div>
         </button>
@@ -2283,14 +2297,14 @@ function renderRecordArchive(){
     const yTotal = months.reduce((s,[mk,g])=>s+g.tx.reduce((s2,t)=>s2+t.grandTotal,0),0);
     const yCount = months.reduce((s,[mk,g])=>s+g.tx.length,0);
     return `
-      <div class="card" style="padding:0;overflow:hidden;">
+      <div class="card" style="padding:0;overflow:hidden;background:var(--primarySoft);">
         <button onclick="toggleYearFolder('${year}')" style="width:100%;background:none;border:none;padding:14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
           <div style="text-align:left;">
             <p class="item-title">🗂 ${year}</p>
             <p class="small faint" style="margin:2px 0 0;">${yCount} bill${yCount===1?"":"s"}</p>
           </div>
           <div class="flex gap2" style="align-items:center;">
-            <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(yTotal)}</span>
+            ${can("monthlyTotal")?`<span style="font-weight:700;font-size:14px;">${CURRENCY}${money(yTotal)}</span>`:""}
             <span class="faint">${openY?"▲":"▼"}</span>
           </div>
         </button>
@@ -2457,7 +2471,7 @@ function renderTxCard(t){
       <button onclick="toggleExpand('${t.id}')" style="width:100%;background:none;border:none;padding:0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
         <div style="text-align:left;">
           <p style="font-weight:700;font-size:14px;margin:0;color:var(--text);">${esc(t.patientName)}</p>
-          <p class="small faint" style="margin:2px 0 0;">${fmtDateTime(t.timestamp)}</p>
+          <p class="small faint" style="margin:2px 0 0;">${fmtDateTime(t.timestamp)}${t.paymentMode?` · ${esc(t.paymentMode)}`:""}</p>
         </div>
         <div class="flex gap2" style="align-items:center;">
           <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(t.grandTotal)}</span>
@@ -2592,7 +2606,7 @@ function renderStock(){
       <div class="card" style="border-color:#F0DCB0;">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
             <p class="small faint" style="margin:2px 0 0;">${m.stockPills} medicine left</p>
           </div>
@@ -2609,7 +2623,7 @@ function renderStock(){
       <div class="card" style="border-color:#F3C6BE;">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
             <p class="small" style="margin:2px 0 0;color:var(--danger);font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
           </div>
@@ -2628,7 +2642,7 @@ function renderStock(){
       <div class="card" style="border-color:#F3C6BE;">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
             <span style="font-size:12px;font-weight:700;color:var(--danger);">${m.stockPills} medicine left</span>
           </div>
@@ -2759,6 +2773,7 @@ function renderLogin(){
       <p style="font-weight:700;font-size:16px;margin:0 0 4px;text-align:center;">Who's logging in?</p>
       <div class="mt2" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">
         ${list.map(p=>`<button class="btn ${p.id===loginUi.pickedId?'btn-primary':'btn-outline'}" style="padding:8px 14px;" onclick="pickLoginProfile('${p.id}')">${esc(p.name)}</button>`).join("")}
+        <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Add new user</button>
       </div>
       ${picked ? `
         <label class="field-label mt3" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
@@ -2870,6 +2885,86 @@ function renderForgotPinModal(){
         <div class="modal-head">
           <strong>Reset PIN for ${esc(p?p.name:"")}</strong>
           <button class="modal-x" onclick="closeForgotPin()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">${body}</div>
+      </div>
+    </div>`;
+}
+
+/* ---- Add a new user directly from the login screen. Gated behind a live Admin PIN check
+   (not can(), which just reflects whoever last logged in on this device — not proof that an
+   Admin is present right now) so this can't be used to add unauthorized accounts. ---- */
+function openAddUserFromLogin(){
+  const admins = visibleProfiles().filter(p=>p.role==="admin");
+  if(!admins.length){ showToast("No Admin account exists yet"); return; }
+  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"" };
+  render();
+}
+function closeAddUserFromLogin(){ addUserLoginUi.open=false; render(); }
+function onVerifyAdminPick(v){ addUserLoginUi.adminId=v; addUserLoginUi.error=""; render(); }
+function onVerifyAdminPin(v){ addUserLoginUi.adminPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function verifyAdminForAddUser(){
+  const admin = profiles.find(x=>x.id===addUserLoginUi.adminId);
+  if(!admin || (admin.pin||"")!==addUserLoginUi.adminPin){
+    addUserLoginUi.error = "Incorrect PIN";
+    render();
+    return;
+  }
+  addUserLoginUi.step = "form";
+  addUserLoginUi.error = "";
+  render();
+}
+function onAddUserLoginName(v){ addUserLoginUi.newName=v; }
+function onAddUserLoginRole(v){ addUserLoginUi.newRole=v; }
+function onAddUserLoginPin(v){ addUserLoginUi.newPin=v.replace(/[^0-9]/g,"").slice(0,6); }
+function submitAddUserFromLogin(){
+  const name = addUserLoginUi.newName.trim();
+  const pin = addUserLoginUi.newPin.trim();
+  if(!name){ showToast("Enter a name first"); return; }
+  if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
+  const p = { id:uid(), name, role:addUserLoginUi.newRole, pin, updatedAt:Date.now() };
+  profiles.push(p);
+  saveProfiles();
+  showToast(`✓ ${name} added — they can log in now`);
+  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"" };
+  render();
+}
+function renderAddUserLoginModal(){
+  const root = document.getElementById("addUserLoginModalRoot");
+  if(!root) return;
+  if(!addUserLoginUi.open){ root.innerHTML=""; return; }
+  const admins = visibleProfiles().filter(p=>p.role==="admin");
+  const roleOpt = (selected) => ["admin","doctor","receptionist"].map(r=>
+    `<option value="${r}" ${selected===r?"selected":""}>${r[0].toUpperCase()+r.slice(1)}</option>`).join("");
+  let body = "";
+  if(addUserLoginUi.step==="verify"){
+    body = `
+      <p class="small faint" style="margin:0 0 12px;">Adding a user needs an Admin to confirm it. Enter an Admin's PIN to continue.</p>
+      ${admins.length>1?`
+        <label class="field-label" style="text-align:left;">Which Admin?</label>
+        <select onchange="onVerifyAdminPick(this.value)" class="mb2">${admins.map(a=>`<option value="${a.id}" ${addUserLoginUi.adminId===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select>
+      `:`<label class="field-label" style="text-align:left;">${esc(admins[0]?admins[0].name:"")}'s PIN</label>`}
+      <input ${NOAC} type="password" inputmode="numeric" value="${esc(addUserLoginUi.adminPin)}" oninput="onVerifyAdminPin(this.value)" placeholder="••••" class="mb2">
+      ${addUserLoginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(addUserLoginUi.error)}</p>`:""}
+      <button class="btn btn-primary" style="width:100%;" onclick="verifyAdminForAddUser()">Verify</button>
+    `;
+  } else if(addUserLoginUi.step==="form"){
+    body = `
+      <label class="field-label" style="text-align:left;">Name</label>
+      <input ${NOAC} value="${esc(addUserLoginUi.newName)}" oninput="onAddUserLoginName(this.value)" placeholder="e.g. Sana" class="mb2">
+      <label class="field-label" style="text-align:left;">Role</label>
+      <select onchange="onAddUserLoginRole(this.value)" class="mb2">${roleOpt(addUserLoginUi.newRole)}</select>
+      <label class="field-label" style="text-align:left;">PIN (4-6 digits)</label>
+      <input ${NOAC} type="password" inputmode="numeric" value="${esc(addUserLoginUi.newPin)}" oninput="onAddUserLoginPin(this.value)" placeholder="••••" class="mb2">
+      <button class="btn btn-primary" style="width:100%;" onclick="submitAddUserFromLogin()">Add user</button>
+    `;
+  }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeAddUserFromLogin()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Add new user</strong>
+          <button class="modal-x" onclick="closeAddUserFromLogin()">✕</button>
         </div>
         <div style="padding:14px 16px;">${body}</div>
       </div>
@@ -3261,6 +3356,21 @@ function mergeDefaultDoctorFee(data){
     }
   }
 }
+function mergeDefaultDoctorName(data){
+  const incomingTs = data.defaultDoctorNameUpdatedAt || 0;
+  if(incomingTs > defaultDoctorNameUpdatedAt){
+    defaultDoctorName = data.defaultDoctorName || "";
+    defaultDoctorNameUpdatedAt = incomingTs;
+    saveDefaultDoctorNameStorage();
+    saveDefaultDoctorNameUpdatedAt();
+    // Same reasoning as mergeDefaultDoctorFee: refresh the already-created bill's Remarks only
+    // if it's still untouched, so a value arriving later never overwrites something the user
+    // actually typed.
+    if(typeof bill!=="undefined" && bill && !bill.patient.trim() && bill.items.length===0 && bill.extras.length===0 && bill.tests.length===0 && bill.remarks===""){
+      bill.remarks = defaultDoctorName || "";
+    }
+  }
+}
 function mergeMonthAdjustments(localAdj, incomingAdj){
   const result = {...(localAdj||{})};
   Object.entries(incomingAdj||{}).forEach(([mk,ia])=>{
@@ -3370,6 +3480,7 @@ function mergeDataInto(data, inventoryMergeFn, live){
   monthAdjustments = mergeMonthAdjustments(monthAdjustments, data.monthAdjustments);
   mergeTestSettings(data);
   mergeDefaultDoctorFee(data);
+  mergeDefaultDoctorName(data);
 
   saveInventory(); saveTransactions(); saveProfiles(); saveMonthAdjustments();
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
@@ -3407,7 +3518,8 @@ function renderHeaderMenu(){
   items.push({label:"💾 Backup", action:"toggleBackupModal()"});
   if(can("receiptSetup")) items.push({label:"🧾 Receipt setup", action:"editReceiptSettings()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
-  items.push({label:"🔁 Switch User", action:"logoutUser()", danger:true});
+  items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
+  items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
   el.innerHTML = items.map((it,i)=>`
     <button onclick="closeHeaderMenu();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
   `).join("");
@@ -3441,6 +3553,10 @@ let fbDb = null, syncStatus = "offline", suppressPush = false, syncDebounceTimer
 // that fight was what made the badge flash "Offline" right after completing a bill, and could
 // also leave it stuck since whichever one wrote last "won" unpredictably.
 let pushInFlight = false;
+// pushQueuedAgain: set when something asks for a push while one is already running (see the
+// guard in pushToCloud() above it) — runs exactly one more push right after, instead of
+// stacking overlapping read-then-write cycles.
+let pushQueuedAgain = false;
 // snapshotUnsubscribe: handle for the current onSnapshot listener. startCloudSync() can be
 // called again later (see the reconnect path below) — without closing the previous listener
 // first, each retry left an extra listener running forever, all reacting to every future
@@ -3462,6 +3578,7 @@ function buildFullStatePayload(){
     notesByProfile: collectAllNotes(),
     customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
     defaultDoctorFee, defaultDoctorFeeUpdatedAt,
+    defaultDoctorName, defaultDoctorNameUpdatedAt,
     updatedAt: Date.now()
   };
 }
@@ -3540,8 +3657,30 @@ function withTimeout(promise, ms){
 // it drops undefined object properties and turns undefined array entries into null, both of
 // which Firestore accepts fine.
 function sanitizeForFirestore(obj){ return JSON.parse(JSON.stringify(obj)); }
+// Manual "Upload offline data" menu action — forces an immediate push right now instead of
+// waiting for the normal 1.2s debounce or the next edit, for someone who was working offline
+// and wants to confirm everything (bills, inventory, warnings, etc.) has reached the server.
+async function manualPushToCloud(){
+  if(!fbDb){ showToast("Cloud sync isn't set up on this device"); return; }
+  clearTimeout(syncDebounceTimer);
+  showToast("⬆ Uploading…");
+  await pushToCloud();
+  // If a push was already running when this was tapped, pushToCloud() above just queued a
+  // follow-up and returned immediately rather than actually finishing — wait for that queued
+  // one too, so the toast reflects the real end result instead of firing too early.
+  while(pushQueuedAgain || pushInFlight){ await new Promise(r=>setTimeout(r,200)); }
+  showToast(syncStatus==="synced" ? "✓ Uploaded — everything is synced" : "⚠ Still couldn't reach the server — check your connection and try again");
+}
 async function pushToCloud(){
   if(!fbDb) return;
+  if(pushInFlight){
+    // Another push is already running (e.g. the reconnect-listener and the manual "Upload
+    // offline data" button both fired around the same time). Don't run a second overlapping
+    // read-then-write cycle — just remember to run one more push right after this one finishes,
+    // so whatever changed most recently still gets sent, without two pushes racing each other.
+    pushQueuedAgain = true;
+    return;
+  }
   pushInFlight = true;
   // If we were already showing "Synced" before this push (e.g. right after completing a
   // bill), keep showing "Synced" through the push instead of flashing "Syncing…" — the
@@ -3559,6 +3698,7 @@ async function pushToCloud(){
   }catch(e){ syncStatus = "offline"; setSyncError(e); }
   pushInFlight = false;
   renderSyncBadge();
+  if(pushQueuedAgain){ pushQueuedAgain = false; pushToCloud(); }
 }
 // The realtime onSnapshot listener needs a persistent connection, which some mobile browser
 // contexts (especially a file opened directly rather than through an app with an already-warm
@@ -3583,8 +3723,7 @@ function startCloudSync(){
   if(!fbDb) { syncStatus="offline"; renderSyncBadge(); return; }
   if(snapshotUnsubscribe){ snapshotUnsubscribe(); snapshotUnsubscribe = null; }
   syncStatus="syncing"; renderSyncBadge();
-  initialCloudFetch();
-  snapshotUnsubscribe = cloudDocRef().onSnapshot(
+  initialCloudFetch();  snapshotUnsubscribe = cloudDocRef().onSnapshot(
     snap=>{
       if(snap.exists) applyRemoteSnapshot(snap.data());
       // Firestore fires this listener once immediately from local cache (even with zero
@@ -3636,6 +3775,15 @@ function startCloudSync(){
     }
   );
 }
+// Automatic sync-on-reconnect: as soon as the browser/WebView reports connectivity again, push
+// right away rather than waiting for the user's next edit or the periodic listener retry. Any
+// changes made while offline are already sitting in memory/localStorage (every save function
+// writes locally first, sync is best-effort on top), so this just gets them to the server
+// sooner — nothing is lost either way, this only closes the "offline changes sit unsynced until
+// something else happens to trigger a push" gap.
+window.addEventListener("online", function(){
+  if(fbDb) pushToCloud();
+});
 function collectAllNotes(){
   const out = {};
   profiles.forEach(p=>{
@@ -3650,7 +3798,8 @@ function exportBackup(){
     inventory, transactions, profiles, monthAdjustments,
     notesByProfile: collectAllNotes(),
     customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
-    defaultDoctorFee, defaultDoctorFeeUpdatedAt
+    defaultDoctorFee, defaultDoctorFeeUpdatedAt,
+    defaultDoctorName, defaultDoctorNameUpdatedAt
   };
   // Inside the App Inventor app, a normal blob/<a download> click has nowhere to land (no
   // native download handler registered), so hand the data to the native side instead via
