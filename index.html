@@ -88,6 +88,12 @@
     --warning:#B4650A; --warningSoft:#FDF3E3;
   }
   *{box-sizing:border-box;}
+  /* Text-selection highlight + caret, tinted to the app's green theme instead of the
+     device/WebView's default accent (which shows up pink on some devices). Modern Chromium/
+     WebView also tints the drag-selection handles to match ::selection in most versions, though
+     that part is ultimately up to the WebView and can't be fully guaranteed from CSS alone. */
+  ::selection{ background:var(--primary); color:#fff; }
+  input, textarea{ caret-color:var(--primary); accent-color:var(--primary); }
   html,body{margin:0;padding:0;height:100%;background:var(--page);color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-x:hidden;}
   #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;}
@@ -218,6 +224,8 @@
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
 <div id="manageUsersModalRoot"></div>
+<div id="receiptModalRoot"></div>
+<div id="recoveryModalRoot"></div>
 <div id="forgotPinModalRoot"></div>
 <div id="addUserLoginModalRoot"></div>
 <div id="toast" class="hidden"></div>
@@ -276,7 +284,7 @@ function newBillState(){
     specialQuery:"", selectedSpecialMedId:null, specialPills:"", applyingFeeMode:"perItem", applyingFeeDraft:"", wholeApplyingFee:"" };
 }
 let bill = newBillState();
-let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10"},
+let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false},
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
 let backupUi = { open:false };
@@ -859,6 +867,8 @@ function render(){
   renderMonthBreakdownModal();
   renderCategoryModal();
   renderManageUsersModal();
+  renderReceiptModal();
+  renderRecoveryModal();
 
   const fab = document.getElementById("invFab");
   if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
@@ -1132,7 +1142,17 @@ function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; scheduleRender()
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
 function onBillItemDiscount(v){ bill.itemDiscount=v; scheduleRender(); }
 function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
-function onBillRemarks(v){ bill.remarks=v; }
+function onBillRemarks(v){
+  bill.remarks=v;
+  // Uncontrolled input (no full render() per keystroke, to avoid cursor jumps) — so the
+  // "still the untouched default" grey styling needs its own direct DOM update here rather
+  // than only being computed once at render time.
+  const isDefault = !!(v && v===defaultDoctorName);
+  const el = document.getElementById("billRemarksInput");
+  if(el) el.style.color = isDefault ? "var(--muted)" : "";
+  const hint = document.getElementById("billRemarksHint");
+  if(hint) hint.style.display = isDefault ? "" : "none";
+}
 function toggleRemarksEdit(){
   remarksUi.editing = !remarksUi.editing;
   if(remarksUi.editing) remarksUi.draft = defaultDoctorName;
@@ -1402,17 +1422,43 @@ function getReceiptSettings(){
   return { shopName: s.shopName || "Counter Book", address: s.address || "", phone: s.phone || "" };
 }
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
+let receiptUi = { open:false, shopName:"", address:"", phone:"" }; // custom in-app modal for editReceiptSettings — replaces the old native window.prompt() dialogs, which can't be restyled to match the app theme
 function editReceiptSettings(){
   if(!can("receiptSetup")){ showToast("Only Admin can change receipt settings"); return; }
   const cur = getReceiptSettings();
-  const shopName = window.prompt("Shop / clinic name (printed at the top of every receipt):", cur.shopName);
-  if(shopName===null) return;
-  const address = window.prompt("Address (optional, leave blank to skip):", cur.address);
-  if(address===null) return;
-  const phone = window.prompt("Phone number (optional, leave blank to skip):", cur.phone);
-  if(phone===null) return;
-  saveReceiptSettings({ shopName: shopName.trim()||"Counter Book", address: address.trim(), phone: phone.trim() });
+  receiptUi = { open:true, shopName:cur.shopName, address:cur.address, phone:cur.phone };
+  render();
+}
+function closeReceiptModal(){ receiptUi.open=false; render(); }
+function onReceiptField(field,v){ receiptUi[field]=v; }
+function submitReceiptSettings(){
+  saveReceiptSettings({ shopName: receiptUi.shopName.trim()||"Counter Book", address: receiptUi.address.trim(), phone: receiptUi.phone.trim() });
+  receiptUi.open = false;
   showToast("✓ Receipt details saved");
+  render();
+}
+function renderReceiptModal(){
+  const root = document.getElementById("receiptModalRoot");
+  if(!root) return;
+  if(!receiptUi.open){ root.innerHTML=""; return; }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeReceiptModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Receipt setup</strong>
+          <button class="modal-x" onclick="closeReceiptModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">
+          <label class="field-label" style="text-align:left;">Shop / clinic name (printed at the top of every receipt)</label>
+          <input ${NOAC} value="${esc(receiptUi.shopName)}" oninput="onReceiptField('shopName',this.value)" placeholder="e.g. Counter Book" class="mb2">
+          <label class="field-label" style="text-align:left;">Address (optional)</label>
+          <input ${NOAC} value="${esc(receiptUi.address)}" oninput="onReceiptField('address',this.value)" placeholder="Leave blank to skip" class="mb2">
+          <label class="field-label" style="text-align:left;">Phone number (optional)</label>
+          <input ${NOAC} value="${esc(receiptUi.phone)}" oninput="onReceiptField('phone',this.value)" placeholder="Leave blank to skip" class="mb2">
+          <button class="btn btn-primary" style="width:100%;" onclick="submitReceiptSettings()">Save</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function buildEscPosReceipt(tx){
@@ -1845,7 +1891,8 @@ function renderBill(){
           <button class="btn btn-primary mt2" style="width:100%;" onclick="saveDefaultDoctorName()">Save</button>
         </div>
       ` : ""}
-      <input ${NOAC} id="billRemarksInput" type="text" value="${esc(bill.remarks)}" oninput="onBillRemarks(this.value)" placeholder="e.g. Dr. Salman" class="${remarksUi.editing?'mt2':''}">
+      <input ${NOAC} id="billRemarksInput" type="text" value="${esc(bill.remarks)}" oninput="onBillRemarks(this.value)" placeholder="e.g. Dr. Salman" class="${remarksUi.editing?'mt2':''}" style="${bill.remarks && bill.remarks===defaultDoctorName ? 'color:var(--muted);' : ''}">
+      <p id="billRemarksHint" class="small faint" style="margin:4px 0 0;${(bill.remarks && bill.remarks===defaultDoctorName)?'':'display:none;'}">This is the default — tap in and type to change it just for this bill.</p>
     </div>
 
     <button class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
@@ -1876,13 +1923,15 @@ function onInvForm(field,v){ inv.form[field]=v; }
 function onInvCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.form.category=""; inv.form.specialCategory=v; }
   else { inv.form.category=v; inv.form.specialCategory=""; }
+  render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
-function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10"}; } render(); }
+function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false}; } render(); }
+function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; render(); }
 function addMedicine(){
   const f = inv.form;
   if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
   inventory.push({ id:uid(), name:f.name.trim(), category:f.category||"", specialCategory:f.specialCategory||"", formula:f.formula.trim(), mg:f.mg.trim(),
-    mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[],
+    mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[], sTag:!!f.sTag,
     updatedAt:Date.now(), deleted:false });
   saveInventory();
   inv.showForm=false;
@@ -1926,13 +1975,15 @@ function openEdit(id){
   inv.editId = inv.editId===id?null:id;
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
-    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn }; }
+    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag }; }
   render();
 }
 function onEditForm(field,v){ inv.editForm[field]=v; }
+function toggleEditSTag(){ inv.editForm.sTag = !inv.editForm.sTag; render(); }
 function onEditCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.editForm.category=""; inv.editForm.specialCategory=v; }
   else { inv.editForm.category=v; inv.editForm.specialCategory=""; }
+  render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
 function saveEdit(id){
   const f = inv.editForm;
@@ -1942,6 +1993,7 @@ function saveEdit(id){
     m.name=f.name.trim(); m.category=f.category||""; m.specialCategory=f.specialCategory||""; m.formula=f.formula.trim(); m.mg=f.mg.trim();
     m.mrpPerBox=Number(f.mrp); m.pillsPerBox=Number(f.pillsPerBox);
     m.lowStockAt=Number(f.lowStockAt)||0;
+    m.sTag=!!f.sTag;
     m.updatedAt=Date.now();
     adjustStockTo(m, Math.max(0,Number(f.stockPills)));
   }
@@ -1981,7 +2033,8 @@ function renderInventory(){
         <div class="mt2 divider-top8">
           <div class="flex gap2 mb2">
             <input ${NOAC} id="editName-${m.id}" value="${esc(f.name)}" oninput="onEditForm('name',this.value)" placeholder="Medicine name" class="flex1">
-            <div class="cat-picker" style="flex:0 0 165px;">
+            <button type="button" onclick="toggleEditSTag()" title="Mark as S.${esc(f.category||f.specialCategory||'Category')}" style="flex:0 0 30px;width:30px;height:36px;margin-left:4px;display:flex;align-items:center;justify-content:center;border:1px solid ${f.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${f.sTag?'var(--primary)':'var(--page)'};color:${f.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
+            <div class="cat-picker" style="flex:0 0 136px;">
               <select id="editCategory-${m.id}" onchange="onEditCategoryPicked(this.value)">
                 <option value="" ${!f.category && !f.specialCategory?"selected":""}>Category</option>
                 ${mergedCategoryOptionsHtml(f.specialCategory||f.category)}
@@ -2011,7 +2064,7 @@ function renderInventory(){
       <div class="card">
         <div class="flex" style="justify-content:space-between;align-items:flex-start;">
           <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
             <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${money(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${money(pricePerPill)}/medicine</p>
             <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
@@ -2028,6 +2081,7 @@ function renderInventory(){
             <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
           </div>
         </div>
+        ${extra}
         ${activeBatches(m).length ? `
           <div class="mt2 divider-top8">
             <p class="small faint" style="margin:0 0 6px;">Batches (sold nearest-expiry first)</p>
@@ -2044,7 +2098,6 @@ function renderInventory(){
               </div>`;
             }).join("")}
           </div>` : ""}
-        ${extra}
       </div>`;
   }).join("");
 
@@ -2077,7 +2130,8 @@ function renderInvFormModal(){
         <div style="padding:14px 16px;overflow-y:auto;">
           <div class="flex gap2 mb2">
             <input ${NOAC} id="invName" value="${esc(inv.form.name)}" oninput="onInvForm('name',this.value)" placeholder="Medicine name" class="flex1">
-            <div class="cat-picker" style="flex:0 0 165px;">
+            <button type="button" onclick="toggleInvSTag()" title="Mark as S.${esc(inv.form.category||inv.form.specialCategory||'Category')}" style="flex:0 0 30px;width:30px;height:36px;margin-left:4px;display:flex;align-items:center;justify-content:center;border:1px solid ${inv.form.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${inv.form.sTag?'var(--primary)':'var(--page)'};color:${inv.form.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
+            <div class="cat-picker" style="flex:0 0 136px;">
               <select id="invCategory" onchange="onInvCategoryPicked(this.value)">
                 <option value="" ${!inv.form.category && !inv.form.specialCategory?"selected":""}>Category</option>
                 ${mergedCategoryOptionsHtml(inv.form.specialCategory||inv.form.category)}
@@ -3055,29 +3109,86 @@ function deleteProfile(id){
     render();
   });
 }
-async function manageRecoveryInfo(id){
+let recoveryUi = { open:false, profileId:"", step:"form", question:"", customQuestion:"", answer:"", generatedCode:"" }; // custom in-app modal for manageRecoveryInfo — replaces the old native window.prompt()/alert() dialogs, same reasoning as receiptUi above
+function manageRecoveryInfo(id){
   if(!can("manageUsers")) return;
   const p = profiles.find(x=>x.id===id);
   if(!p || p.role!=="admin") return;
-  const question = window.prompt("Security question (used if this Admin forgets their PIN):", p.securityQuestion || SECURITY_QUESTIONS[0]);
-  if(question===null) return;
-  if(!question.trim()){ showToast("A security question is required"); return; }
-  const answer = window.prompt(`Answer to "${question.trim()}":`, "");
-  if(answer===null) return;
-  if(!answer.trim()){ showToast("An answer is required"); return; }
+  const presetMatch = SECURITY_QUESTIONS.includes(p.securityQuestion);
+  recoveryUi = {
+    open:true, profileId:id, step:"form",
+    question: p.securityQuestion ? (presetMatch?p.securityQuestion:"custom") : SECURITY_QUESTIONS[0],
+    customQuestion: (p.securityQuestion && !presetMatch) ? p.securityQuestion : "",
+    answer:"", generatedCode:""
+  };
+  render();
+}
+function closeRecoveryModal(){ recoveryUi.open=false; render(); }
+function onRecoveryQuestion(v){ recoveryUi.question=v; render(); }
+function onRecoveryCustomQuestion(v){ recoveryUi.customQuestion=v; }
+function onRecoveryAnswer(v){ recoveryUi.answer=v; }
+async function submitRecoveryInfo(){
+  const p = profiles.find(x=>x.id===recoveryUi.profileId);
+  if(!p){ closeRecoveryModal(); return; }
+  const question = (recoveryUi.question==="custom" ? recoveryUi.customQuestion.trim() : recoveryUi.question);
+  const answer = recoveryUi.answer.trim();
+  if(!question){ showToast("Choose or type a security question"); return; }
+  if(!answer){ showToast("Enter an answer to your security question"); return; }
   const code = genRecoveryCode();
   const [answerHash, codeHash] = await Promise.all([
     hashSecret(normalizeAnswer(answer)),
     hashSecret(normalizeCode(code))
   ]);
-  p.securityQuestion = question.trim();
+  p.securityQuestion = question;
   p.securityAnswerHash = answerHash;
   p.recoveryCodeHash = codeHash;
   p.updatedAt = Date.now();
   saveProfiles();
-  window.alert("New recovery code — write this down now, it won't be shown again:\n\n"+code);
-  showToast(`✓ Recovery info updated for ${p.name}`);
+  recoveryUi.step = "code";
+  recoveryUi.generatedCode = code;
   render();
+}
+function finishRecoveryInfo(){
+  const name = (profiles.find(x=>x.id===recoveryUi.profileId)||{}).name || "";
+  recoveryUi = { open:false, profileId:"", step:"form", question:"", customQuestion:"", answer:"", generatedCode:"" };
+  showToast(`✓ Recovery info updated for ${name}`);
+  render();
+}
+function renderRecoveryModal(){
+  const root = document.getElementById("recoveryModalRoot");
+  if(!root) return;
+  if(!recoveryUi.open){ root.innerHTML=""; return; }
+  let body = "";
+  if(recoveryUi.step==="code"){
+    body = `
+      <p class="small faint" style="margin:0 0 12px;">Write this down now — it won't be shown again.</p>
+      <p style="font-family:monospace;font-size:20px;font-weight:700;letter-spacing:1px;background:var(--bg2,#f0f0f0);border-radius:8px;padding:14px 8px;margin:0 0 16px;text-align:center;">${esc(recoveryUi.generatedCode)}</p>
+      <button class="btn btn-primary" style="width:100%;" onclick="finishRecoveryInfo()">I've saved this — done</button>
+    `;
+  } else {
+    const questionIsCustom = recoveryUi.question==="custom";
+    body = `
+      <label class="field-label" style="text-align:left;">Security question</label>
+      <select onchange="onRecoveryQuestion(this.value)" class="mb2">
+        ${SECURITY_QUESTIONS.map(q=>`<option value="${esc(q)}" ${recoveryUi.question===q?"selected":""}>${esc(q)}</option>`).join("")}
+        <option value="custom" ${questionIsCustom?"selected":""}>Write my own question…</option>
+      </select>
+      ${questionIsCustom?`<input ${NOAC} value="${esc(recoveryUi.customQuestion)}" oninput="onRecoveryCustomQuestion(this.value)" placeholder="Type your own question" class="mb2">`:""}
+      <label class="field-label" style="text-align:left;">Answer</label>
+      <input ${NOAC} value="${esc(recoveryUi.answer)}" oninput="onRecoveryAnswer(this.value)" placeholder="Answer only they'd know" class="mb2">
+      <button class="btn btn-primary" style="width:100%;" onclick="submitRecoveryInfo()">Save &amp; generate new recovery code</button>
+    `;
+  }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeRecoveryModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>Recovery info</strong>
+          <button class="modal-x" onclick="closeRecoveryModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">${body}</div>
+      </div>
+    </div>`;
 }
 function toggleManageUsersModal(){
   if(!can("manageUsers")) return;
@@ -3300,7 +3411,7 @@ function pickNewerMedicine(a,b){
   return {
     id: a.id, name: base.name, category: base.category||"", specialCategory: base.specialCategory||"", formula: base.formula||"", mg: base.mg||"",
     mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox,
-    lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, deleted: !!base.deleted,
+    lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, sTag: !!base.sTag, deleted: !!base.deleted,
     updatedAt: Math.max(aT,bT),
     batches: reconcileBatchesForSync(a.batches, b.batches)
   };
