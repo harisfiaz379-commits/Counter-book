@@ -1018,9 +1018,10 @@ let backHistoryPushed = false;
 let suppressPopstate = false;
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
-  return !!(headerMenuOpen || datePickerUi.open || catUi.open || manageUi.editingId ||
+  return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
+    printerUi.open || backupUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
-    rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear ||
+    rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
     remarksUi.editing || receiptUi.open || inv.editId || inv.restockId || inv.showForm || notesUi.openId!==null);
 }
@@ -1028,15 +1029,20 @@ function closeTopMenu(){
   // Ordered so whatever can appear layered on top of another open menu/dropdown is checked
   // first — a single back press should only ever close one layer.
   if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
+  if(shareText!==null){ closeShare(); return; }
   if(datePickerUi.open){ closeDatePicker(); return; }
   if(catUi.open){ closeCategoryEditor(); return; }
   if(manageUi.editingId){ cancelEditUser(); return; }
+  if(manageUi.open){ manageUi.open=false; render(); return; }
+  if(printerUi.open){ printerUi.open=false; render(); return; }
+  if(backupUi.open){ backupUi.open=false; render(); return; }
   if(rec.editingMonthBreakdown){ cancelMonthBreakdownEdit(); return; }
   if(rec.expandedBreakdownSection){ rec.expandedBreakdownSection=null; render(); return; }
   if(rec.breakdownMonthKey){ closeMonthBreakdown(); return; }
   if(rec.editingId){ cancelEditTx(); return; }
   if(rec.expandedTxSection){ rec.expandedTxSection=null; render(); return; }
   if(rec.expandedId){ rec.expandedId=null; rec.expandedTxSection=null; render(); return; }
+  if(rec.expandedDayBreakdown){ rec.expandedDayBreakdown=null; render(); return; }
   if(rec.expandedMonth){ rec.expandedMonth=null; render(); return; }
   if(rec.expandedYear){ rec.expandedYear=null; rec.expandedMonth=null; render(); return; }
   if(bill.medsDiscountEditing){ bill.medsDiscountEditing=false; render(); return; }
@@ -1045,7 +1051,7 @@ function closeTopMenu(){
   if(testPriceEditorOpen){ testPriceEditorOpen=false; render(); return; }
   if(bill.testsMenuOpen){ bill.testsMenuOpen=false; testPriceEditorOpen=false; render(); return; }
   if(remarksUi.editing){ remarksUi.editing=false; render(); return; }
-  if(receiptUi.open){ receiptUi.open=false; render(); return; }
+  if(receiptUi.open){ closeReceiptModal(); return; }
   if(inv.editId){ inv.editId=null; render(); return; }
   if(inv.restockId){ inv.restockId=null; render(); return; }
   if(inv.showForm){ inv.showForm=false; render(); return; }
