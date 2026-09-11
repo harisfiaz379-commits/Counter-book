@@ -998,24 +998,32 @@ function syncHeaderOffset(){
 }
 window.addEventListener("resize", syncHeaderOffset);
 
-/* ===================== BACK BUTTON → CLOSE OPEN EDIT/RESTOCK MENU =====================
-   Pressing the hardware back button while any edit or restock menu is open (adding/editing/
-   restocking a medicine, editing a bill or doctor fee, a discount box, the test-price editor,
-   receipt settings, category editor, the date picker, editing a user, etc.) should just close
-   that menu and leave the record exactly as it was before — not leave the page or the app.
+/* ===================== BACK BUTTON → CLOSE OPEN EDIT/RESTOCK MENU/DROPDOWN =====================
+   Pressing the hardware back button while any menu, dropdown, or edit/restock panel is open
+   (adding/editing/restocking a medicine, editing a bill or doctor fee, a discount box, the
+   test-price editor, receipt settings, category editor, the date picker, editing a user, the
+   header settings dropdown, Printer Settings, Manage Users, Backup & Restore, the Share popup,
+   an expanded record/day breakdown, etc.) should just close that one layer and leave everything
+   else exactly as it was — not leave the page or the app.
    This relies on the WebView host relaying the hardware back button as a normal browser "back"
    navigation (the standard way an App Inventor WebViewer app exposes it to the page); if it
    instead always exits the app directly, this can't intercept it and nothing changes on our end.
    How it works: every render() checks whether a menu is open. The first time one is, we push one
-   history entry. A real back press fires "popstate" — we catch it, close the top-most open menu
-   (discarding any unsaved edits) instead of navigating, and re-render. If closing it reveals
-   another menu underneath (e.g. the date picker sitting on top of the restock form), the next
-   render sees that one is still open and pushes a fresh entry for it, so a second back press
-   closes that one too. If a menu instead closes normally (Save/Cancel/tapping its own toggle),
-   render() notices nothing is open anymore and quietly consumes the pushed entry itself, so back-
-   press history never drifts out of sync with what's actually on screen. */
-let backHistoryPushed = false;
-let suppressPopstate = false;
+   history entry (and only ever keep at most one outstanding). A real back press fires "popstate"
+   — we catch it, close the top-most open menu/dropdown (discarding any unsaved edits) instead of
+   navigating, and re-render. If closing it reveals another one underneath (e.g. the date picker
+   sitting on top of the restock form), the next render sees that one is still open and pushes a
+   fresh entry for it, so a second back press closes that one too.
+   Deliberately NOT done: calling history.back() ourselves to "clean up" the pushed entry when a
+   menu instead closes normally (Save/Cancel/X/tapping its own toggle). That was tried first and
+   caused exactly the failure mode of "back stops responding to everything, not just one menu" —
+   history.back() is asynchronous, and pairing it with a same-tick pushState (e.g. one menu
+   closing right as another opens) can leave the browser's real back-stack and this script's idea
+   of it out of sync in a way that then swallows a real, later back press. Instead, an entry left
+   behind by a normal close is simply consumed harmlessly by the next real back press — closeTopMenu()
+   is a safe no-op when nothing is actually open — so at worst one extra back press is needed the
+   first time after closing something with its own button, never a stuck or broken back button. */
+let historyPushed = false; // true while one menu-tracking history entry is outstanding
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
@@ -1027,7 +1035,9 @@ function anyMenuOpen(){
 }
 function closeTopMenu(){
   // Ordered so whatever can appear layered on top of another open menu/dropdown is checked
-  // first — a single back press should only ever close one layer.
+  // first — a single back press should only ever close one layer. Safe to call with nothing
+  // open at all (e.g. a leftover history entry from a menu closed via its own button) — every
+  // check below just falls through and nothing happens.
   if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
   if(shareText!==null){ closeShare(); return; }
   if(datePickerUi.open){ closeDatePicker(); return; }
@@ -1061,20 +1071,14 @@ function closeTopMenu(){
   if(notesUi.openId!==null){ backFromNote(); return; }
 }
 function syncMenuHistory(){
-  const open = anyMenuOpen();
-  if(open && !backHistoryPushed){
-    backHistoryPushed = true;
+  if(anyMenuOpen() && !historyPushed){
+    historyPushed = true;
     history.pushState({ appMenu:true }, "", location.href);
-  } else if(!open && backHistoryPushed){
-    backHistoryPushed = false;
-    suppressPopstate = true;
-    history.back();
   }
 }
 window.addEventListener("popstate", function(){
-  if(suppressPopstate){ suppressPopstate = false; return; }
-  if(backHistoryPushed){
-    backHistoryPushed = false;
+  if(historyPushed){
+    historyPushed = false;
     closeTopMenu();
   }
 });
