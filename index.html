@@ -86,6 +86,7 @@
     --success:#0E9F6E; --successSoft:#E5F8F1;
     --danger:#DC3B2C; --dangerSoft:#FCEAE8;
     --warning:#B4650A; --warningSoft:#FDF3E3;
+    --header-h:90px; /* fallback before JS measures the real header height (syncHeaderOffset) */
   }
   *{box-sizing:border-box;}
   /* Text-selection highlight + caret, tinted to the app's green theme instead of the
@@ -97,6 +98,7 @@
   html,body{margin:0;padding:0;height:100%;background:var(--page);color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-x:hidden;}
   #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;}
+  .header-actions{top:14px;}
   header{background:var(--header);color:#fff;padding:18px 16px 14px;position:fixed;top:0;left:0;right:0;width:100%;z-index:30;
     box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;}
   header h1{margin:0;font-size:18px;font-weight:700;}
@@ -189,6 +191,37 @@
   #invFab{position:fixed;right:16px;bottom:calc(70px + env(safe-area-inset-bottom));width:54px;height:54px;border-radius:50%;
     background:var(--primary);color:#fff;border:none;font-size:26px;line-height:1;cursor:pointer;
     box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:35;display:flex;align-items:center;justify-content:center;}
+  /* Landscape: nav becomes a left sidebar (icon+label stacked, top-to-bottom) running from
+     the bottom of the header down to the bottom of the screen — like a desktop app's side
+     nav — instead of staying a bottom bar stretched edge-to-edge, which wastes a lot of the
+     screen's limited landscape height and puts the tabs far from the thumb on a wide phone.
+     Only the layout/position changes here; every button's markup, icon, active/badge styling
+     stays exactly the same as the portrait bottom-bar version. */
+  @media (orientation:landscape){
+    nav{
+      top:var(--header-h); bottom:0; left:0; right:auto;
+      width:68px; flex-direction:column; justify-content:flex-start; align-items:stretch;
+      gap:2px; overflow-y:auto;
+      border-top:none; border-right:1px solid var(--border);
+      padding:10px calc(4px + env(safe-area-inset-left)) calc(10px + env(safe-area-inset-bottom));
+    }
+    nav button{ padding:10px 4px; }
+    main{ padding-left:calc(68px + 12px + env(safe-area-inset-left)); padding-bottom:14px; }
+    #invFab{ bottom:calc(16px + env(safe-area-inset-bottom)); }
+    /* The stacked title/subtitle/sync-row/user-badge layout (4 full-width lines) was designed
+       for a tall portrait screen and ate up nearly a third of a landscape phone's much
+       shorter height. In landscape: drop the subtitle entirely (least essential line), shrink
+       the title, and lay everything else out as one wrapping inline row instead of stacked
+       block lines, so the header collapses down to roughly its title's own height. */
+    header{padding:8px 16px 6px;}
+    header h1{font-size:15px;}
+    header .header-sub{display:none;}
+    header .header-info{display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:2px;padding-right:150px;}
+    header .header-sync-row{margin-top:0;}
+    #currentUserBadge{margin-top:0;}
+    header .header-actions{top:50%;transform:translateY(-50%);}
+    #refreshBtn, #headerMenuBtn{padding:4px 8px;font-size:10px;}
+  }
   .expiry-tag{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;display:inline-block;}
   .icon-del-btn{background:none;border:none;color:var(--faint);cursor:pointer;font-size:16px;}
   .modal-x{border:none;font-size:18px;padding:4px 8px;}
@@ -224,16 +257,16 @@
 <body>
 <div id="app">
   <header>
-    <div style="padding-right:170px;">
+    <div class="header-info" style="padding-right:170px;">
       <h1>Counter Book</h1>
-      <p>Dispensing &amp; billing</p>
-      <div class="flex gap2 mt2" style="align-items:center;">
+      <p class="header-sub">Dispensing &amp; billing</p>
+      <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
         <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
         <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
       </div>
       <div id="currentUserBadge" style="color:#fff;font-size:13px;margin-top:5px;line-height:1.5;"></div>
     </div>
-    <div style="position:absolute;top:14px;right:16px;display:flex;gap:8px;align-items:center;">
+    <div class="header-actions" style="position:absolute;right:16px;display:flex;gap:8px;align-items:center;">
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <div style="position:relative;">
         <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
@@ -1006,7 +1039,13 @@ function syncHeaderOffset(){
   // since the button row can wrap to 2 lines on narrow screens) and pushes #app down to match.
   const h = document.querySelector("header");
   const app = document.getElementById("app");
-  if(h && app){ app.style.paddingTop = h.offsetHeight + "px"; }
+  if(h && app){
+    app.style.paddingTop = h.offsetHeight + "px";
+    // Landscape mode turns nav into a left sidebar that runs from the bottom of the header
+    // down to the bottom of the screen (see the orientation:landscape CSS below) — it needs
+    // this same real height, kept in sync with it via one shared measurement.
+    document.documentElement.style.setProperty("--header-h", h.offsetHeight + "px");
+  }
 }
 window.addEventListener("resize", syncHeaderOffset);
 
@@ -3281,7 +3320,16 @@ function renderUserBadge(){
   // Plain inline flow (not flex) so a long name that wraps to a second line just carries the
   // "· ROLE" bit along with its last word, instead of a flex row centering the pill vertically
   // across the whole wrapped block (which floats it oddly between the two lines).
-  el.innerHTML = `<span style="font-weight:700;">${esc(p.name)}</span> <span style="opacity:.6;">·</span> <span style="display:inline-block;background:rgba(255,255,255,.22);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;white-space:nowrap;">${roleLabel(p.role)}</span>`;
+  // A flex row (not the old plain-inline flow) so the name can be constrained and truncated
+  // with an ellipsis instead of wrapping to a second line — a long name used to grow the
+  // whole header taller. min-width:0 on the name span is what lets a flex child actually
+  // shrink below its content's natural width so text-overflow:ellipsis can kick in; the "·"
+  // and role pill get flex-shrink:0 so they never get squeezed and always stay fully visible.
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:6px;min-width:0;">
+    <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">${esc(p.name)}</span>
+    <span style="opacity:.6;flex-shrink:0;">·</span>
+    <span style="display:inline-block;flex-shrink:0;background:rgba(255,255,255,.22);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;white-space:nowrap;">${roleLabel(p.role)}</span>
+  </div>`;
 }
 // The 3 gated actions: Printer Settings + Receipt setup are Admin-only by default; the Monthly
 // Total Sales summary is hidden from Receptionist by default. Semi-Admin gets none of these
