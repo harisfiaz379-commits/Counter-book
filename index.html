@@ -207,29 +207,16 @@
   .cat-picker select{flex:1;min-width:0;border:none;border-radius:0;outline:none;padding:10px 34px 10px 12px;font-size:16px;font-family:inherit;color:var(--text);background-color:#fff;}
   .cat-picker button{flex:0 0 auto;border:none;border-left:1px solid var(--border);background:var(--page);
     color:var(--muted);font-size:12px;font-weight:600;padding:0 14px;cursor:pointer;}
-  /* Forced portrait via CSS rotation-compensation, not a warning: the app's layout isn't built
-     for landscape, so instead of telling the person to rotate back, this counter-rotates the
-     ENTIRE page (html itself, so every descendant — including position:fixed modals/badges —
-     rotates together and stays visually consistent) by -90deg the instant the device reports a
-     landscape viewport, and resizes it to swap width/height so it still fills the screen. Net
-     effect: the app keeps rendering upright and fully usable in portrait no matter which way the
-     phone is physically held — this is a plain CSS media query, so it works identically on every
-     device/browser/WebView with zero API permissions, fullscreen requests, or JS involved, unlike
-     the (removed) screen.orientation.lock() attempt whose success depended on host/OS support.
-     Touch/click coordinates are remapped automatically by the browser through this same
-     transform, so tapping still lands correctly on whatever's visually under the finger. */
-  @media screen and (orientation:landscape){
-    html{
-      transform:rotate(-90deg);
-      transform-origin:left top;
-      width:100vh;
-      height:100vw;
-      overflow-x:hidden;
-      position:absolute;
-      top:100%;
-      left:0;
-    }
-  }
+  /* No CSS-based portrait fix here anymore. A rotation-compensation trick (counter-rotating
+     <html> -90deg on landscape) was tried and removed — it rendered broken/skewed in the actual
+     App-Inventor-wrapped WebView this build targets (the WebView's own viewport handling doesn't
+     agree with what the trick assumes), which is arguably worse than doing nothing. A plain web
+     page fundamentally cannot force this reliably across every WebView implementation — the only
+     fix that's actually guaranteed for this build is native: Screen1 › ScreenOrientation ›
+     "Portrait" in the App Inventor project itself (Android then refuses to rotate the Activity
+     at all, unconditionally, regardless of the device's own auto-rotate toggle). That requires
+     rebuilding and reinstalling the app — a Designer change alone doesn't retroactively fix an
+     already-installed APK. */
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -4933,29 +4920,14 @@ function renderBackupModal(){
 }
 
 /* ===================== INIT ===================== */
-// Real (not cosmetic) portrait lock attempt: the Screen Orientation API's lock() call is spec'd
-// to require the page to actually be in fullscreen first — that's almost certainly why a bare
-// screen.orientation.lock() (tried and removed earlier) never took effect. This requests
-// fullscreen on the very first tap/touch anywhere on the page (a user gesture is mandatory for
-// both the Fullscreen API and, in most browsers, the orientation lock that follows it), then
-// locks to portrait once fullscreen is actually granted. {once:true} so it only ever tries once.
-// Best-effort on top of, not instead of, the CSS rotation-compensation rule above: some WebViews
-// reject fullscreen/orientation-lock outright (a host/OS decision, not something a web page can
-// override), and if either step fails here it fails silently — but the CSS fix above keeps the
-// app fully usable in portrait regardless, so this is just a bonus if the host happens to allow
-// it (e.g. it could mean the phone's own rotation indicator/animation never even plays).
-function tryLockPortrait(){
-  try{
-    const el = document.documentElement;
-    const reqFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
-    const doLock = ()=>{ try{ if(screen.orientation && screen.orientation.lock) screen.orientation.lock("portrait").catch(()=>{}); }catch(e){} };
-    if(document.fullscreenElement || document.webkitFullscreenElement){ doLock(); return; }
-    if(reqFS){ Promise.resolve(reqFS.call(el)).then(doLock).catch(()=>{}); }
-    else { doLock(); } // no Fullscreen API at all — try the bare lock anyway, some hosts allow it without fullscreen
-  }catch(e){}
-}
-document.addEventListener("touchend", tryLockPortrait, { once:true, passive:true });
-document.addEventListener("click", tryLockPortrait, { once:true });
+// No JS/CSS orientation workaround here anymore — both were tried (a bare screen.orientation.lock()
+// call, a fullscreen+lock combo triggered on first tap, and a CSS rotation-compensation trick) and
+// none rendered reliably inside the actual App-Inventor-wrapped WebView this build runs in (the
+// rotation trick specifically came out visibly broken/skewed there). A plain web page cannot force
+// portrait across every WebView implementation with certainty — the fix that's actually guaranteed
+// for this build is native: Screen1 › ScreenOrientation › "Portrait" in the App Inventor project
+// itself. That's enforced by Android at the Activity level regardless of the device's own
+// auto-rotate toggle, and it requires rebuilding and reinstalling the app to take effect.
 // Waits for the localStorage shim's IndexedDB hydration (see <head>) before booting, so loadAll()
 // always sees the real saved data. On a normal browser where the shim never installed itself
 // (real localStorage worked fine), __localStorageReady still resolves immediately either way.
