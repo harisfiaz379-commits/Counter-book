@@ -4984,7 +4984,87 @@ Promise.resolve(window.__localStorageReady).then(function(){
   bill = newBillState();
   render();
   startCloudSync();
+  checkForAppUpdate();
 });
+
+// ── Native app (APK) update check ───────────────────────────────────────────
+// This file's own HTML/JS content already self-updates on its own (see sw.js's
+// network-first strategy) — nobody needs to do anything when only this file changes.
+// But a change on the App Inventor project side itself (a new extension, a Screen
+// property, etc.) needs a real new APK, and Android can't silently self-install that
+// the way the web content updates — someone still has to tap to install it. This
+// compares a small version.json (hosted in the same GitHub folder as this file)
+// against the number the App Inventor project reports for itself, and shows a small
+// dismissible banner with a direct download link when they differ, so people find out
+// automatically instead of everyone having to remember to go ask.
+//
+// Wiring required on the App Inventor side (one-time), two parts:
+//
+// Part 1 — reporting the installed version — in Screen1.Initialize, BEFORE navigating
+// the WebViewer to this app's URL:
+//   set WebViewer1.WebViewString to "1"
+// — using whatever version number matches this build. Bump that text (and rebuild)
+// every time you publish a new APK, and bump version.json's apkVersion to match on
+// GitHub at the same time.
+//
+// Part 2 — actually opening the download — App Inventor's built-in WebViewer is
+// documented to silently do nothing when a link to a downloadable file (like an .apk)
+// is tapped inside it; it has no download handling at all. So tapping the banner's
+// button below doesn't navigate anywhere itself — it writes the APK's URL back into
+// WebViewString for the App Inventor side to notice and hand off to a real browser.
+// Add these components/blocks once:
+//   - a Clock component (Clock1), TimerEnabled = true, TimerInterval = 1000
+//   - an ActivityStarter component (ActivityStarter1)
+//   - a global variable lastHandledUpdateUrl, initial value ""
+//   - Clock1.Timer:
+//       if WebViewer1.WebViewString starts with "http"
+//          and WebViewer1.WebViewString ≠ get global lastHandledUpdateUrl
+//       then set global lastHandledUpdateUrl to WebViewer1.WebViewString
+//            set ActivityStarter1.Action to "android.intent.action.VIEW"
+//            set ActivityStarter1.DataUri to WebViewer1.WebViewString
+//            call ActivityStarter1.StartActivity
+// That opens the phone's normal browser (Chrome) with the APK link, which downloads
+// it properly and shows the usual "Open" notification → Android's real install prompt.
+function checkForAppUpdate(){
+  try{
+    if(typeof AppInventor === "undefined" || typeof AppInventor.getWebViewString !== "function") return;
+    var installedVersion = AppInventor.getWebViewString();
+    if(!installedVersion) return; // App Inventor side hasn't set this yet — nothing to compare against
+    fetch("version.json?_=" + Date.now(), {cache:"no-store"})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if(!data || !data.apkVersion || !data.apkUrl) return;
+        if(String(data.apkVersion) === String(installedVersion)) return; // already current
+        showAppUpdateBanner(data.apkUrl);
+      })
+      .catch(function(){}); // offline, or version.json not deployed yet — fail silent, not fatal
+  }catch(e){}
+}
+
+function showAppUpdateBanner(apkUrl){
+  if(document.getElementById("appUpdateBanner")) return; // don't stack duplicates
+  var b = document.createElement("div");
+  b.id = "appUpdateBanner";
+  b.style.cssText = "position:fixed;left:0;right:0;top:var(--header-h);z-index:55;background:#B4650A;color:#fff;"+
+    "padding:10px 14px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;"+
+    "box-shadow:0 2px 6px rgba(0,0,0,.2);";
+  b.innerHTML = '<span>A new app version is available.</span>'+
+    '<button type="button" onclick="downloadAppUpdate(\''+esc(apkUrl).replace(/'/g,"\\'")+'\')" '+
+    'style="background:#fff;color:#B4650A;font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Download update</button>'+
+    '<button type="button" aria-label="Dismiss" style="background:none;border:none;color:#fff;opacity:.8;font-size:16px;'+
+    'cursor:pointer;padding:0 4px;line-height:1;" onclick="this.parentElement.remove()">✕</button>';
+  document.body.appendChild(b);
+}
+
+function downloadAppUpdate(apkUrl){
+  try{
+    if(typeof AppInventor !== "undefined" && typeof AppInventor.setWebViewString === "function"){
+      AppInventor.setWebViewString(apkUrl); // App Inventor's Clock1.Timer picks this up and opens it in Chrome
+      return;
+    }
+  }catch(e){}
+  window.open(apkUrl, "_blank"); // fallback when just testing this page in a normal browser
+}
 </script>
 <script>
 // Registers the service worker (sw.js, same folder) so the app is cached on first load and
@@ -4993,7 +5073,7 @@ Promise.resolve(window.__localStorageReady).then(function(){
 // require internet on every open.
 if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
-    navigator.serviceWorker.register("sw.js").catch(()=>{});
+    navigator.serviceWorker.register("sw.js").catch((err)=>{ console.warn("SW register failed:", err); });
   });
 }
 </script>
