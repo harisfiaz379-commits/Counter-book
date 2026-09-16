@@ -1085,7 +1085,46 @@ function syncHeaderOffset(){
     document.documentElement.style.setProperty("--header-h", h.offsetHeight + "px");
   }
 }
-window.addEventListener("resize", syncHeaderOffset);
+// The user confirmed the landscape layout renders fine in an ordinary mobile browser but still
+// breaks (header/sidebar seemingly vanish, big blank gap) inside the actual App-Inventor-wrapped
+// WebView app. That points to a specific, well-known older-WebView bug rather than a CSS repaint
+// or overscroll issue (which the earlier translateZ/overscroll-behavior fix targeted): after a
+// rotation, some Android WebView builds report stale window.innerWidth/innerHeight for a brief
+// moment and/or fail to re-run position:fixed layout against the new viewport size until
+// something forces a fresh reflow — and if the page was scrolled down before rotating, that
+// stale layout combined with the old scroll offset is exactly what produces a header that's
+// missing from where it should be and a big blank gap below short content. The immediate call
+// below handles engines that get it right straight away; the delayed one re-measures again once
+// the WebView has had time to settle post-rotation, and both reset scroll to the top so no
+// leftover scroll offset from before the rotation can combine with the new (shorter/wider)
+// layout to reveal blank space. `orientationchange` is included alongside `resize` since some
+// WebViews fire one but not the other on rotation, or fire them in a different order.
+let viewportSettleTimer = null;
+function forceFixedRepaint(){
+  // Directly toggling position off and back on (rather than just re-reading offsetHeight) forces
+  // the engine to fully recompute these two elements as position:fixed from scratch — a stronger
+  // nudge than syncHeaderOffset() alone gives, for a WebView whose fixed-position PAINT (not just
+  // its layout numbers) is the part that's stuck after rotation.
+  ["header", "nav"].forEach(function(sel){
+    const el = document.querySelector(sel);
+    if(!el) return;
+    el.style.position = "static";
+    void el.offsetHeight; // force the browser to apply that change before reverting it
+    el.style.position = "";
+  });
+}
+function handleViewportSettle(){
+  window.scrollTo(0, 0);
+  syncHeaderOffset();
+  clearTimeout(viewportSettleTimer);
+  viewportSettleTimer = setTimeout(function(){
+    window.scrollTo(0, 0);
+    forceFixedRepaint();
+    syncHeaderOffset();
+  }, 300);
+}
+window.addEventListener("orientationchange", handleViewportSettle);
+window.addEventListener("resize", handleViewportSettle);
 
 /* ===================== BACK BUTTON → CLOSE MENUS, THEN STEP BACK THROUGH TABS =====================
    Pressing the hardware back button:
