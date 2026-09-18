@@ -96,8 +96,17 @@
   ::selection{ background:var(--primary); color:#fff; }
   input, textarea{ caret-color:var(--primary); accent-color:var(--primary); }
   html,body{margin:0;padding:0;height:100%;background:var(--page);color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-x:hidden;}
-  #app{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;}
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden;overscroll-behavior:none;}
+  /* #app is pinned to exactly one viewport height and scrolls INTERNALLY (overflow-y:auto)
+     instead of letting the outer document grow to the full height of the tallest tab's
+     content (Records archive, a long Stock list, etc). Some Android WebViews — including the
+     one this app runs in via App Inventor's WebViewer — have a hard limit on how tall a single
+     composited/rendered surface can be; once the document's total height exceeds it, everything
+     past that point renders blank white while scrolling back up (already-painted content) looks
+     fine. Capping the scroll container to one viewport height keeps the painted surface a fixed,
+     safe size no matter how long any tab's content gets. */
+  #app{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;
+    overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;}
   .header-actions{top:14px;}
   header{background:var(--header);color:#fff;padding:18px 16px 14px;position:fixed;top:0;left:0;right:0;width:100%;z-index:30;
     box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;
