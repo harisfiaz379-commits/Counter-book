@@ -120,6 +120,16 @@
   nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);
     display:flex;justify-content:space-around;padding:6px 4px;z-index:30;
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
+  /* Paints the system nav bar's safe-area strip green in portrait, independent of whether the
+     native HideBars extension's SetNavBarColour call actually takes effect - on Android 15+
+     that native API is a documented no-op once the app is forced into edge-to-edge, and that
+     switch doesn't reverse after the first rotation. env(safe-area-inset-bottom) reflects the
+     real reserved height regardless, so the page paints it directly instead of depending on
+     the OS honoring a color the app asked for. Hidden entirely in landscape per the "nothing
+     at the bottom in landscape" requirement. */
+  #navSafeBar{position:fixed;left:0;right:0;bottom:0;height:env(safe-area-inset-bottom);
+    background:var(--primary);z-index:29;}
+  @media (orientation:landscape){ #navSafeBar{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
     padding:6px 10px;border-radius:8px;color:var(--faint);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
   nav button.active{color:var(--primary);font-weight:700;}
