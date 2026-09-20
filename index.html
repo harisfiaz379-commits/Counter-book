@@ -117,22 +117,35 @@
   #banner{font-size:12px;padding:8px 16px;background:var(--warningSoft);color:var(--warning);
     border-bottom:1px solid #F0DCB0;display:none;align-items:center;gap:6px;}
   main{flex:1;padding:14px 12px 160px;max-width:560px;margin:0 auto;width:100%;}
-  nav{position:fixed;bottom:0;left:0;right:0;height:120px;display:flex;flex-direction:column;
+  nav{position:fixed;bottom:0;left:0;right:0;display:flex;flex-direction:column;
     box-sizing:border-box;z-index:30;
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
   /* navButtons (top half, white, the real tab row) and navGreenHalf (bottom half, decorative
-     green) are flex:1 siblings inside the single fixed-height nav box above - see renderNav()
-     in the JS for why this is one element instead of two separately-positioned ones. Each gets
-     an explicit height (half of nav's own 120px) with box-sizing:border-box rather than relying
-     on bare `flex:1` to split them evenly: flex-basis:0% distributes space BEFORE adding each
-     child's own border/padding on top of it in the default content-box model, so navButtons'
-     1px top border (navGreenHalf has none) was enough to make navButtons render ~1px taller
-     than its 60px share - a small but visible mismatch, since the human eye reads two adjacent
-     blocks of nearly-identical color/height very precisely. Explicit height+border-box makes
-     the border part of the 60px instead of extra on top, so the two halves are pixel-exact. */
-  #navButtons{height:60px;box-sizing:border-box;display:flex;justify-content:space-around;align-items:center;
+     green) are flex:1 siblings inside the single nav box above - see renderNav() in the JS for
+     why this is one element instead of two separately-positioned ones.
+     An earlier attempt gave both an equal, hardcoded height:60px (nav itself hardcoded to
+     120px), reasoning that a `flex:1`/`flex:1` split should already be exactly equal and the
+     only thing throwing it off was navButtons' 1px top border. The user's own on-device
+     screenshot after that shipped proved that wrong — navButtons rendered roughly 110px tall
+     there (not 60), navGreenHalf only ~20px, nowhere close to equal or to the 120px nav was
+     supposed to total. The real cause: flex items default to `min-height:auto` on the main
+     axis, which for a `flex-basis:0%` item means "never shrink below your own content's natural
+     height" — REGARDLESS of what height/flex-basis is declared — unless the item's own
+     `overflow` is set to something other than `visible`. navButtons' actual content (icon +
+     label per button, at whatever font size/scaling this specific device or its OS-level text
+     size setting renders at) apparently needs ~110px here, not 60px, so it was never going to
+     honor a flat 60px no matter how it was declared — and forcing it down to 60px anyway would
+     just start clipping the tab icons/labels instead of fixing anything.
+     So: nav/navButtons no longer hardcode any pixel height at all — navButtons sizes itself
+     naturally to whatever its content actually needs on THIS device, and nav's own height is
+     `auto` (sums its children) instead of a fixed guess. navGreenHalf's height is then set
+     directly in JS (see renderNav()) to exactly match navButtons' real measured offsetHeight
+     after every render, so the two are pixel-identical by construction no matter how tall the
+     real content ends up being — instead of both trying to hit a fixed number neither of them
+     was guaranteed to actually reach. */
+  #navButtons{box-sizing:border-box;display:flex;justify-content:space-around;align-items:center;
     background:var(--card);border-top:1px solid var(--border);padding:0 4px;}
-  #navGreenHalf{height:60px;box-sizing:border-box;background:var(--primary);}
+  #navGreenHalf{height:0;box-sizing:border-box;background:var(--primary);}
   @media (orientation:landscape){ #navGreenHalf{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
     padding:6px 10px;border-radius:8px;color:var(--faint);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
@@ -1076,7 +1089,7 @@ function syncHeaderOffset(){
     document.documentElement.style.setProperty("--header-h", h.offsetHeight + "px");
   }
 }
-window.addEventListener("resize", syncHeaderOffset);
+window.addEventListener("resize", function(){ syncHeaderOffset(); renderNav(); });
 
 /* ===================== BACK BUTTON → CLOSE MENUS, THEN STEP BACK THROUGH TABS =====================
    Pressing the hardware back button:
@@ -1259,14 +1272,12 @@ function renderNav(){
     {id:"notes",label:"Notepad",icon:"📝"},
   ];
   // #navButtons (the actual tappable tab row) and #navGreenHalf (a purely decorative green
-  // fill, portrait-only - see CSS) are both children of the SAME nav element, so their
-  // heights can never drift apart the way two independently-positioned fixed elements can
-  // (nav is on its own GPU-composited layer via transform:translateZ(0); a separate element
-  // without that same promotion can round to different physical pixels at fractional device
-  // pixel ratios even with identical declared CSS heights - keeping them as one box sidesteps
-  // that entirely). Each half gets an explicit 60px height + box-sizing:border-box in the CSS
-  // (rather than bare flex:1) so navButtons' 1px top border doesn't push it taller than
-  // navGreenHalf's share - see the CSS comment above #navButtons for why that mismatch happened.
+  // fill, portrait-only - see CSS) are both children of the SAME nav element. navButtons is
+  // left to size itself naturally to its own content (see the CSS comment above #navButtons
+  // for why an earlier hardcoded-60px-each attempt didn't hold up on the user's real device);
+  // navGreenHalf's height is then set directly below to match navButtons' actual rendered
+  // height, so the two stay pixel-identical regardless of what that real height turns out to
+  // be on any given device/font-scale, instead of both aiming at a fixed guess.
   document.getElementById("nav").innerHTML = `
     <div id="navButtons">` + tabs.map(t=>`
       <button class="${tab===t.id?'active':''}" onclick="setTab('${t.id}')">
@@ -1276,6 +1287,14 @@ function renderNav(){
       </button>`).join("") + `
     </div>
     <div id="navGreenHalf"></div>`;
+  // Runs after the browser has actually laid out the new markup above (rAF, not synchronous —
+  // offsetHeight read immediately after setting innerHTML can still reflect stale/zero layout
+  // in some WebViews) so navButtons.offsetHeight is the real, final rendered height to copy.
+  requestAnimationFrame(()=>{
+    const nb = document.getElementById("navButtons");
+    const gh = document.getElementById("navGreenHalf");
+    if(nb && gh) gh.style.height = nb.offsetHeight + "px";
+  });
 }
 
 function setTab(t){
