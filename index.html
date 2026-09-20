@@ -122,10 +122,17 @@
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
   /* navButtons (top half, white, the real tab row) and navGreenHalf (bottom half, decorative
      green) are flex:1 siblings inside the single fixed-height nav box above - see renderNav()
-     in the JS for why this is one element instead of two separately-positioned ones. */
-  #navButtons{flex:1;display:flex;justify-content:space-around;align-items:center;
+     in the JS for why this is one element instead of two separately-positioned ones. Each gets
+     an explicit height (half of nav's own 120px) with box-sizing:border-box rather than relying
+     on bare `flex:1` to split them evenly: flex-basis:0% distributes space BEFORE adding each
+     child's own border/padding on top of it in the default content-box model, so navButtons'
+     1px top border (navGreenHalf has none) was enough to make navButtons render ~1px taller
+     than its 60px share - a small but visible mismatch, since the human eye reads two adjacent
+     blocks of nearly-identical color/height very precisely. Explicit height+border-box makes
+     the border part of the 60px instead of extra on top, so the two halves are pixel-exact. */
+  #navButtons{height:60px;box-sizing:border-box;display:flex;justify-content:space-around;align-items:center;
     background:var(--card);border-top:1px solid var(--border);padding:0 4px;}
-  #navGreenHalf{flex:1;background:var(--primary);}
+  #navGreenHalf{height:60px;box-sizing:border-box;background:var(--primary);}
   @media (orientation:landscape){ #navGreenHalf{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
     padding:6px 10px;border-radius:8px;color:var(--faint);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
@@ -1257,8 +1264,9 @@ function renderNav(){
   // (nav is on its own GPU-composited layer via transform:translateZ(0); a separate element
   // without that same promotion can round to different physical pixels at fractional device
   // pixel ratios even with identical declared CSS heights - keeping them as one box sidesteps
-  // that entirely, since flex:1 on two children of one fixed-height parent guarantees exactly
-  // equal halves by construction, not by matching two separately-measured numbers).
+  // that entirely). Each half gets an explicit 60px height + box-sizing:border-box in the CSS
+  // (rather than bare flex:1) so navButtons' 1px top border doesn't push it taller than
+  // navGreenHalf's share - see the CSS comment above #navButtons for why that mismatch happened.
   document.getElementById("nav").innerHTML = `
     <div id="navButtons">` + tabs.map(t=>`
       <button class="${tab===t.id?'active':''}" onclick="setTab('${t.id}')">
