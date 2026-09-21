@@ -558,11 +558,13 @@ function loadAll(){
 function saveInventory(){
   try{ localStorage.setItem("clinic_inventory", JSON.stringify(inventory)); saveError=""; }
   catch(e){ saveError="That change may not have saved. Storage might be full."; }
+  _lowStockCache = null; _expiringBatchesCache = null; // inventory changed — caches above are now stale
   schedulePushToCloud();
 }
 function saveTransactions(){
   try{ localStorage.setItem("clinic_transactions", JSON.stringify(transactions)); saveError=""; }
   catch(e){ saveError="That bill may not have saved. Storage might be full."; }
+  _visibleTxCache = null; // transactions changed — the cached filter above is now stale
   schedulePushToCloud();
 }
 function loadNotesForCurrentProfile(){
@@ -886,6 +888,7 @@ function fmtExpiryShort(dateStr){
   return `${d}-${m}-${y.slice(-2)}`;
 }
 function expiringBatches(){
+  if(_expiringBatchesCache !== null) return _expiringBatchesCache;
   const out = [];
   inventory.forEach(m=>{
     if(m.deleted) return;
@@ -896,7 +899,9 @@ function expiringBatches(){
       }
     });
   });
-  return out.sort((a,b)=>a.daysLeft-b.daysLeft);
+  out.sort((a,b)=>a.daysLeft-b.daysLeft);
+  _expiringBatchesCache = out;
+  return out;
 }
 function onBatchExpiryChange(medId, batchId, val){
   const m = inventory.find(x=>x.id===medId);
@@ -1241,7 +1246,15 @@ function renderBanner(){
   else { b.style.display="none"; b.textContent=""; }
 }
 
-function lowStockList(){ return inventory.filter(m=>!m.deleted && !m.noWarn && m.stockPills <= (m.lowStockAt ?? 0)); }
+// Both scan the full inventory (and, for expiringBatches, every batch of every medicine) and
+// used to run fresh on every render() — including renderNav(), which runs on EVERY tab switch
+// just to compute the Warnings badge count, even when switching to a completely unrelated tab.
+// Cached the same way as visibleTransactions() above, invalidated whenever inventory is saved.
+let _lowStockCache = null, _expiringBatchesCache = null;
+function lowStockList(){
+  if(_lowStockCache === null) _lowStockCache = inventory.filter(m=>!m.deleted && !m.noWarn && m.stockPills <= (m.lowStockAt ?? 0));
+  return _lowStockCache;
+}
 
 function renderNav(){
   const tabs = [
@@ -2559,7 +2572,20 @@ function renderInvFormModal(){
 }
 
 /* ===================== RECORDS TAB ===================== */
-function visibleTransactions(){ return transactions.filter(t=>!t.deleted); }
+// visibleTransactions() used to be a plain `transactions.filter(...)` recomputed on every
+// single call — and renderRecords() alone calls it roughly 2 + (days already billed this
+// month) times per render (once per day-in-month card, on top of the search/month-total
+// calls), each one re-scanning the ENTIRE lifetime transaction history from scratch. That's
+// fine with a handful of bills, but as the clinic's history grows into the hundreds/thousands
+// of bills over months and years, that repeated full-history rescan is what made tab-switching
+// (especially into Records) get slower and slower over time. Caching the filtered result and
+// only invalidating it when `transactions` actually changes (see saveTransactions() below)
+// turns that into one O(n) scan per render instead of dozens.
+let _visibleTxCache = null;
+function visibleTransactions(){
+  if(_visibleTxCache === null) _visibleTxCache = transactions.filter(t=>!t.deleted);
+  return _visibleTxCache;
+}
 function dayOptions(){
   const map = new Map();
   map.set(new Date().toDateString(), Date.now());
@@ -4856,6 +4882,14 @@ setInterval(function(){
 document.addEventListener("visibilitychange", function(){
   if(document.visibilityState === "visible" && fbDb && syncStatus !== "synced" && syncStatus !== "syncing"){
     pushToCloud();
+  }
+  // expiringBatches() is cached (see its definition) for render speed — its "days until
+  // expiry" numbers are relative to "now", so if the app is left open across a midnight
+  // rollover, the cache would keep showing yesterday's day-count until something else
+  // invalidates it. Resuming the app is a natural, cheap point to refresh it.
+  if(document.visibilityState === "visible" && _expiringBatchesCache !== null){
+    _expiringBatchesCache = null;
+    render();
   }
 });
 function collectAllNotes(){
