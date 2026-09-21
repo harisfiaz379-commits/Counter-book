@@ -117,7 +117,7 @@
   #banner{font-size:12px;padding:8px 16px;background:var(--warningSoft);color:var(--warning);
     border-bottom:1px solid #F0DCB0;display:none;align-items:center;gap:6px;}
   main{flex:1;padding:14px 12px 100px;max-width:560px;margin:0 auto;width:100%;}
-  nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);
+  nav{position:fixed;bottom:0;left:0;right:0;background:var(--primary);border-top:1px solid rgba(255,255,255,.15);
     display:flex;justify-content:space-around;padding:6px 4px;z-index:30;
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
   /* Paints the system nav bar's safe-area strip green in portrait, independent of whether the
@@ -131,8 +131,8 @@
     background:var(--primary);z-index:29;}
   @media (orientation:landscape){ #navSafeBar{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
-    padding:6px 10px;border-radius:8px;color:var(--faint);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
-  nav button.active{color:var(--primary);font-weight:700;}
+    padding:6px 10px;border-radius:8px;color:var(--headerSub);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
+  nav button.active{color:#fff;font-weight:700;}
   nav button .icon{font-size:20px;line-height:1;}
   nav button .badge{position:absolute;top:0;right:2px;background:var(--danger);color:#fff;font-size:9px;
     font-weight:700;border-radius:999px;min-width:14px;height:14px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
@@ -4834,6 +4834,30 @@ function startCloudSync(){
 window.addEventListener("online", function(){
   if(fbDb) pushToCloud();
 });
+// The 'online' event above is the ideal signal, but it's unreliable inside the actual
+// App-Inventor-wrapped Android WebView this app runs in: WebViews depend on the OS's network-
+// change broadcast reaching the page's JS engine, and on many devices that broadcast either
+// never arrives or arrives before the WebView is actually ready to use the connection again.
+// Firestore also has no offline write-queue here (enablePersistence() isn't called), so a push
+// that fails while offline just times out and nothing retries it until something else triggers
+// one — which in practice meant waiting for the user to tap "Upload offline data" themselves.
+//
+// Two safety nets that don't depend on 'online' firing at all:
+// 1) A plain periodic check — if we're not currently "synced", just try again. Cheap (a single
+//    read+write only actually happens if fbDb exists and nothing else is already mid-push,
+//    both guarded inside pushToCloud() itself), and self-corrects within 20s of real
+//    connectivity returning even if every event-based signal missed it.
+// 2) visibilitychange — covers the very common case of the phone being locked/backgrounded
+//    while offline, then unlocked once back in range: the tab becoming visible again is a
+//    strong hint it's worth trying right now instead of waiting out the rest of the interval.
+setInterval(function(){
+  if(fbDb && syncStatus !== "synced" && syncStatus !== "syncing") pushToCloud();
+}, 20000);
+document.addEventListener("visibilitychange", function(){
+  if(document.visibilityState === "visible" && fbDb && syncStatus !== "synced" && syncStatus !== "syncing"){
+    pushToCloud();
+  }
+});
 function collectAllNotes(){
   const out = {};
   profiles.forEach(p=>{
@@ -5113,9 +5137,57 @@ function downloadAppUpdate(apkUrl){
 // works fully offline afterward — needed once the app is loaded from a real URL (GitHub Pages)
 // instead of a local file, since that's what fixed localStorage but on its own would otherwise
 // require internet on every open.
+//
+// updateViaCache:'none' is the actual fix for "I have to clear the app's cache to see updates".
+// sw.js already correctly calls skipWaiting()/clients.claim() — but neither of those can run if
+// the browser never notices sw.js changed in the first place. GitHub Pages serves sw.js with an
+// HTTP Cache-Control header, and by default the browser is allowed to reuse ITS OWN cached copy
+// of that file (a completely different cache from anything this app's service worker manages)
+// for a while after you push a new version — so the update check silently compares the new
+// version against a stale copy of the old one and finds no difference. updateViaCache:'none'
+// tells the browser to never use that HTTP cache for sw.js itself and always fetch it fresh,
+// so a real edit is always seen right away.
 if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{
-    navigator.serviceWorker.register("sw.js").catch((err)=>{ console.warn("SW register failed:", err); });
+    navigator.serviceWorker.register("sw.js", {updateViaCache:"none"}).then((reg)=>{
+      // A brand-new service worker version can finish installing while the app is already open
+      // (most likely: the app was left running/backgrounded rather than freshly opened) — skip-
+      // Waiting()/clients.claim() mean it's ready and in control immediately, but the JS already
+      // running in memory is still the OLD code until an actual page reload happens. Rather than
+      // silently reloading out from under someone mid-bill, show the same small dismissible
+      // banner style already used for native APK updates, so it's their choice when to apply it.
+      function showWebUpdateBanner(){
+        if(document.getElementById("webUpdateBanner")) return;
+        var b = document.createElement("div");
+        b.id = "webUpdateBanner";
+        b.style.cssText = "position:fixed;left:0;right:0;top:var(--header-h);z-index:55;background:#0F5C57;color:#fff;"+
+          "padding:10px 14px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;"+
+          "box-shadow:0 2px 6px rgba(0,0,0,.2);";
+        b.innerHTML = '<span>An updated version of the app is ready.</span>'+
+          '<button type="button" style="background:#fff;color:#0F5C57;font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Refresh now</button>'+
+          '<button type="button" aria-label="Dismiss" style="background:none;border:none;color:#fff;opacity:.8;font-size:16px;cursor:pointer;padding:0 4px;line-height:1;">✕</button>';
+        b.querySelector("button").onclick = ()=>window.location.reload();
+        b.querySelectorAll("button")[1].onclick = ()=>b.remove();
+        document.body.appendChild(b);
+      }
+      function watchInstalling(sw){
+        if(!sw) return;
+        sw.addEventListener("statechange", ()=>{
+          // "installed" while a controller already exists means this is an UPDATE to an
+          // already-running app, not the very first install on a brand-new device — only the
+          // update case should ever prompt anyone to refresh.
+          if(sw.state==="installed" && navigator.serviceWorker.controller) showWebUpdateBanner();
+        });
+      }
+      watchInstalling(reg.installing);
+      reg.addEventListener("updatefound", ()=>watchInstalling(reg.installing));
+      // Explicitly re-check for updates whenever the app is resumed from the background — on a
+      // phone the app is usually resumed rather than freshly loaded, so leaving update checks to
+      // only happen "on load" means a long-running session could sit on stale code for days.
+      document.addEventListener("visibilitychange", ()=>{
+        if(document.visibilityState==="visible") reg.update().catch(()=>{});
+      });
+    }).catch((err)=>{ console.warn("SW register failed:", err); });
   });
 }
 </script>

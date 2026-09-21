@@ -1,6 +1,6 @@
 // Counter Book offline cache. Bump CACHE_NAME (e.g. v2, v3...) any time index.html is updated
 // on GitHub, so returning devices pick up the new version instead of the old cached one.
-const CACHE_NAME = "counter-book-v2";
+const CACHE_NAME = "counter-book-v3";
 const APP_FILES = ["./", "./index.html"];
 
 self.addEventListener("install", (event) => {
