@@ -88,7 +88,15 @@
     --warning:#B4650A; --warningSoft:#FDF3E3;
     --header-h:90px; /* fallback before JS measures the real header height (syncHeaderOffset) */
   }
-  *{box-sizing:border-box;}
+  *{box-sizing:border-box;
+    /* Android WebViews (and mobile browsers generally) paint a translucent highlight over
+       whatever was just tapped, as default visual feedback — with no styling for it here it
+       falls back to a solid blue-ish box that can visibly linger/overlap when tapping several
+       nav buttons in quick succession. Turning it off here doesn't remove tap feedback
+       entirely: buttons still get their own :active/.active styling elsewhere in this file.
+       rgba(0,0,0,0) rather than the `transparent` keyword — some Chromium/WebView versions
+       have a known quirk where `transparent` doesn't fully suppress this specific property. */
+    -webkit-tap-highlight-color:rgba(0,0,0,0);-webkit-touch-callout:none;}
   /* Text-selection highlight + caret, tinted to the app's green theme instead of the
      device/WebView's default accent (which shows up pink on some devices). Modern Chromium/
      WebView also tints the drag-selection handles to match ::selection in most versions, though
@@ -131,7 +139,8 @@
     background:var(--card);z-index:29;}
   @media (orientation:landscape){ #navSafeBar{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
-    padding:6px 10px;border-radius:8px;color:var(--muted);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
+    padding:6px 10px;border-radius:8px;color:var(--muted);font-size:10px;font-weight:500;cursor:pointer;position:relative;
+    -webkit-tap-highlight-color:rgba(0,0,0,0);}
   nav button.active{color:var(--primary);font-weight:700;}
   nav button .icon{font-size:20px;line-height:1;}
   nav button .badge{position:absolute;top:0;right:2px;background:var(--danger);color:#fff;font-size:9px;
