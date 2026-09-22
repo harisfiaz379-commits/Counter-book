@@ -117,22 +117,22 @@
   #banner{font-size:12px;padding:8px 16px;background:var(--warningSoft);color:var(--warning);
     border-bottom:1px solid #F0DCB0;display:none;align-items:center;gap:6px;}
   main{flex:1;padding:14px 12px 100px;max-width:560px;margin:0 auto;width:100%;}
-  nav{position:fixed;bottom:0;left:0;right:0;background:var(--primary);border-top:1px solid rgba(255,255,255,.15);
+  nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);
     display:flex;justify-content:space-around;padding:6px 4px;z-index:30;
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
-  /* Paints the system nav bar's safe-area strip green in portrait, independent of whether the
+  /* Paints the system nav bar's safe-area strip white in portrait, independent of whether the
      native HideBars extension's SetNavBarColour call actually takes effect - on Android 15+
      that native API is a documented no-op once the app is forced into edge-to-edge, and that
      switch doesn't reverse after the first rotation. env(safe-area-inset-bottom) reflects the
      real reserved height regardless, so the page paints it directly instead of depending on
      the OS honoring a color the app asked for. Hidden entirely in landscape per the "nothing
-     at the bottom in landscape" requirement. */
+     at the bottom in landscape" requirement. Matches nav's own background above. */
   #navSafeBar{position:fixed;left:0;right:0;bottom:0;height:env(safe-area-inset-bottom);
-    background:var(--primary);z-index:29;}
+    background:var(--card);z-index:29;}
   @media (orientation:landscape){ #navSafeBar{display:none;} }
   nav button{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
-    padding:6px 10px;border-radius:8px;color:var(--headerSub);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
-  nav button.active{color:#fff;font-weight:700;}
+    padding:6px 10px;border-radius:8px;color:var(--muted);font-size:10px;font-weight:500;cursor:pointer;position:relative;}
+  nav button.active{color:var(--primary);font-weight:700;}
   nav button .icon{font-size:20px;line-height:1;}
   nav button .badge{position:absolute;top:0;right:2px;background:var(--danger);color:#fff;font-size:9px;
     font-weight:700;border-radius:999px;min-width:14px;height:14px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
@@ -811,8 +811,9 @@ function deleteSpecialCategoryFromEditor(name){
    sold, pills are drawn from the batch with the nearest expiry date first (FEFO —
    first-expiry-first-out). m.stockPills is always kept as the sum of active batches. */
 function activeBatches(m){ return (m.batches||[]).filter(b=>!b.disposed && b.pillsRemaining>0); }
-function recomputeStock(m){ m.stockPills = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0); }function fefoOrder(m){
-  return activeBatches(m).slice().sort((a,b)=>{
+function recomputeStock(m){ m.stockPills = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0); }
+function fefoOrder(m, precomputedBatches){
+  return (precomputedBatches || activeBatches(m)).slice().sort((a,b)=>{
     const ea = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
     const eb = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity;
     if(ea!==eb) return ea-eb;
@@ -2415,104 +2416,127 @@ function saveEdit(id){
   render();
 }
 
+// Bumped on every renderInventory() call so a background chunk-loading job from a previous
+// call (before the user switched away, searched something else, or edited a medicine) knows
+// it's been superseded and should stop instead of appending onto a list that's since been
+// replaced. Combined with checking the container element still exists, this is what makes it
+// safe for the background job to keep running across whatever else happens on screen.
+let _invRenderToken = 0;
+function buildInvCard(m){
+  // Computed once and reused below — this used to be recomputed independently for the
+  // price, the expired check, the "has batches" check, and the batch list itself, each of
+  // which re-filtered (and some re-sorted) the same medicine's full batch array from
+  // scratch. With hundreds of medicines each carrying several batches, that redundant work
+  // was a real, constant-factor cost on every single Inventory tab render.
+  const batches = activeBatches(m);
+  const ordered = fefoOrder(m, batches);
+  const pricePerPill = ordered.length ? batchPricePerPill(m, ordered[0]) : (Number(m.mrpPerBox)||0)/(Number(m.pillsPerBox)||1);
+  const low = !m.noWarn && m.stockPills <= (m.lowStockAt??0);
+  const isExpired = batches.some(b=>b.expiryDate && daysUntil(b.expiryDate)!==null && daysUntil(b.expiryDate)<0);
+  let extra = "";
+  if(inv.restockId===m.id){
+    extra = `
+      <div class="mt2 divider-top8">
+        <div class="flex gap2" style="align-items:flex-end;">
+          <div class="flex1">
+            <label class="small">Boxes/strips received</label>
+            <input ${NOAC} id="restockInput-${m.id}" type="text" inputmode="numeric" value="${esc(inv.restockBoxes)}" oninput="onRestockBoxes(this.value)" placeholder="e.g. 5">
+          </div>
+          <button class="btn btn-primary" onclick="doRestock('${m.id}')">Add</button>
+        </div>
+        <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
+        <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
+        <label class="small mt2" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
+        <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
+      </div>`;
+  }
+  if(inv.editId===m.id){
+    const f = inv.editForm;
+    extra = `
+      <div class="mt2 divider-top8">
+        <div class="flex gap2 mb2">
+          <input ${NOAC} id="editName-${m.id}" value="${esc(f.name)}" oninput="onEditForm('name',this.value)" placeholder="Medicine name" class="flex1">
+          <button type="button" onclick="toggleEditSTag()" title="Mark as S.${esc(f.category||f.specialCategory||'Category')}" style="flex:0 0 36px;display:flex;align-items:center;justify-content:center;border:1px solid ${f.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${f.sTag?'var(--primary)':'var(--page)'};color:${f.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
+        </div>
+        <div class="cat-picker mb2">
+          <select id="editCategory-${m.id}" onchange="onEditCategoryPicked(this.value)">
+            <option value="" ${!f.category && !f.specialCategory?"selected":""}>Category</option>
+            ${mergedCategoryOptionsHtml(f.specialCategory||f.category)}
+          </select>
+          <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
+        </div>
+        <div class="flex gap2 mb2">
+          <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onEditForm('formula',this.value)" placeholder="Formula / composition">
+          <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
+        </div>
+        <div class="flex gap2 mb2">
+          <input ${NOAC} id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
+          <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onEditForm('pillsPerBox',this.value)" placeholder="Medicine per box">
+        </div>
+        <label class="small" style="color:var(--danger);">Current stock (medicine) — correct for expired, damaged, or missing medicine</label>
+        <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
+        <label class="small">Warn me when stock falls to (medicine)</label>
+        <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
+        <div class="flex gap2 mt2">
+          <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
+          <button class="btn btn-primary flex1" onclick="saveEdit('${m.id}')">Save changes</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      <div class="flex" style="justify-content:space-between;align-items:flex-start;">
+        <div>
+          <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
+          ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+          <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${money(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${money(pricePerPill)}/medicine</p>
+          <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
+        </div>
+        <div class="flex gap1" style="align-items:center;flex-shrink:0;">
+          ${m.formula?`<button onclick='searchInvByFormula(${JSON.stringify(m.formula)})' title="Find other medicines with this formula" style="background:var(--primarySoft);color:var(--primary);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🔎 S.formula</button>`:""}
+          <button onclick="deleteMedicine('${m.id}')" class="icon-del-btn">🗑</button>
+        </div>
+      </div>
+      <div class="flex mt2" style="justify-content:space-between;align-items:center;">
+        <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${m.stockPills} medicine in stock${isExpired?" · expired":""}</span>
+        <div class="flex gap2">
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
+        </div>
+      </div>
+      ${extra}
+      ${batches.length ? `
+        <div class="mt2 divider-top8">
+          <p class="small faint" style="margin:0 0 6px;">Batches (sold nearest-expiry first)</p>
+          ${ordered.map(b=>{
+            const d = b.expiryDate ? daysUntil(b.expiryDate) : null;
+            const soon = d!==null && d<=10;
+            return `
+            <div class="flex gap2 mt2" style="align-items:center;">
+              <span class="small" style="flex-shrink:0;">${b.pillsRemaining} medicine</span>
+              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${money(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
+              <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
+              ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
+              <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
+            </div>`;
+          }).join("")}
+        </div>` : ""}
+    </div>`;
+}
 function renderInventory(){
+  const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
   const filtered = inventory.filter(m=>!m.deleted && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q)));
 
-  const cards = filtered.map(m=>{
-    const pricePerPill = nextBatchUnitPrice(m);
-    const low = !m.noWarn && m.stockPills <= (m.lowStockAt??0);
-    const isExpired = activeBatches(m).some(b=>b.expiryDate && daysUntil(b.expiryDate)!==null && daysUntil(b.expiryDate)<0);
-    let extra = "";
-    if(inv.restockId===m.id){
-      extra = `
-        <div class="mt2 divider-top8">
-          <div class="flex gap2" style="align-items:flex-end;">
-            <div class="flex1">
-              <label class="small">Boxes/strips received</label>
-              <input ${NOAC} id="restockInput-${m.id}" type="text" inputmode="numeric" value="${esc(inv.restockBoxes)}" oninput="onRestockBoxes(this.value)" placeholder="e.g. 5">
-            </div>
-            <button class="btn btn-primary" onclick="doRestock('${m.id}')">Add</button>
-          </div>
-          <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
-          <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
-          <label class="small mt2" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
-          <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
-        </div>`;
-    }
-    if(inv.editId===m.id){
-      const f = inv.editForm;
-      extra = `
-        <div class="mt2 divider-top8">
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="editName-${m.id}" value="${esc(f.name)}" oninput="onEditForm('name',this.value)" placeholder="Medicine name" class="flex1">
-            <button type="button" onclick="toggleEditSTag()" title="Mark as S.${esc(f.category||f.specialCategory||'Category')}" style="flex:0 0 36px;display:flex;align-items:center;justify-content:center;border:1px solid ${f.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${f.sTag?'var(--primary)':'var(--page)'};color:${f.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
-          </div>
-          <div class="cat-picker mb2">
-            <select id="editCategory-${m.id}" onchange="onEditCategoryPicked(this.value)">
-              <option value="" ${!f.category && !f.specialCategory?"selected":""}>Category</option>
-              ${mergedCategoryOptionsHtml(f.specialCategory||f.category)}
-            </select>
-            <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
-          </div>
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onEditForm('formula',this.value)" placeholder="Formula / composition">
-            <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
-          </div>
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
-            <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onEditForm('pillsPerBox',this.value)" placeholder="Medicine per box">
-          </div>
-          <label class="small" style="color:var(--danger);">Current stock (medicine) — correct for expired, damaged, or missing medicine</label>
-          <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
-          <label class="small">Warn me when stock falls to (medicine)</label>
-          <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
-          <div class="flex gap2 mt2">
-            <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
-            <button class="btn btn-primary flex1" onclick="saveEdit('${m.id}')">Save changes</button>
-          </div>
-        </div>`;
-    }
-    return `
-      <div class="card">
-        <div class="flex" style="justify-content:space-between;align-items:flex-start;">
-          <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${money(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${money(pricePerPill)}/medicine</p>
-            <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
-          </div>
-          <div class="flex gap1" style="align-items:center;flex-shrink:0;">
-            ${m.formula?`<button onclick='searchInvByFormula(${JSON.stringify(m.formula)})' title="Find other medicines with this formula" style="background:var(--primarySoft);color:var(--primary);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🔎 S.formula</button>`:""}
-            <button onclick="deleteMedicine('${m.id}')" class="icon-del-btn">🗑</button>
-          </div>
-        </div>
-        <div class="flex mt2" style="justify-content:space-between;align-items:center;">
-          <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${m.stockPills} medicine in stock${isExpired?" · expired":""}</span>
-          <div class="flex gap2">
-            <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
-            <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
-          </div>
-        </div>
-        ${extra}
-        ${activeBatches(m).length ? `
-          <div class="mt2 divider-top8">
-            <p class="small faint" style="margin:0 0 6px;">Batches (sold nearest-expiry first)</p>
-            ${fefoOrder(m).map(b=>{
-              const d = b.expiryDate ? daysUntil(b.expiryDate) : null;
-              const soon = d!==null && d<=10;
-              return `
-              <div class="flex gap2 mt2" style="align-items:center;">
-                <span class="small" style="flex-shrink:0;">${b.pillsRemaining} medicine</span>
-                <span class="small faint" style="flex-shrink:0;">${CURRENCY}${money(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
-                <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
-                ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
-                <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
-              </div>`;
-            }).join("")}
-          </div>` : ""}
-      </div>`;
-  }).join("");
+  // With a large medicine list (280+ in this clinic's case), building every card's full HTML
+  // — batch lists included — and inserting it all into the DOM in one go forces one huge
+  // layout/paint pass before anything appears, which is what made opening this tab feel slow.
+  // Instead: render just enough cards to fill the first screen instantly, then keep appending
+  // the rest in small chunks spread across animation frames, so the tab opens right away and
+  // the remaining medicines fill in moments later without freezing the UI in between.
+  const FIRST_BATCH = 15;
+  const CHUNK_SIZE = 30;
+  const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
 
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   document.getElementById("main").innerHTML = `
@@ -2525,8 +2549,25 @@ function renderInventory(){
       <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
     </div>
     ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
-    ${cards}
+    <div id="invCardsList">${firstCards}</div>
   `;
+
+  if(filtered.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      // Bail out quietly if a newer renderInventory() call has happened since (tab changed,
+      // search edited, a medicine saved/restocked/deleted) or the list container is simply no
+      // longer on screen — either way, this job's work is stale and should not touch the page.
+      if(myToken !== _invRenderToken) return;
+      const listEl = document.getElementById("invCardsList");
+      if(!listEl) return;
+      const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
+      listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
 }
 
 function renderInvFormModal(){
@@ -3282,7 +3323,70 @@ function dismissLowStock(id){
   saveInventory();
   render();
 }
+let _warnRenderToken = 0;
+function buildLowStockRow(m){
+  return `
+      <div class="card" style="border-color:#F3C6BE;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <span style="font-size:12px;font-weight:700;color:var(--danger);">${m.stockPills} medicine left</span>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="dismissLowStock('${m.id}')">We'll buy it later</button>
+        </div>
+      </div>`;
+}
+function buildHiddenLowStockRow(m){
+  return `
+      <div class="card" style="border-color:#F0DCB0;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <p class="small faint" style="margin:2px 0 0;">${m.stockPills} medicine left</p>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;" onclick="toggleWarnBack('${m.id}')">Turn warning back on</button>
+        </div>
+      </div>`;
+}
+function buildExpiringRow({med:m,batch:b,daysLeft}){
+  return `
+      <div class="card" style="border-color:#F3C6BE;">
+        <div class="row">
+          <div>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            <p class="small" style="margin:2px 0 0;color:var(--danger);font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
+          </div>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="disposeBatch('${m.id}','${b.id}')">Medicine disposed</button>
+        </div>
+      </div>`;
+}
+// Shared by the low-stock / hidden-warning / expiring lists below — same instant-first-batch,
+// background-chunk-the-rest approach used for Inventory, so Warnings stays fast if the number
+// of flagged medicines ever grows large too (currently each of these three lists is normally
+// a small subset of the full medicine count, but nothing stops that from changing over time).
+function fillListProgressively(containerId, items, buildRow, myToken){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
+  el.innerHTML = items.slice(0, FIRST_BATCH).map(buildRow).join("");
+  if(items.length <= FIRST_BATCH) return;
+  let idx = FIRST_BATCH;
+  const appendNextChunk = ()=>{
+    if(myToken !== _warnRenderToken) return; // superseded — tab changed or data edited since
+    const listEl = document.getElementById(containerId);
+    if(!listEl) return;
+    const chunk = items.slice(idx, idx+CHUNK_SIZE);
+    listEl.insertAdjacentHTML("beforeend", chunk.map(buildRow).join(""));
+    idx += CHUNK_SIZE;
+    if(idx < items.length) requestAnimationFrame(appendNextChunk);
+  };
+  requestAnimationFrame(appendNextChunk);
+}
 function renderStock(){
+  const myToken = ++_warnRenderToken;
   const list = lowStockList();
   const hidden = inventory.filter(m=>!m.deleted && m.noWarn && m.stockPills <= (m.lowStockAt ?? 0));
   const expiringAll = expiringBatches();
@@ -3299,38 +3403,18 @@ function renderStock(){
       ${list.length ? `<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);font-weight:700;">📦 ${list.length} low stock</span>` : ""}
     </div>` : "";
 
-  const hiddenHtml = hidden.length ? `
+  const hiddenHeadingHtml = hidden.length ? `
     <p class="small" style="font-weight:700;color:var(--warning);margin:${list.length?"18px":"0"} 0 8px;">
       ⚠ These are actually low too, but their warning is turned off
     </p>
-    ${hidden.map(m=>`
-      <div class="card" style="border-color:#F0DCB0;">
-        <div class="row">
-          <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <p class="small faint" style="margin:2px 0 0;">${m.stockPills} medicine left</p>
-          </div>
-          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;" onclick="toggleWarnBack('${m.id}')">Turn warning back on</button>
-        </div>
-      </div>`).join("")}` : "";
+    <div id="warnHiddenList"></div>` : "";
 
   const expiring = expiringAll;
-  const expiringHtml = expiring.length ? `
+  const expiringHeadingHtml = expiring.length ? `
     <p class="small" style="font-weight:700;color:var(--danger);margin:${list.length||hidden.length?"18px":"0"} 0 8px;">
       ⏳ Expiring within 10 days
     </p>
-    ${expiring.map(({med:m,batch:b,daysLeft})=>`
-      <div class="card" style="border-color:#F3C6BE;">
-        <div class="row">
-          <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <p class="small" style="margin:2px 0 0;color:var(--danger);font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
-          </div>
-          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="disposeBatch('${m.id}','${b.id}')">Medicine disposed</button>
-        </div>
-      </div>`).join("")}` : "";
+    <div id="warnExpiringList"></div>` : "";
 
   if(list.length===0 && hidden.length===0 && expiring.length===0){
     document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">All medicines are sufficiently stocked and nothing is expiring soon. 👍</p>`;
@@ -3340,20 +3424,13 @@ function renderStock(){
   document.getElementById("main").innerHTML = `
     ${summaryHtml}
     ${list.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
-    ${list.map(m=>`
-      <div class="card" style="border-color:#F3C6BE;">
-        <div class="row">
-          <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <span style="font-size:12px;font-weight:700;color:var(--danger);">${m.stockPills} medicine left</span>
-          </div>
-          <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="dismissLowStock('${m.id}')">We'll buy it later</button>
-        </div>
-      </div>`).join("")}
-    ${hiddenHtml}
-    ${expiringHtml}
+    <div id="warnLowStockList"></div>
+    ${hiddenHeadingHtml}
+    ${expiringHeadingHtml}
   `;
+  fillListProgressively("warnLowStockList", list, buildLowStockRow, myToken);
+  if(hidden.length) fillListProgressively("warnHiddenList", hidden, buildHiddenLowStockRow, myToken);
+  if(expiring.length) fillListProgressively("warnExpiringList", expiring, buildExpiringRow, myToken);
 }
 
 /* ===================== USERS / ROLES / LOGIN ===================== */
@@ -4230,7 +4307,23 @@ function shareNote(id){
   openShare(`📝 ${title}\n\n${body}`);
 }
 
+let _notesRenderToken = 0;
+function buildNoteCard(n){
+  return `
+      <div class="card">
+        <button onclick="openExistingNote('${n.id}')" style="width:100%;text-align:left;background:none;border:none;padding:0;cursor:pointer;">
+          <p class="item-title">${esc(n.title)}</p>
+          ${n.body?`<p class="small" style="color:var(--muted);margin:4px 0 0;">${esc(n.body.slice(0,120))}${n.body.length>120?"…":""}</p>`:""}
+          <p style="font-size:11px;color:var(--faint);margin:6px 0 0;">${fmtDateTime(n.updatedAt)}</p>
+        </button>
+        <div class="flex gap2 mt2">
+          <button class="btn btn-success flex1" style="padding:6px;font-size:12px;" onclick="shareNote('${n.id}')">📤 Share</button>
+          <button class="btn btn-outline" style="padding:6px 12px;" onclick="deleteNote('${n.id}')">🗑</button>
+        </div>
+      </div>`;
+}
 function renderNotes(){
+  const myToken = ++_notesRenderToken;
   const meLabel = `
     <div class="card" style="padding:10px 14px;">
       <p class="small faint" style="margin:0;">Notepad for <strong style="color:var(--text);">${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")}</strong> — private to you, not visible to other logged-in users on this device.</p>
@@ -4267,20 +4360,27 @@ function renderNotes(){
     </div>
 
     ${sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:""}
-    ${sorted.map(n=>`
-      <div class="card">
-        <button onclick="openExistingNote('${n.id}')" style="width:100%;text-align:left;background:none;border:none;padding:0;cursor:pointer;">
-          <p class="item-title">${esc(n.title)}</p>
-          ${n.body?`<p class="small" style="color:var(--muted);margin:4px 0 0;">${esc(n.body.slice(0,120))}${n.body.length>120?"…":""}</p>`:""}
-          <p style="font-size:11px;color:var(--faint);margin:6px 0 0;">${fmtDateTime(n.updatedAt)}</p>
-        </button>
-        <div class="flex gap2 mt2">
-          <button class="btn btn-success flex1" style="padding:6px;font-size:12px;" onclick="shareNote('${n.id}')">📤 Share</button>
-          <button class="btn btn-outline" style="padding:6px 12px;" onclick="deleteNote('${n.id}')">🗑</button>
-        </div>
-      </div>`).join("")}
+    <div id="notesList"></div>
     <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes. Medicines, bills, and records are shared with everyone on this device.</p>
   `;
+  // Same instant-first-batch, background-chunk-the-rest approach as Inventory/Warnings —
+  // future-proofing against notes piling up over years the same way bills and medicines can.
+  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
+  const listEl = document.getElementById("notesList");
+  if(listEl) listEl.innerHTML = sorted.slice(0, FIRST_BATCH).map(buildNoteCard).join("");
+  if(sorted.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      if(myToken !== _notesRenderToken) return;
+      const el = document.getElementById("notesList");
+      if(!el) return;
+      const chunk = sorted.slice(idx, idx+CHUNK_SIZE);
+      el.insertAdjacentHTML("beforeend", chunk.map(buildNoteCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < sorted.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
 }
 
 /* ===================== BACKUP & RESTORE ===================== */
