@@ -1140,7 +1140,22 @@ let wasMenuOpen = false; // menu-open state as of the last render(), for edge-de
 // it every time it's the one consumed, guarantees GoBack() always has something to consume and
 // always fires popstate — so this logic reliably sees every single back press, forever. It's
 // deliberately NOT pushed via pushNav()/navStack — it isn't a menu/tab to close, just plumbing.
-history.pushState({ floor:true }, "", location.href);
+// Why a big pre-loaded buffer of "floor" entries, pushed once at load, rather than replacing
+// one entry reactively each time it's consumed: WebViewer1.GoBack() (like history.back()
+// generally) silently no-ops once there's truly nothing left in the WebView's own navigation
+// history — no navigation happens and no popstate event fires. Since the double-back-to-exit
+// logic below lives entirely inside the popstate handler, without spare entries the very first
+// "nothing left to close" back press would never reach it at all. A single entry replenished
+// reactively (push a new one the instant the old one is consumed) had a real race: if back was
+// pressed again very fast, the second GoBack() could reach the WebView before the JS's own
+// replacement push had settled, finding nothing to consume. Front-loading hundreds of spare
+// entries instead means there's always one immediately ready — nothing needs to happen in
+// between presses, no matter how fast they come. 500 is enormously more than anyone pressing
+// back-with-nothing-open could realistically exhaust in one session (each one is used up only
+// by an "empty" back press specifically, not by normal menu/tab navigation), and a fresh set is
+// pushed every time the app is actually reopened anyway. Deliberately NOT pushed via
+// pushNav()/navStack — these aren't real menus/tabs, just plumbing to keep GoBack() functional.
+for(let i=0;i<500;i++) history.pushState({ floor:true }, "", location.href);
 let lastEmptyBackAt = 0;
 function pushNav(resolver){
   navStack.push(resolver);
@@ -1153,7 +1168,6 @@ window.addEventListener("popstate", function(){
     resolver();
     return;
   }
-  history.pushState({ floor:true }, "", location.href); // replace the floor entry just consumed
   const now = Date.now();
   if(now - lastEmptyBackAt < 2000){
     if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
