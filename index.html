@@ -1170,6 +1170,11 @@ window.addEventListener("popstate", function(){
   }
   const now = Date.now();
   if(now - lastEmptyBackAt < 2000){
+    // TEMPORARY diagnostic — remove once the exit-app bridge is confirmed working. If this
+    // toast shows up on the second back press, the JS side is 100% working correctly and the
+    // remaining problem is purely on the native App Inventor side. If it does NOT show up, the
+    // problem is still here in the browser-history/timing logic above, not in App Inventor.
+    showToast("Signaling app to close…");
     if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
       window.AppInventor.setWebViewString("EXIT_APP");
     }
