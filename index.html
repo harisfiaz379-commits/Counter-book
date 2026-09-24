@@ -1119,6 +1119,29 @@ window.addEventListener("resize", syncHeaderOffset);
    here and there, never a stuck or broken back button. */
 let navStack = []; // one resolver per outstanding pushed history entry, oldest first
 let wasMenuOpen = false; // menu-open state as of the last render(), for edge-detecting new opens
+// "Press back again to exit" — standard Android double-back pattern, for once there's truly
+// nothing of ours left to close (no menu open, no tab to step back to). This only reads
+// navStack.length and doesn't touch pushState/popState itself, deliberately, given the fragile
+// history above — it just watches for two real back presses in a row that both find nothing to
+// do, and asks the native app to close on the second one. window.AppInventor.setWebViewString
+// is the same bridge already used for print/export/update elsewhere in this file — closing the
+// app itself isn't something a web page can do on its own, so this needs one small matching
+// block on the App Inventor side: when Screen1.BackPressed, if WebViewer1.WebViewString =
+// "EXIT_APP" then close the application (and clear WebViewString after, same as other signals);
+// the else branch should unconditionally call WebViewer1.GoBack() every other time.
+//
+// Why a permanent "floor" entry is pushed below, and re-pushed every time it's consumed:
+// WebViewer1.GoBack() (like history.back() generally) is a silent no-op once there's truly
+// nothing left in the WebView's own navigation history — no navigation happens and, critically,
+// no popstate event fires. Since the double-back-to-exit logic below lives entirely inside the
+// popstate handler, without a floor entry the very first "nothing left to close" back press
+// would do nothing at all — GoBack() would silently no-op and this logic would never even run.
+// Pushing one extra, otherwise-meaningless history entry once at load, and immediately replacing
+// it every time it's the one consumed, guarantees GoBack() always has something to consume and
+// always fires popstate — so this logic reliably sees every single back press, forever. It's
+// deliberately NOT pushed via pushNav()/navStack — it isn't a menu/tab to close, just plumbing.
+history.pushState({ floor:true }, "", location.href);
+let lastEmptyBackAt = 0;
 function pushNav(resolver){
   navStack.push(resolver);
   history.pushState({ appNav:true }, "", location.href);
@@ -1128,6 +1151,17 @@ window.addEventListener("popstate", function(){
     const resolver = navStack.pop();
     wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
     resolver();
+    return;
+  }
+  history.pushState({ floor:true }, "", location.href); // replace the floor entry just consumed
+  const now = Date.now();
+  if(now - lastEmptyBackAt < 2000){
+    if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+      window.AppInventor.setWebViewString("EXIT_APP");
+    }
+  } else {
+    lastEmptyBackAt = now;
+    showToast("Press back again to exit");
   }
 });
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
