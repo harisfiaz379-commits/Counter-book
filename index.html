@@ -329,6 +329,7 @@
 <div id="forgotPinModalRoot"></div>
 <div id="datePickerModalRoot"></div>
 <div id="addUserLoginModalRoot"></div>
+<div id="scanModalRoot"></div>
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
 
@@ -337,7 +338,16 @@
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
-const NOAC = 'autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true"';
+// spellcheck was previously disabled here (spellcheck="false") to avoid red squiggly
+// underlines on medicine names being flagged as "misspelled." Removed as a targeted test for
+// dropped characters while typing fast: disabling spellcheck is known to make some Android
+// keyboard versions fall back to a different, less reliable internal input-handling path for
+// that field specifically — which fits the reported symptom far better than anything about
+// this app's own re-rendering (already ruled out: the wrong characters appear inside the
+// input's own native display, not in anything this page draws). If this fixes it, the
+// trade-off is medicine names may show spellcheck underlines; if it doesn't, this is safe to
+// revert and the real cause is still elsewhere.
+const NOAC = 'autocomplete="off" autocorrect="off" data-lpignore="true"';
 let inventory = [];
 let transactions = [];
 let monthAdjustments = {}; // { "YYYY-MM": {doctorFee, medTotal, testsTotal, othersTotal, updatedAt} } — manual corrections, not tied to any bill
@@ -394,8 +404,9 @@ function newBillState(){
     specialQuery:"", selectedSpecialMedId:null, specialPills:"", applyingFeeMode:"perItem", applyingFeeDraft:"", wholeApplyingFee:"" };
 }
 let bill = newBillState();
-let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false},
-            restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", editId:null,
+let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""},
+            scanText:"", // transient: text sitting in the New medicine form's "scan or paste barcode" box
+            restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", restockLotNo:"", restockScanText:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
 let backupUi = { open:false };
 // Custom in-theme calendar (replaces native <input type="date">, whose picker/handles are
@@ -1069,6 +1080,28 @@ function scheduleSearchRender(){
   if(searchRenderTimer) clearTimeout(searchRenderTimer);
   searchRenderTimer = setTimeout(()=>{ searchRenderTimer = null; render(); }, 220);
 }
+// Search boxes were still dropping characters during fast forward typing even after the
+// general dropped-character fix above (render()'s "swap the original node back" logic) was
+// applied everywhere — because render() still MOMENTARILY DETACHES the focused input from the
+// document as part of resetting main's innerHTML, before reattaching that same node a moment
+// later. Browsers treat a focused element becoming detached as an implicit blur, which aborts
+// whatever the Android keyboard's IME was mid-composing (composition state lives on the DOM
+// node's live attachment, not just the node object) — even though the exact node comes back.
+// scheduleRender()'s near-immediate (~16ms, one animation frame) cadence means there's barely
+// ever more than a single character "in flight" and uncommitted when that interruption lands,
+// so the loss is imperceptible — which is why every other input in the app was already fine.
+// scheduleSearchRender()'s 220ms debounce, by contrast, gives Gboard's predictive/batched
+// composition far longer to build up a whole in-flight word before that same interruption
+// hits, losing several characters at once instead of at most one.
+// Fix: only use the slower debounce for an actual deletion (still needed so a HELD backspace's
+// native OS repeat-delete gesture isn't interrupted mid-hold) — forward typing (value getting
+// longer, or same length e.g. after a select-all-retype) now uses the same fast scheduleRender()
+// that already works correctly everywhere else. Comparing the old vs. new value's length avoids
+// needing a separate keydown listener just to tell forward typing apart from deletion.
+function scheduleQueryRender(prevValue, newValue){
+  if((newValue||"").length < (prevValue||"").length) scheduleSearchRender();
+  else scheduleRender();
+}
 /* ===================== RENDER (with focus preservation) ===================== */
 function syncHeaderOffset(){
   // header is position:fixed (see CSS) so it's out of normal document flow; without this,
@@ -1186,7 +1219,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || backupUi.open ||
+    printerUi.open || backupUi.open || scanUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1198,6 +1231,7 @@ function closeTopMenu(){
   // open at all (e.g. a leftover history entry from a menu closed via its own button) — every
   // check below just falls through and nothing happens.
   if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
+  if(scanUi.open){ stopCameraScan(); return; }
   if(shareText!==null){ closeShare(); return; }
   if(datePickerUi.open){ closeDatePicker(); return; }
   if(catUi.open){ closeCategoryEditor(); return; }
@@ -1241,6 +1275,7 @@ function syncMenuHistory(){
 function render(){
   const active = document.activeElement;
   const id = active && active.id;
+  const isTextField = active && (active.tagName==="INPUT" || active.tagName==="TEXTAREA");
   const selStart = active && typeof active.selectionStart==="number" ? active.selectionStart : null;
   const selEnd = active && typeof active.selectionEnd==="number" ? active.selectionEnd : null;
 
@@ -1288,13 +1323,27 @@ function render(){
   renderReceiptModal();
   renderRecoveryModal();
   renderDatePickerModal();
+  renderScanModal();
 
   const fab = document.getElementById("invFab");
   if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
 
   if(id){
     const el = document.getElementById(id);
-    if(el){
+    if(el && isTextField && el !== active && el.parentNode && el.tagName===active.tagName){
+      // The real fix for dropped characters while typing fast: a full-section rebuild
+      // recreates this exact input as a brand-new DOM node even when nothing about its own
+      // value actually needed to change (it was already kept in sync via oninput before this
+      // render ever ran). Swapping the ORIGINAL node back into the new one's place — rather
+      // than just focusing the new node — means the input the user is actively typing into is
+      // never destroyed in the first place, so an Android keyboard's in-progress composition
+      // (how fast/batched typing is often delivered) can't get silently interrupted mid-word.
+      // Its oninput/attributes never differ between renders for the same id, so the original
+      // node's own handler stays correctly wired with nothing to re-attach.
+      el.parentNode.replaceChild(active, el);
+      if(selStart!=null && active.setSelectionRange){ try{ active.setSelectionRange(selStart, selEnd); }catch(e){} }
+      active.focus();
+    } else if(el){
       el.focus();
       if(selStart!=null && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
     }
@@ -1577,7 +1626,7 @@ function saveDefaultDoctorFee(){
 
 function onBillPatient(v){ bill.patient=v; scheduleRender(); }
 function onBillFee(v){ bill.fee=v; scheduleRender(); }
-function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; scheduleSearchRender(); }
+function onBillQuery(v){ scheduleQueryRender(bill.query, v); bill.query=v; bill.selectedMedId=null; }
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
 function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
 function onBillRemarks(v){
@@ -1717,7 +1766,7 @@ function pendingSpecialBillSubtotal(){
 
 /* ---- Special-category medicines: separate search/add flow, see specialMatches() in
    renderBill and the state comment in newBillState() ---- */
-function onBillSpecialQuery(v){ bill.specialQuery=v; bill.selectedSpecialMedId=null; scheduleSearchRender(); }
+function onBillSpecialQuery(v){ scheduleQueryRender(bill.specialQuery, v); bill.specialQuery=v; bill.selectedSpecialMedId=null; }
 function pickBillSpecialMed(id){ bill.selectedSpecialMedId=id; const m=inventory.find(x=>x.id===id); bill.specialQuery=m?m.name:""; render(); }
 function onBillSpecialPills(v){ bill.specialPills=v; scheduleRender(); }
 function setBillSpecialPillsQuick(n){ bill.specialPills=String(n); render(); }
@@ -2054,11 +2103,102 @@ function onCloudUrl(v){ printerUi.cloudUrl = v; }
 function onWifiIp(v){ printerUi.wifiIp = v; }
 function onWifiPort(v){ printerUi.wifiPort = v; }
 
+// Stored formulas use inconsistent separators between components (e.g. "valsartan+Amlodipine",
+// "Budesonide+formoterol Fumrate Dihydrate") - typing the exact separator (or lacking one) used
+// in a particular entry shouldn't be required to find it. Both sides are normalized to single
+// spaces between words before matching, so "valsartan amlodipine" (space, no +) still matches
+// a formula stored with "+", and vice versa.
+// Extracts numeric tokens (e.g. "160/5 mg" -> ["160","5"], "400/12 mcg" -> ["400","12"]) so a
+// strength search works purely off the numbers, ignoring unit (mg vs mcg) and formatting
+// differences between entries.
+function extractNumbers(s){
+  return (s||"").match(/\d+(\.\d+)?/g) || [];
+}
+function strengthMatchesQuery(strength, rawQuery){
+  const qNums = extractNumbers(rawQuery);
+  if(!qNums.length) return false;
+  const sNums = extractNumbers(strength);
+  return qNums.some(qn=>sNums.includes(qn));
+}
+// A plain category query ("tablet") matches medicines of that category whether or not they
+// carry the S. tag (m.sTag) shown in the UI (e.g. "S.Tablet") - that tag is a display prefix,
+// not a separate category value. An explicit S.-prefixed query ("s.tablet" or "s tablet")
+// is treated as more specific and only matches medicines that actually carry that tag,
+// excluding otherwise-identical untagged ones of the same category.
+// Lets a search combine name, formula, strength, and category terms freely, in any order
+// (e.g. "Tarclya 5 tablet", "tablet 5 mirogabalin", "5 tarclya tablet" all work the same way).
+// Each whitespace-separated word in the query just has to be found SOMEWHERE among the
+// medicine's name / formula / strength-number / category - it doesn't matter which field, and
+// different words can each match a different field. All words must be satisfied (AND across
+// words), but each individual word can match any field (OR across fields).
+function tokenMatchesMedicine(m, tok){
+  if((m.name||"").toLowerCase().includes(tok)) return true;
+  const normFormula = normalizeFormulaText(m.formula);
+  const normTok = normalizeFormulaText(tok);
+  if(normTok && normFormula.includes(normTok)) return true;
+  if(/^\d+(\.\d+)?$/.test(tok) && extractNumbers(m.mg).includes(tok)) return true;
+  if(categoryMatchesQuery(m, tok)) return true;
+  return false;
+}
+function medicineMatchesQuery(m, rawQuery){
+  const tokens = (rawQuery||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if(!tokens.length) return false;
+  return tokens.every(tok=>tokenMatchesMedicine(m,tok));
+}
+function categoryMatchesQuery(m, rawQuery){
+  const q = (rawQuery||"").toLowerCase().trim();
+  if(!q) return false;
+  const cat = (m.category||m.specialCategory||"").toLowerCase();
+  if(!cat) return false;
+  const sMatch = q.match(/^s[.\s]+(.+)$/); // requires "s." or "s " + something, not a bare "s..." category name like "Syrup"
+  if(sMatch){
+    const rest = sMatch[1].trim();
+    return (cat.startsWith(rest) || cat.includes(rest)) && !!m.sTag;
+  }
+  return cat.startsWith(q) || cat.includes(q);
+}
+function normalizeFormulaText(s){
+  return (s||"").toLowerCase().replace(/[+/,&\-()]/g," ").replace(/\s+/g," ").trim();
+}
+function formulaMatchesQuery(formula, rawQuery){
+  return normalizeFormulaText(formula).includes(normalizeFormulaText(rawQuery));
+}
+// Ranks a formula match by how many of the QUERY's words, taken from the start, form a
+// matching prefix of the formula's own words - e.g. searching "gh hh jj kk" ranks a formula
+// of exactly "gh hh jj kk" (or one that starts with all 4 of those words) highest, then a
+// formula starting with just "gh hh jj", then "gh hh", then "gh" alone; formulas where the
+// query only appears as a substring somewhere in the middle (not as this leading prefix)
+// still show up (existing broad match), just ranked below all of the above tiers.
+function formulaRankScore(formula, rawQuery){
+  const fWords = normalizeFormulaText(formula).split(" ").filter(Boolean);
+  const qWords = normalizeFormulaText(rawQuery).split(" ").filter(Boolean);
+  if(!qWords.length) return 0;
+  let matchLen = 0;
+  for(let i=0;i<qWords.length;i++){
+    if(fWords[i] === qWords[i]) matchLen = i+1; else break;
+  }
+  if(matchLen === qWords.length) return fWords.length===qWords.length ? 10000 : 9000; // full query matched as a leading prefix
+  if(matchLen > 0) return 1000 + matchLen; // partial leading-word match, longer prefix ranks higher
+  return formulaMatchesQuery(formula, rawQuery) ? 100 : 0; // query found only as a substring, not a leading prefix
+}
+// Combines name, formula, strength, and category relevance for sorting search results, highest first.
+function searchRankScore(m, rawQuery){
+  const q = normalizeFormulaText(rawQuery);
+  const nameL = (m.name||"").toLowerCase();
+  if(nameL === q) return 20000;
+  if(nameL.startsWith(q)) return 15000;
+  const fScore = formulaRankScore(m.formula, rawQuery);
+  if(nameL.includes(q)) return Math.max(fScore, 12000);
+  if(fScore > 0) return fScore;
+  if(categoryMatchesQuery(m, rawQuery)) return 200;
+  return strengthMatchesQuery(m.mg, rawQuery) ? 50 : 0;
+}
+
 function renderBill(){
   const q = bill.query.trim().toLowerCase();
   // Medicines carrying a Special category are deliberately excluded from this normal
   // search — they only surface through the separate special search below.
-  const matches = q ? inventory.filter(m=>!m.deleted && !m.specialCategory && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q))).slice(0,6) : [];
+  const matches = q ? inventory.filter(m=>!m.deleted && !m.specialCategory && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
   const selMed = inventory.find(m=>m.id===bill.selectedMedId);
   // Whether the shared "Days" card will render at all — either because a same-days-linked
   // item already exists, or because the medicine currently being composed is itself headed
@@ -2066,7 +2206,7 @@ function renderBill(){
   const showGlobalDaysCard = bill.items.some(it=>it.linkedToGlobalDays) || (!!selMed && bill.qtyMode==='dose' && bill.daysMode==='same');
 
   const sq = bill.specialQuery.trim().toLowerCase();
-  const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && (m.name.toLowerCase().includes(sq)||(m.formula||"").toLowerCase().includes(sq))).slice(0,6) : [];
+  const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && medicineMatchesQuery(m,sq)).sort((a,b)=>searchRankScore(b,sq)-searchRankScore(a,sq)).slice(0,6) : [];
   const selSpecialMed = inventory.find(m=>m.id===bill.selectedSpecialMedId);
 
   let itemsHtml = "";
@@ -2377,8 +2517,213 @@ function renderBill(){
   `;
 }
 
+/* ===================== BARCODE SCANNING (GS1 DataMatrix / GS1-128) ===================== */
+/* Medicine boxes in India print a small GS1 DataMatrix (sometimes a GS1-128 linear barcode)
+   next to the human-readable batch/mfg/expiry/MRP text — see the "what's in that square
+   barcode" conversation earlier. Decoding it is a purely local, offline operation (the bytes
+   are all sitting right there in the barcode); no internet or server lookup is needed to pull
+   out the GTIN/batch/expiry fields extracted below.
+   Two ways to feed a scan into this app, both wired to the same parser/handler:
+   1) A text box the scan lands in — this is the PRIMARY, always-reliable path. Almost every
+      handheld pharmacy barcode scanner (USB or Bluetooth) is a plain "HID" keyboard device:
+      point it at a code, it "types" the decoded text into whatever input is focused, then
+      sends Enter — no app-side camera code needed at all, and it works fully offline with
+      zero changes to the App Inventor project.
+   2) An optional phone-camera scanner (openCameraScan below) using getUserMedia + the ZXing
+      barcode library loaded on demand from a CDN. IMPORTANT CAVEAT: the stock App Inventor
+      WebViewer component does NOT grant camera permission to web content by default (same
+      class of limitation as it not handling file downloads — see checkForAppUpdate's comment
+      above). This button will likely fail silently inside the packaged APK unless the
+      WebViewer is swapped for a camera-capable variant/extension. It works fine when this
+      page is opened directly in a normal mobile browser (e.g. Chrome), which is useful for
+      testing. Treat option 1 above as the dependable one. */
+function gs1SetField(out, ai, value){
+  if(ai==="01") out.gtin = value;
+  else if(ai==="10") out.batch = value;
+  else if(ai==="11") out.mfgDate = gs1DateToIso(value);
+  else if(ai==="17") out.expiryDate = gs1DateToIso(value);
+}
+// GS1 dates are 6-digit YYMMDD. A day of "00" is valid per the GS1 spec and means "the last
+// day of that month" (common when a manufacturer only tracks month/year) — handled by
+// rolling to the 1st of the NEXT month and stepping back one day.
+function gs1DateToIso(yymmdd){
+  if(!/^\d{6}$/.test(yymmdd)) return null;
+  const yy = Number(yymmdd.slice(0,2)), mm = Number(yymmdd.slice(2,4)), dd = Number(yymmdd.slice(4,6));
+  const year = 2000 + yy; // every medicine box scanned today safely falls in the 2000s
+  if(mm<1||mm>12) return null;
+  if(dd===0){
+    const d = new Date(year, mm, 1); // JS months are 0-indexed, so "mm" here already means "1st of next month"
+    d.setDate(d.getDate()-1);
+    return ymd(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+  if(dd<1||dd>31) return null;
+  return ymd(year, mm-1, dd);
+}
+// Parses a scanned/typed GS1 element string into just the fields Counter Book uses. Handles
+// two shapes a scanner can hand back:
+//  - raw form: AIs run back-to-back, with an ASCII GS (0x1D) character ending any
+//    variable-length field that isn't already the last one in the string
+//  - "human-readable" form some scanners/apps emit instead, e.g. "(01)08901234567890(17)280430(10)ABC123"
+function parseGS1Barcode(raw){
+  const out = { gtin:null, batch:null, mfgDate:null, expiryDate:null };
+  if(!raw) return out;
+  if(raw.indexOf("(")!==-1){
+    const re = /\((\d{2,4})\)([^(]*)/g;
+    let m;
+    while((m = re.exec(raw))) gs1SetField(out, m[1], m[2].trim());
+    if(out.gtin || out.batch || out.mfgDate || out.expiryDate) return out;
+  }
+  const GS = "\x1D";
+  let s = raw;
+  while(s.length>=2){
+    const ai = s.slice(0,2);
+    if(ai==="01" && s.length>=16){ gs1SetField(out,"01", s.slice(2,16)); s = s.slice(16); continue; }
+    if((ai==="11"||ai==="17") && s.length>=8){ gs1SetField(out, ai, s.slice(2,8)); s = s.slice(8); continue; }
+    if(ai==="10" || ai==="21"){
+      const rest = s.slice(2);
+      const gsIdx = rest.indexOf(GS);
+      const val = gsIdx===-1 ? rest : rest.slice(0,gsIdx);
+      gs1SetField(out, ai, val);
+      s = gsIdx===-1 ? "" : rest.slice(gsIdx+1);
+      continue;
+    }
+    break; // unsupported/unknown AI — stop rather than mis-parsing whatever follows it
+  }
+  return out;
+}
+
+let scanUi = { open:false, pending:null, error:"" }; // pending: "newmed", or {kind:"restock", medId}
+let _zxingLoadPromise = null, _zxingReader = null;
+function loadZXing(){
+  if(window.ZXing) return Promise.resolve();
+  if(_zxingLoadPromise) return _zxingLoadPromise;
+  _zxingLoadPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+    s.onload = ()=>resolve();
+    s.onerror = ()=>reject(new Error("Couldn't load the scanner library — needs internet the first time it's used."));
+    document.head.appendChild(s);
+  });
+  return _zxingLoadPromise;
+}
+async function openCameraScan(target){
+  scanUi = { open:true, pending: target, error:"" };
+  renderScanModal();
+  syncMenuHistory();
+  try{
+    await loadZXing();
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
+    ]);
+    _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+    await _zxingReader.decodeFromVideoDevice(undefined, "scanVideoEl", (result)=>{
+      if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); }
+      // (a "not found this frame" error fires continuously while nothing's in view yet — not a real failure, ignored)
+    });
+  }catch(e){
+    scanUi.error = "Couldn't start the camera: " + (e && e.message ? e.message : "unknown error") + ". Use the scan-and-paste box instead — it works fully offline with any USB/Bluetooth barcode scanner.";
+    renderScanModal();
+  }
+}
+function stopCameraScan(){
+  if(_zxingReader){ try{ _zxingReader.reset(); }catch(e){} _zxingReader=null; }
+  scanUi.open = false;
+  renderScanModal();
+}
+function renderScanModal(){
+  const root = document.getElementById("scanModalRoot");
+  if(!root) return;
+  if(!scanUi.open){ root.innerHTML=""; return; }
+  // Once the live camera feed is showing, leave the DOM alone — the main render() function
+  // runs on all sorts of unrelated events (tab switches, a toast, cloud sync landing) and a
+  // fresh innerHTML write would silently replace the <video> element ZXing attached the
+  // camera stream to, killing the preview even though scanning is still "running" underneath.
+  if(!scanUi.error && document.getElementById("scanVideoEl")) return;
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) stopCameraScan()">
+      <div class="modal" style="border-radius:16px;">
+        <div class="modal-head"><strong>Scan barcode</strong><button class="modal-x" onclick="stopCameraScan()">✕</button></div>
+        <div style="padding:14px 16px;">
+          ${scanUi.error ? `<p class="small" style="color:var(--danger);margin:0;">${esc(scanUi.error)}</p>` :
+            `<video id="scanVideoEl" style="width:100%;border-radius:10px;background:#000;" muted playsinline></video>
+             <p class="small faint" style="margin:8px 0 0;">Point the camera at the barcode on the box.</p>`}
+        </div>
+      </div>
+    </div>`;
+}
+// Shared entry point for BOTH the scan-and-paste box and the camera callback.
+function handleScanText(raw){
+  const target = scanUi.pending;
+  scanUi.pending = null;
+  const text = (raw||"").trim();
+  if(!text) return;
+  const parsed = parseGS1Barcode(text);
+  if(!parsed.gtin && !parsed.batch && !parsed.expiryDate){
+    showToast("⚠ Couldn't find a GTIN, batch, or expiry in that code");
+    return;
+  }
+  if(target==="newmed") applyScanToNewMedForm(parsed);
+  else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
+}
+function onInvScanInput(v){ inv.scanText=v; }
+function applyInvScan(){
+  const text = inv.scanText.trim();
+  inv.scanText = "";
+  if(!text) return;
+  scanUi.pending = "newmed";
+  handleScanText(text);
+}
+function clearInvScanLink(){ inv.form.gtin=""; render(); }
+function applyScanToNewMedForm(parsed){
+  if(parsed.gtin){
+    const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
+    if(existing){
+      askConfirm(`This barcode is already saved against "${existing.name}". Close this form and restock that medicine instead?`, ()=>{
+        inv.showForm = false;
+        toggleRestock(existing.id);
+      });
+      return;
+    }
+    inv.form.gtin = parsed.gtin;
+  }
+  // A brand-new medicine has no batch yet, so a scanned batch/expiry has nowhere to land here —
+  // only the GTIN link (above) can actually be saved from this form. Tell the user plainly
+  // instead of pretending those fields were captured.
+  const bits = [];
+  if(parsed.gtin) bits.push("barcode linked to this medicine");
+  if(parsed.expiryDate || parsed.batch) bits.push("enter its batch/expiry on the first Restock");
+  showToast(bits.length ? "✓ "+bits.join(" — ") : "Scanned, but nothing usable was found in that code");
+  render();
+}
+function onRestockScanInput(v){ inv.restockScanText=v; }
+function applyRestockScanInput(medId){
+  const text = inv.restockScanText.trim();
+  inv.restockScanText = "";
+  if(!text) return;
+  scanUi.pending = { kind:"restock", medId };
+  handleScanText(text);
+}
+function applyScanToRestock(medId, parsed){
+  const m = inventory.find(x=>x.id===medId);
+  if(!m) return;
+  const proceed = ()=>{
+    if(parsed.expiryDate) inv.restockExpiry = parsed.expiryDate;
+    if(parsed.batch) inv.restockLotNo = parsed.batch;
+    if(parsed.gtin && !m.gtin){ m.gtin = parsed.gtin; m.updatedAt = Date.now(); saveInventory(); }
+    showToast("✓ Batch details filled in from the scan — check them, then tap Add");
+    render();
+  };
+  if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
+    askConfirm(`This barcode doesn't match ${esc(m.name)}'s saved barcode. Use the scanned batch/expiry anyway?`, proceed);
+  } else {
+    proceed();
+  }
+}
+
 /* ===================== INVENTORY TAB ===================== */
-function onInvQuery(v){ inv.query=v; scheduleSearchRender(); }
+function onInvQuery(v){ scheduleQueryRender(inv.query, v); inv.query=v; }
 function searchInvByFormula(formula){
   inv.query = formula || "";
   render();
@@ -2401,13 +2746,14 @@ function onInvCategoryPicked(v){
   else { inv.form.category=v; inv.form.specialCategory=""; }
   render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
-function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false}; } render(); }
+function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
 function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; render(); }
 function addMedicine(){
   const f = inv.form;
   if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
   inventory.push({ id:uid(), name:f.name.trim(), category:f.category||"", specialCategory:f.specialCategory||"", formula:f.formula.trim(), mg:f.mg.trim(),
     mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[], sTag:!!f.sTag,
+    gtin: f.gtin||"", // captured from a barcode scan, if one was done — lets a future scan of the SAME product recognize it and offer Restock instead of a duplicate entry
     updatedAt:Date.now(), deleted:false });
   saveInventory();
   inv.showForm=false;
@@ -2423,10 +2769,11 @@ function deleteMedicine(id){
     saveInventory(); render();
   });
 }
-function toggleRestock(id){ inv.editId=null; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; render(); }
+function toggleRestock(id){ inv.editId=null; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
 function onRestockMrp(v){ inv.restockMrp=v; }
+function onRestockLotNo(v){ inv.restockLotNo=v; }
 function doRestock(id){
   const boxes = Number(inv.restockBoxes);
   if(!boxes||boxes<=0) return;
@@ -2434,7 +2781,7 @@ function doRestock(id){
   if(m){
     const mrpVal = (inv.restockMrp!=="" && Number(inv.restockMrp)>0) ? Number(inv.restockMrp) : null;
     m.batches = m.batches||[];
-    m.batches.push({ id:uid(), boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+    m.batches.push({ id:uid(), boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, lotNo: inv.restockLotNo.trim()||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
     if(mrpVal!=null){ m.mrpPerBox = mrpVal; m.updatedAt = Date.now(); } // new MRP becomes the current default going forward
     recomputeStock(m);
     // A restock resolves whatever low-stock situation led to "we'll buy it later" being tapped
@@ -2443,7 +2790,7 @@ function doRestock(id){
     if(m.noWarn && m.stockPills > (m.lowStockAt??0)){ m.noWarn = false; m.updatedAt = Date.now(); }
   }
   saveInventory();
-  inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp="";
+  inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText="";
   render();
 }
 function openEdit(id){
@@ -2499,6 +2846,12 @@ function buildInvCard(m){
   if(inv.restockId===m.id){
     extra = `
       <div class="mt2 divider-top8">
+        <label class="small" style="display:block;margin-bottom:4px;">Scan the new box's barcode (auto-fills expiry &amp; batch below)</label>
+        <div class="flex gap2 mb1">
+          <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" placeholder="Tap here, then scan">
+          <button type="button" class="btn btn-outline" onclick="applyRestockScanInput('${m.id}')">Apply</button>
+        </div>
+        <button type="button" onclick='openCameraScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0 8px;">📷 Or use phone camera</button>
         <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
@@ -2508,7 +2861,9 @@ function buildInvCard(m){
         </div>
         <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
         <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
-        <label class="small mt2" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
+        <label class="small mt2" style="display:block;">Batch / lot number (optional)</label>
+        <input ${NOAC} id="restockLotNo-${m.id}" value="${esc(inv.restockLotNo)}" oninput="onRestockLotNo(this.value)" placeholder="e.g. 151" class="mb2">
+        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
         <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
       </div>`;
   }
@@ -2577,6 +2932,7 @@ function buildInvCard(m){
             <div class="flex gap2 mt2" style="align-items:center;">
               <span class="small" style="flex-shrink:0;">${b.pillsRemaining} medicine</span>
               <span class="small faint" style="flex-shrink:0;">${CURRENCY}${money(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
+              ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
               <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
               ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
               <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
@@ -2588,7 +2944,7 @@ function buildInvCard(m){
 function renderInventory(){
   const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
-  const filtered = inventory.filter(m=>!m.deleted && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q)));
+  const filtered = inventory.filter(m=>!m.deleted && (!q || medicineMatchesQuery(m,q))).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
 
   // With a large medicine list (280+ in this clinic's case), building every card's full HTML
   // — batch lists included — and inserting it all into the DOM in one go forces one huge
@@ -2601,10 +2957,23 @@ function renderInventory(){
   const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
 
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
+  // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
+  // from the normal New Bill search — see specialMatches()). S. tagged = m.sTag, which is a
+  // completely separate flag (the little red "S" prefix) that can be set on ANY medicine
+  // regardless of whether it has a regular category, a special category, or neither.
+  const specialMedicines = inventory.filter(m=>!m.deleted && m.specialCategory).length;
+  const sTaggedMedicines = inventory.filter(m=>!m.deleted && m.sTag).length;
+  const nonSpecialMedicines = inventory.filter(m=>!m.deleted && !m.specialCategory).length;
   document.getElementById("main").innerHTML = `
-    <div class="row mb2" style="padding:0 2px;">
-      <span class="small" style="font-weight:700;color:var(--muted);">Total medicines</span>
-      <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${totalMedicines}</span>
+    <div class="mb2" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;">
+      <div class="flex gap2">
+        <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);">${specialMedicines}</span>
+        <span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);">${sTaggedMedicines}</span>
+      </div>
+      <div class="flex gap2">
+        <span class="pill-badge" style="background:transparent;color:var(--primary);">${totalMedicines}</span>
+        <span class="pill-badge" style="background:var(--successSoft);color:var(--success);">${nonSpecialMedicines}</span>
+      </div>
     </div>
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
@@ -2665,6 +3034,15 @@ function renderInvFormModal(){
           </div>
           <label class="small">Warn me when stock falls to (medicine)</label>
           <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
+          <div class="divider-top" style="padding-top:10px;">
+            <label class="small" style="display:block;margin-bottom:4px;">Scan barcode (USB/Bluetooth scanner, or paste the code)</label>
+            <div class="flex gap2 mb1">
+              <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" placeholder="Tap here, then scan">
+              <button type="button" class="btn btn-outline" onclick="applyInvScan()">Apply</button>
+            </div>
+            <button type="button" onclick="openCameraScan('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;">📷 Or use phone camera</button>
+            ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
+          </div>
         </div>
         <div class="modal-actions">
           <button class="btn btn-outline flex1" onclick="toggleInvForm()">Cancel</button>
@@ -3074,7 +3452,7 @@ function renderRecordArchive(){
 }
 function toggleExpand(id){ rec.expandedId = rec.expandedId===id?null:id; rec.editingId=null; rec.expandedTxSection=null; render(); }
 function toggleTxSection(section){ rec.expandedTxSection = rec.expandedTxSection===section ? null : section; render(); }
-function onRecordsSearch(v){ rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; scheduleSearchRender(); }
+function onRecordsSearch(v){ scheduleQueryRender(rec.searchQuery, v); rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; }
 function txDateSearchString(ts){
   const d = new Date(ts);
   return (d.toDateString()+" "+d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleDateString()).toLowerCase();
@@ -3118,7 +3496,7 @@ function openEditTx(id){
 function cancelEditTx(){ rec.editingId=null; render(); }
 function onEditTxPatient(v){ recEdit.patient=v; }
 function onEditTxFee(v){ recEdit.fee=v; scheduleRender(); }
-function onEditTxQuery(v){ recEdit.query=v; recEdit.selectedMedId=null; scheduleRender(); }
+function onEditTxQuery(v){ scheduleQueryRender(recEdit.query, v); recEdit.query=v; recEdit.selectedMedId=null; }
 function onEditTxPills(v){ recEdit.pills=v; scheduleRender(); }
 function pickEditTxMed(id){ recEdit.selectedMedId=id; const m=inventory.find(x=>x.id===id); recEdit.query=m?m.name:""; render(); }
 function addEditTxItem(){
@@ -3167,7 +3545,7 @@ function saveEditTx(){
 
 function renderTxEditForm(t){
   const q = recEdit.query.trim().toLowerCase();
-  const matches = q ? inventory.filter(m=>!m.deleted && (m.name.toLowerCase().includes(q)||(m.formula||"").toLowerCase().includes(q))).slice(0,6) : [];
+  const matches = q ? inventory.filter(m=>!m.deleted && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
   const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
   return `
     <div class="mt3 divider-top">
@@ -4330,7 +4708,7 @@ function renderManageUsersModal(){
 }
 
 /* ===================== NOTEPAD TAB (multiple notes, one private notepad per logged-in user) ===================== */
-function onNotesSearch(v){ notesUi.searchQuery=v; scheduleRender(); }
+function onNotesSearch(v){ scheduleQueryRender(notesUi.searchQuery, v); notesUi.searchQuery=v; }
 function openNewNote(){ notesUi.openId="new"; notesUi.draftTitle=""; notesUi.draftBody=""; render(); }
 function openExistingNote(id){
   const n = notes.find(x=>x.id===id);
@@ -4468,6 +4846,7 @@ function mergeInventory(localInv, incomingInv){
       match.specialCategory = match.specialCategory || im.specialCategory || "";
       match.formula = match.formula || im.formula || "";
       match.mg = match.mg || im.mg || "";
+      match.gtin = match.gtin || im.gtin || "";
       match.deleted = match.deleted || im.deleted;
       recomputeStock(match);
     } else {
@@ -4509,7 +4888,7 @@ function pickNewerMedicine(a,b){
   const base = aT>=bT ? a : b;
   return {
     id: a.id, name: base.name, category: base.category||"", specialCategory: base.specialCategory||"", formula: base.formula||"", mg: base.mg||"",
-    mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox,
+    mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox, gtin: base.gtin||"",
     lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, sTag: !!base.sTag, deleted: !!base.deleted,
     updatedAt: Math.max(aT,bT),
     batches: reconcileBatchesForSync(a.batches, b.batches)
@@ -4856,7 +5235,16 @@ function applyRemoteSnapshot(data){
   suppressPush = true;
   mergeCloudSnapshotInto(data);
   suppressPush = false;
-  render();
+  // Was a direct render() — this fires whenever cloud sync receives ANYTHING (this device's own
+  // writes echoing back, another device's changes, a routine reconnect), completely independent
+  // of what the person is doing at that moment. A direct, unthrottled render() here could land
+  // mid-keystroke in ANY search box on ANY tab, bypassing every one of the input-protection
+  // fixes elsewhere in this file, since those only guard against a field's OWN typing triggering
+  // its own render — not an unrelated background event triggering one. Routing it through the
+  // same trailing-debounce used for search boxes means: if nothing is being typed right now, the
+  // ~220ms delay is imperceptible; if something IS being typed, this simply waits for that
+  // typing to actually pause first, same guarantee a search box's own input already gets.
+  scheduleSearchRender();
 }
 function schedulePushToCloud(){
   if(!fbDb || suppressPush) return;
