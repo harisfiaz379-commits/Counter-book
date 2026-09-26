@@ -2635,6 +2635,9 @@ async function openCameraScan(target, _isRetry){
       ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
       ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
     ]);
+    // TRY_HARDER trades scan speed for accuracy — specifically meant for exactly this situation
+    // (a small, dense 2D code) rather than the fast/lenient pass ZXing normally uses for speed.
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
     // Force the back camera with continuous autofocus and a decent resolution — leaving this to
     // the browser's default often picks the FRONT camera, which can never focus close enough to
@@ -2646,15 +2649,26 @@ async function openCameraScan(target, _isRetry){
         advanced: [{ focusMode: "continuous" }] // ignored harmlessly on devices/browsers that don't support it
       }
     };
-    await _zxingReader.decodeFromConstraints(constraints, "scanVideoEl", (result)=>{
-      if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); }
-      // (a "not found this frame" error fires continuously while nothing's in view yet — not a real failure, ignored)
+    let scanFrameCount = 0, lastNonNotFoundError = "";
+    await _zxingReader.decodeFromConstraints(constraints, "scanVideoEl", (result, err)=>{
+      if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); return; }
+      scanFrameCount++;
+      // NotFoundException fires on almost every frame while nothing decodable is in view yet —
+      // completely normal. Anything else is worth surfacing since it means frames are failing
+      // for a DIFFERENT reason (a real bug) rather than just "nothing found yet".
+      if(err && err.name && err.name!=="NotFoundException" && err.name!==lastNonNotFoundError){
+        lastNonNotFoundError = err.name;
+      }
+      updateScanDebugLine(scanFrameCount, lastNonNotFoundError);
     });
     // Some Android WebViews attach the camera stream to the <video> element but don't auto-start
     // playback from the "autoplay" attribute alone, leaving a frozen/black preview with a native
     // "tap to play" overlay. Force it, a couple of times shortly after, as a safety net.
     const v = document.getElementById("scanVideoEl");
-    if(v){ v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300); }
+    if(v){
+      v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300);
+      v.addEventListener("loadedmetadata", ()=>updateScanDebugLine(0,""), { once:true });
+    }
     attachZoomAndTorchControls();
   }catch(e){
     const msg = (e && e.message) || "";
@@ -2679,6 +2693,25 @@ function stopCameraScan(){
   if(v && v.srcObject){ try{ v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){} v.srcObject=null; }
   scanUi.open = false;
   renderScanModal();
+}
+// Shows exactly what resolution the camera actually negotiated (which can be far lower than
+// requested — a common, silent cause of "looks clear to my eye but never decodes") plus a live
+// frame counter proving the scan loop is actually running rather than stuck.
+function updateScanDebugLine(frameCount, lastError){
+  const v = document.getElementById("scanVideoEl");
+  if(!v) return;
+  let line = document.getElementById("scanDebugLine");
+  if(!line){
+    line = document.createElement("p");
+    line.id = "scanDebugLine";
+    line.className = "small faint";
+    line.style.cssText = "margin:6px 0 0;font-family:monospace;";
+    v.insertAdjacentElement("afterend", line);
+  }
+  const res = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}×${v.videoHeight}` : "…";
+  let text = `camera: ${res} · frames scanned: ${frameCount||0}`;
+  if(lastError) text += ` · error: ${lastError}`;
+  line.textContent = text;
 }
 // A GS1 DataMatrix on a medicine box is only a few mm across — at a normal, comfortable holding
 // distance a plain camera feed often can't resolve it sharply enough to decode at all. Real zoom
