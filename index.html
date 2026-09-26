@@ -2593,7 +2593,25 @@ function parseGS1Barcode(raw){
 }
 
 let scanUi = { open:false, pending:null, error:"" }; // pending: "newmed", or {kind:"restock", medId}
+let _pendingCameraTarget = null; // holds the scan target while we wait on the native side's permission round-trip
 let _zxingLoadPromise = null, _zxingReader = null;
+// Entry point for the "📷 use phone camera" buttons. Inside the packaged app, camera access needs
+// an OS-level runtime permission that only Android's own Screen1.AskForPermission can trigger —
+// CustomWebView's own permission grant (see OnPermissionRequest below) can't grant something the
+// app itself doesn't already hold. Rather than only asking once at app launch (easy to miss, or to
+// deny before understanding why), this asks fresh every time the button is tapped: if permission
+// is already granted, Android's AskForPermission returns instantly with no dialog shown, so this
+// costs nothing on repeat use and naturally re-prompts if it was denied (or never granted) before.
+function requestCameraThenScan(target){
+  if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
+    _pendingCameraTarget = target;
+    window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
+    return;
+  }
+  // No native bridge (testing this page directly in a normal browser) — the browser handles its
+  // own getUserMedia permission prompt directly, no extra round-trip needed.
+  openCameraScan(target);
+}
 function loadZXing(){
   if(window.ZXing) return Promise.resolve();
   if(_zxingLoadPromise) return _zxingLoadPromise;
@@ -2606,7 +2624,7 @@ function loadZXing(){
   });
   return _zxingLoadPromise;
 }
-async function openCameraScan(target){
+async function openCameraScan(target, _isRetry){
   scanUi = { open:true, pending: target, error:"" };
   renderScanModal();
   syncMenuHistory();
@@ -2618,20 +2636,93 @@ async function openCameraScan(target){
       ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
     ]);
     _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
-    await _zxingReader.decodeFromVideoDevice(undefined, "scanVideoEl", (result)=>{
+    // Force the back camera with continuous autofocus and a decent resolution — leaving this to
+    // the browser's default often picks the FRONT camera, which can never focus close enough to
+    // read a tiny barcode. decodeFromConstraints lets us be explicit instead of just naming a device.
+    const constraints = {
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }] // ignored harmlessly on devices/browsers that don't support it
+      }
+    };
+    await _zxingReader.decodeFromConstraints(constraints, "scanVideoEl", (result)=>{
       if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); }
       // (a "not found this frame" error fires continuously while nothing's in view yet — not a real failure, ignored)
     });
+    // Some Android WebViews attach the camera stream to the <video> element but don't auto-start
+    // playback from the "autoplay" attribute alone, leaving a frozen/black preview with a native
+    // "tap to play" overlay. Force it, a couple of times shortly after, as a safety net.
+    const v = document.getElementById("scanVideoEl");
+    if(v){ v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300); }
+    attachZoomAndTorchControls();
   }catch(e){
-    scanUi.error = "Couldn't start the camera: " + (e && e.message ? e.message : "unknown error") + ". Use the scan-and-paste box instead — it works fully offline with any USB/Bluetooth barcode scanner.";
+    const msg = (e && e.message) || "";
+    // "NotReadableError: Could not start video source" is a well-known, usually TRANSIENT Android
+    // WebView quirk: the camera hardware hasn't fully released from a previous session yet (often
+    // right after the app was closed and reopened). One short, silent retry clears it most of the
+    // time without the person needing to do anything.
+    if(!_isRetry && /notreadable|could not start video source/i.test(msg)){
+      if(_zxingReader){ try{ _zxingReader.reset(); }catch(err){} _zxingReader=null; }
+      setTimeout(()=>openCameraScan(target, true), 900);
+      return;
+    }
+    scanUi.error = "Couldn't start the camera: " + (msg || "unknown error") + ". Use the scan-and-paste box instead — it works fully offline with any USB/Bluetooth barcode scanner.";
     renderScanModal();
   }
 }
 function stopCameraScan(){
   if(_zxingReader){ try{ _zxingReader.reset(); }catch(e){} _zxingReader=null; }
+  // Belt-and-suspenders: explicitly stop every track on the video element too, in case reset()
+  // didn't fully release the hardware — this is what leaves a stale camera lock for next time.
+  const v = document.getElementById("scanVideoEl");
+  if(v && v.srcObject){ try{ v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){} v.srcObject=null; }
   scanUi.open = false;
   renderScanModal();
 }
+// A GS1 DataMatrix on a medicine box is only a few mm across — at a normal, comfortable holding
+// distance a plain camera feed often can't resolve it sharply enough to decode at all. Real zoom
+// (not just walking closer, which loses focus) is usually what actually fixes "camera opens but
+// never finds anything". Added directly via the DOM (not through renderScanModal's innerHTML
+// rebuild) so it doesn't disturb the already-playing <video> element.
+function attachZoomAndTorchControls(){
+  try{
+    const v = document.getElementById("scanVideoEl");
+    const track = v && v.srcObject && v.srcObject.getVideoTracks()[0];
+    if(!track || !track.getCapabilities || document.getElementById("scanControlsRow")) return;
+    const caps = track.getCapabilities();
+    if(!caps.zoom && !caps.torch) return;
+    const row = document.createElement("div");
+    row.id = "scanControlsRow";
+    row.style.cssText = "display:flex;align-items:center;gap:10px;margin-top:8px;";
+    if(caps.zoom){
+      const startZoom = (track.getSettings().zoom) || caps.zoom.min;
+      row.innerHTML += `<span style="font-size:16px;">🔍</span><input id="scanZoomSlider" type="range" min="${caps.zoom.min}" max="${caps.zoom.max}" step="${caps.zoom.step||0.1}" value="${startZoom}" style="flex:1;">`;
+    }
+    if(caps.torch){
+      row.innerHTML += `<button type="button" id="scanTorchBtn" style="background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap;">🔦 Light</button>`;
+    }
+    v.insertAdjacentElement("afterend", row);
+    const slider = document.getElementById("scanZoomSlider");
+    if(slider) slider.addEventListener("input", function(){ track.applyConstraints({ advanced:[{ zoom: Number(this.value) }] }).catch(()=>{}); });
+    const torchBtn = document.getElementById("scanTorchBtn");
+    if(torchBtn){
+      let torchOn = false;
+      torchBtn.addEventListener("click", function(){
+        torchOn = !torchOn;
+        track.applyConstraints({ advanced:[{ torch: torchOn }] }).catch(()=>{});
+        torchBtn.style.background = torchOn ? "var(--warningSoft)" : "none";
+      });
+    }
+  }catch(e){ /* zoom/torch are nice-to-haves — never let this block scanning itself */ }
+}
+// If the app is closed/backgrounded while the camera modal is open (person hits the phone's home
+// button, switches apps, or the WebView is torn down), our normal stopCameraScan() cleanup above
+// never gets a chance to run — leaving the camera hardware locked for the NEXT time the app opens.
+// This listener catches that case so the lock doesn't carry over.
+document.addEventListener("visibilitychange", function(){
+  if(document.hidden && scanUi.open) stopCameraScan();
+});
 function renderScanModal(){
   const root = document.getElementById("scanModalRoot");
   if(!root) return;
@@ -2647,8 +2738,9 @@ function renderScanModal(){
         <div class="modal-head"><strong>Scan barcode</strong><button class="modal-x" onclick="stopCameraScan()">✕</button></div>
         <div style="padding:14px 16px;">
           ${scanUi.error ? `<p class="small" style="color:var(--danger);margin:0;">${esc(scanUi.error)}</p>` :
-            `<video id="scanVideoEl" style="width:100%;border-radius:10px;background:#000;" muted playsinline></video>
-             <p class="small faint" style="margin:8px 0 0;">Point the camera at the barcode on the box.</p>`}
+            `<video id="scanVideoEl" style="width:100%;border-radius:10px;background:#000;" muted autoplay playsinline></video>
+             <p class="small faint" style="margin:8px 0 0;">The barcode is tiny — get close, use the zoom slider below if one appears, and hold steady until it locks on.</p>
+             <button type="button" onclick="document.getElementById('scanVideoEl').play()" style="margin-top:4px;background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;">▶ Tap here if the preview looks frozen/black</button>`}
         </div>
       </div>
     </div>`;
@@ -2851,7 +2943,7 @@ function buildInvCard(m){
           <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" placeholder="Tap here, then scan">
           <button type="button" class="btn btn-outline" onclick="applyRestockScanInput('${m.id}')">Apply</button>
         </div>
-        <button type="button" onclick='openCameraScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0 8px;">📷 Or use phone camera</button>
+        <button type="button" onclick='requestCameraThenScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0 8px;">📷 Or use phone camera</button>
         <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
@@ -3040,7 +3132,7 @@ function renderInvFormModal(){
               <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" placeholder="Tap here, then scan">
               <button type="button" class="btn btn-outline" onclick="applyInvScan()">Apply</button>
             </div>
-            <button type="button" onclick="openCameraScan('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;">📷 Or use phone camera</button>
+            <button type="button" onclick="requestCameraThenScan('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;">📷 Or use phone camera</button>
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
@@ -5519,6 +5611,14 @@ window.onNativeBridgeMessage = function(){
   const msg = window.AppInventor.getWebViewString();
   if(typeof msg !== "string") return;
   if(msg.indexOf("IMPORT:") === 0) handleImportedBackupText(msg.slice(7));
+  else if(msg === "CAMERA_PERMISSION_GRANTED"){
+    const t = _pendingCameraTarget; _pendingCameraTarget = null;
+    if(t) openCameraScan(t);
+  }
+  else if(msg === "CAMERA_PERMISSION_DENIED"){
+    _pendingCameraTarget = null;
+    showToast("⚠ Camera permission denied — use the scan-and-paste box instead");
+  }
 };
 function formatBytes(n){
   if(n < 1024) return n + " B";
