@@ -1460,8 +1460,8 @@ function renderShareModal(){
 /* Some in-app browsers / WebViews silently block window.confirm() (it returns
    false with no dialog shown), which made delete buttons look broken.
    This custom modal replaces confirm() everywhere so it always works. */
-let confirmState = null; // { message, onYes }
-function askConfirm(message, onYes){ confirmState = { message, onYes }; renderConfirmModal(); }
+let confirmState = null; // { message, onYes, confirmLabel }
+function askConfirm(message, onYes, confirmLabel){ confirmState = { message, onYes, confirmLabel }; renderConfirmModal(); }
 function cancelConfirm(){ confirmState = null; renderConfirmModal(); }
 function proceedConfirm(){
   const fn = confirmState && confirmState.onYes;
@@ -1480,7 +1480,7 @@ function renderConfirmModal(){
         <div class="modal-body">${esc(confirmState.message)}</div>
         <div class="modal-actions">
           <button class="btn btn-outline flex1" onclick="cancelConfirm()">Cancel</button>
-          <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">Delete</button>
+          <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">${esc(confirmState.confirmLabel || "Delete")}</button>
         </div>
       </div>
     </div>`;
@@ -3075,6 +3075,28 @@ function deleteMedicine(id){
     saveInventory(); render();
   });
 }
+// "S.L" = Stock Lost — a one-tap way to write off a medicine's entire current stock (e.g. it
+// was found spoiled, damaged, or missing during a physical count) without walking through the
+// full Edit form. Unlike a normal sale, this doesn't touch any bill/transaction — it's a pure
+// stock correction, exactly like typing 0 into Edit's "Current stock" field and saving, just
+// faster for this specific case. Guarded behind the same confirm modal as deleting a medicine,
+// since it can't be undone from within the app.
+function markStockLost(id){
+  const m = inventory.find(x=>x.id===id);
+  if(!m || m.stockPills<=0) return;
+  askConfirm(`Mark all ${m.stockPills} medicine of "${m.name}" as lost? This sets its stock to 0 — use this for spoiled, damaged, or missing stock you're writing off, not a normal sale.`, ()=>{
+    // Asked a second time on purpose: this is a single tap sitting right on the medicine
+    // card (easy to hit by mistake while scrolling or reaching for Restock/Edit next to it),
+    // and it can't be undone from within the app once confirmed. A second, more direct
+    // confirmation catches an accidental first tap before stock is actually zeroed out.
+    askConfirm(`Are you absolutely sure? "${m.name}"'s stock will be set to 0 right now — this can't be undone.`, ()=>{
+      adjustStockTo(m, 0);
+      m.updatedAt = Date.now();
+      saveInventory();
+      renderInvList();
+    }, "Yes, set to 0");
+  }, "Mark lost");
+}
 function toggleRestock(id){ inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
@@ -3286,6 +3308,7 @@ function buildInvCard(m){
           <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
         </div>
         <div class="flex gap1" style="align-items:center;flex-shrink:0;">
+          ${m.stockPills>0?`<button onclick="markStockLost('${m.id}')" title="Stock Lost — write off all current stock (spoiled/damaged/missing), setting it to 0" style="background:var(--dangerSoft);color:var(--danger);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">S.L</button>`:""}
           ${m.formula?`<button onclick='searchInvByFormula(${JSON.stringify(m.formula)})' title="Find other medicines with this formula" style="background:var(--primarySoft);color:var(--primary);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🔎 S.formula</button>`:""}
           <button onclick="deleteMedicine('${m.id}')" class="icon-del-btn">🗑</button>
         </div>
