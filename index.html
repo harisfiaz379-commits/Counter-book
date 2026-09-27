@@ -411,8 +411,12 @@ let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:""
             editScanText:"", // same, but for an existing medicine's inline Edit form
             copyMenuOpen:false, // whether the "S.Copy" D.Formula/D.Strength popup is open in the New medicine form
             editCopyMenuOpen:false, // same, but for the inline Edit form's own "S.Copy" popup
+            statFilter:null, // null|'special'|'sTag'|'nonSpecial' — which header pill (if any) the list is narrowed to
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", restockLotNo:"", restockScanText:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
+// null|'expired'|'expiringSoon'|'lowStock' — which Warnings-tab summary pill (if any) the page
+// is narrowed to; see toggleWarnFilter() and renderStock().
+let warnUi = { filter:null };
 let backupUi = { open:false };
 // Custom in-theme calendar (replaces native <input type="date">, whose picker/handles are
 // styled by the OS/WebView host, not our CSS — see date-picker fix). targetKind is "restock"
@@ -1397,6 +1401,12 @@ function setTab(t){
   if(t===tab){ render(); return; }
   const prevTab = tab;
   pushNav(()=>{ tab=prevTab; render(); });
+  // A tap-a-pill filter is meant as a quick, temporary lens on the tab you're currently
+  // looking at — clearing it on the way out means coming back to Inventory/Warnings later
+  // (including via the back button) always starts fresh instead of silently still narrowed
+  // to whatever pill was tapped last time.
+  if(prevTab==="inventory") inv.statFilter=null;
+  if(prevTab==="stock") warnUi.filter=null;
   tab=t;
   render();
 }
@@ -3314,7 +3324,13 @@ function buildInvCard(m){
 function renderInvList(){
   const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
-  const filtered = inventory.filter(m=>!m.deleted && (!q || medicineMatchesQuery(m,q))).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
+  const filtered = inventory.filter(m=>{
+    if(m.deleted) return false;
+    if(inv.statFilter==='special' && !m.specialCategory) return false;
+    if(inv.statFilter==='sTag' && !m.sTag) return false;
+    if(inv.statFilter==='nonSpecial' && m.specialCategory) return false;
+    return !q || medicineMatchesQuery(m,q);
+  }).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
 
   // With a large medicine list (280+ in this clinic's case), building every card's full HTML
   // — batch lists included — and inserting it all into the DOM in one go forces one huge
@@ -3326,9 +3342,14 @@ function renderInvList(){
   const CHUNK_SIZE = 30;
   const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
 
+  const filterLabels = {special:"Special category", sTag:"S. tagged", nonSpecial:"Non-special"};
+  const filterHtml = inv.statFilter ? `
+    <p class="small faint mb2">Filtered: ${filterLabels[inv.statFilter]} · <button type="button" onclick="toggleInvStatFilter('all')" style="background:none;border:none;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:inherit;">Show all</button></p>` : "";
+
   const container = document.getElementById("invListContainer");
   if(!container) return;
   container.innerHTML = `
+    ${filterHtml}
     ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
     <div id="invCardsList">${firstCards}</div>
   `;
@@ -3350,6 +3371,16 @@ function renderInvList(){
     requestAnimationFrame(appendNextChunk);
   }
 }
+// Tapping one of the 4 header pills narrows the list below to just that group; tapping the
+// same pill again (or the "Total" pill, which stands for "all") clears the filter. This is a
+// discrete click, not continuous typing, so — unlike onInvQuery — it's fine to redo the whole
+// tab's HTML via renderInventory() rather than only the results container: the pills themselves
+// need their active/inactive styling refreshed too, and there's no keyboard composition here
+// that a full re-render could interrupt.
+function toggleInvStatFilter(kind){
+  inv.statFilter = (kind==='all' || inv.statFilter===kind) ? null : kind;
+  renderInventory();
+}
 function renderInventory(){
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
@@ -3359,15 +3390,20 @@ function renderInventory(){
   const specialMedicines = inventory.filter(m=>!m.deleted && m.specialCategory).length;
   const sTaggedMedicines = inventory.filter(m=>!m.deleted && m.sTag).length;
   const nonSpecialMedicines = inventory.filter(m=>!m.deleted && !m.specialCategory).length;
+  // Each pill below is a button rather than a static span: tapping it narrows invCardsList to
+  // just that group (see toggleInvStatFilter). The active one is filled solid instead of its
+  // usual soft tint so it's clear at a glance which filter (if any) is currently applied.
+  const pillBtn = (active, softVar, solidVar, count, kind)=>
+    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${count}</button>`;
   document.getElementById("main").innerHTML = `
     <div class="mb2" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;">
       <div class="flex gap2">
-        <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);">${specialMedicines}</span>
-        <span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);">${sTaggedMedicines}</span>
+        ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
+        ${pillBtn(inv.statFilter==='sTag', '--dangerSoft', '--danger', sTaggedMedicines, 'sTag')}
       </div>
       <div class="flex gap2">
-        <span class="pill-badge" style="background:transparent;color:var(--primary);">${totalMedicines}</span>
-        <span class="pill-badge" style="background:var(--successSoft);color:var(--success);">${nonSpecialMedicines}</span>
+        ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
+        ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
       </div>
     </div>
     <div class="search-wrap mb2">
@@ -4234,52 +4270,88 @@ function fillListProgressively(containerId, items, buildRow, myToken){
   };
   requestAnimationFrame(appendNextChunk);
 }
+// Tapping a summary pill narrows the page below to just that one group; tapping the same pill
+// again clears the filter back to showing everything. A discrete click, not continuous typing,
+// so redoing the whole tab via renderStock() (rather than only a results container) is fine —
+// the pills themselves need their active/inactive styling refreshed too.
+function toggleWarnFilter(kind){
+  warnUi.filter = (warnUi.filter===kind) ? null : kind;
+  renderStock();
+}
 function renderStock(){
   const myToken = ++_warnRenderToken;
+  const filter = warnUi.filter; // null|'expired'|'expiringSoon'|'lowStock'
   const list = lowStockList();
   const hidden = inventory.filter(m=>!m.deleted && m.noWarn && m.stockPills <= (m.lowStockAt ?? 0));
   const expiringAll = expiringBatches();
   // expiringBatches() covers both "already past its date" (daysLeft<0) and "expiring soon"
-  // (0-10 days left) in one list — split those apart here so the summary counts match what
-  // the individual cards below actually say (batchExpiryLabel does this same day<0 check).
-  const expiredCount = expiringAll.filter(e=>e.daysLeft<0).length;
-  const expiringSoonCount = expiringAll.length - expiredCount;
+  // (0-10 days left) in one list — split those apart here so the summary counts (and the
+  // expired/expiringSoon filter pills) match what the individual cards below actually say
+  // (batchExpiryLabel does this same day<0 check).
+  const expiredItems = expiringAll.filter(e=>e.daysLeft<0);
+  const expiringSoonItems = expiringAll.filter(e=>e.daysLeft>=0);
 
-  const summaryHtml = (list.length || expiringAll.length) ? `
-    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      ${expiredCount ? `<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);font-weight:700;">⏳ ${expiredCount} expired</span>` : ""}
-      ${expiringSoonCount ? `<span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-weight:700;">⏳ ${expiringSoonCount} expiring soon</span>` : ""}
-      ${list.length ? `<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);font-weight:700;">📦 ${list.length} low stock</span>` : ""}
-    </div>` : "";
-
-  const hiddenHeadingHtml = hidden.length ? `
-    <p class="small" style="font-weight:700;color:var(--warning);margin:${list.length?"18px":"0"} 0 8px;">
-      ⚠ These are actually low too, but their warning is turned off
-    </p>
-    <div id="warnHiddenList"></div>` : "";
-
-  const expiring = expiringAll;
-  const expiringHeadingHtml = expiring.length ? `
-    <p class="small" style="font-weight:700;color:var(--danger);margin:${list.length||hidden.length?"18px":"0"} 0 8px;">
-      ⏳ Expiring within 10 days
-    </p>
-    <div id="warnExpiringList"></div>` : "";
-
-  if(list.length===0 && hidden.length===0 && expiring.length===0){
+  // Nothing-to-show and the pill counts themselves always reflect the TRUE totals, regardless
+  // of any active filter — a filter should never make its own pill (or the others) disappear
+  // or relabel, only narrow what's listed underneath.
+  if(list.length===0 && hidden.length===0 && expiringAll.length===0){
     document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">All medicines are sufficiently stocked and nothing is expiring soon. 👍</p>`;
     return;
   }
 
+  const pillBtn = (active, softVar, solidVar, label, kind)=>
+    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;font-weight:700;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleWarnFilter('${kind}')">${label}</button>`;
+  const summaryHtml = `
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      ${expiredItems.length ? pillBtn(filter==='expired', '--dangerSoft', '--danger', `⏳ ${expiredItems.length} expired`, 'expired') : ""}
+      ${expiringSoonItems.length ? pillBtn(filter==='expiringSoon', '--warningSoft', '--warning', `⏳ ${expiringSoonItems.length} expiring soon`, 'expiringSoon') : ""}
+      ${list.length ? pillBtn(filter==='lowStock', '--dangerSoft', '--danger', `📦 ${list.length} low stock`, 'lowStock') : ""}
+    </div>
+    ${filter ? `<p class="small faint mb2">Filtered · <button type="button" onclick="toggleWarnFilter('${filter}')" style="background:none;border:none;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:inherit;">Show all</button></p>` : ""}
+  `;
+
+  // Which section(s) the current pill (if any) leaves visible — hidden (suppressed-warning)
+  // items are grouped with low stock since that's what they are underneath, just muted.
+  const showLowStock = !filter || filter==='lowStock';
+  const showHidden = !filter || filter==='lowStock';
+  const expiringToShow = filter==='expired' ? expiredItems : filter==='expiringSoon' ? expiringSoonItems : (filter==='lowStock' ? [] : expiringAll);
+  const expiringHeadingText = filter==='expired' ? "⏳ Expired" : filter==='expiringSoon' ? "⏳ Expiring soon (within 10 days)" : "⏳ Expiring within 10 days";
+
+  const listToShow = showLowStock ? list : [];
+  const hiddenToShow = showHidden ? hidden : [];
+
+  if(listToShow.length===0 && hiddenToShow.length===0 && expiringToShow.length===0){
+    // The filtered-down group happens to be empty right now (e.g. the last expired batch was
+    // just disposed of while this pill was active) even though the tab as a whole isn't.
+    document.getElementById("main").innerHTML = `
+      ${summaryHtml}
+      <p class="small faint" style="text-align:center;padding:32px 0;">Nothing in this group right now. 👍</p>
+    `;
+    return;
+  }
+
+  const hiddenHeadingHtml = hiddenToShow.length ? `
+    <p class="small" style="font-weight:700;color:var(--warning);margin:${listToShow.length?"18px":"0"} 0 8px;">
+      ⚠ These are actually low too, but their warning is turned off
+    </p>
+    <div id="warnHiddenList"></div>` : "";
+
+  const expiringHeadingHtml = expiringToShow.length ? `
+    <p class="small" style="font-weight:700;color:var(--danger);margin:${listToShow.length||hiddenToShow.length?"18px":"0"} 0 8px;">
+      ${expiringHeadingText}
+    </p>
+    <div id="warnExpiringList"></div>` : "";
+
   document.getElementById("main").innerHTML = `
     ${summaryHtml}
-    ${list.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
+    ${listToShow.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
     <div id="warnLowStockList"></div>
     ${hiddenHeadingHtml}
     ${expiringHeadingHtml}
   `;
-  fillListProgressively("warnLowStockList", list, buildLowStockRow, myToken);
-  if(hidden.length) fillListProgressively("warnHiddenList", hidden, buildHiddenLowStockRow, myToken);
-  if(expiring.length) fillListProgressively("warnExpiringList", expiring, buildExpiringRow, myToken);
+  fillListProgressively("warnLowStockList", listToShow, buildLowStockRow, myToken);
+  if(hiddenToShow.length) fillListProgressively("warnHiddenList", hiddenToShow, buildHiddenLowStockRow, myToken);
+  if(expiringToShow.length) fillListProgressively("warnExpiringList", expiringToShow, buildExpiringRow, myToken);
 }
 
 /* ===================== USERS / ROLES / LOGIN ===================== */
