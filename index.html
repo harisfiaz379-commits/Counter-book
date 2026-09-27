@@ -325,7 +325,6 @@
 <div id="postTransferChoiceModalRoot"></div>
 <div id="privilegeConfirmModalRoot"></div>
 <div id="receiptModalRoot"></div>
-<div id="scanMethodModalRoot"></div>
 <div id="recoveryModalRoot"></div>
 <div id="forgotPinModalRoot"></div>
 <div id="datePickerModalRoot"></div>
@@ -408,15 +407,8 @@ function newBillState(){
 let bill = newBillState();
 let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""},
             scanText:"", // transient: text sitting in the New medicine form's "scan or paste barcode" box
-            editScanText:"", // same, but for an existing medicine's inline Edit form
-            copyMenuOpen:false, // whether the "S.Copy" D.Formula/D.Strength popup is open in the New medicine form
-            editCopyMenuOpen:false, // same, but for the inline Edit form's own "S.Copy" popup
-            statFilter:null, // null|'special'|'sTag'|'nonSpecial' — which header pill (if any) the list is narrowed to
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", restockLotNo:"", restockScanText:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
-// null|'expired'|'expiringSoon'|'lowStock' — which Warnings-tab summary pill (if any) the page
-// is narrowed to; see toggleWarnFilter() and renderStock().
-let warnUi = { filter:null };
 let backupUi = { open:false };
 // Custom in-theme calendar (replaces native <input type="date">, whose picker/handles are
 // styled by the OS/WebView host, not our CSS — see date-picker fix). targetKind is "restock"
@@ -1075,42 +1067,41 @@ function scheduleRender(){
   renderScheduled = true;
   requestAnimationFrame(()=>{ renderScheduled = false; render(); });
 }
-// The Records/Inventory search boxes, and the New Bill / special-medicine / edit-bill medicine
-// search boxes, used to funnel every keystroke through scheduleRender()/render() like any other
-// input, just with an extra trailing-debounce variant (scheduleQueryRender, since removed, which
-// called the scheduleSearchRender() below for deletions) for deletions. That was only ever a
-// mitigation, not a fix: render() rebuilds a whole tab's innerHTML, which — even with the "swap
-// the original node back" trick below — MOMENTARILY DETACHES the focused input from the document
-// while the new HTML is being inserted, before the old node is swapped back in. Browsers treat a
-// focused element becoming detached as an implicit blur, which silently aborts whatever the
-// Android keyboard's IME was mid-composing (composition state lives on the node's live DOM
-// attachment, not just the node object) — even though the exact same node comes back a moment
-// later. A fast render cadence (scheduleRender's ~16ms) kept the loss down to about one character
-// per interruption, imperceptible for ordinary inputs; a search box's heavier
-// re-filter-the-whole-list render made that interruption land more often, and the 220ms debounce
-// tried for deletions gave Gboard's predictive/batched composition far longer to build up a whole
-// in-flight word before the hit, losing several characters at once during fast typing instead of
-// at most one.
-// The actual fix: these search boxes now never call render() (or scheduleRender) while the
-// person is typing at all. Each one's oninput handler updates its own state and then writes
-// straight into a small, dedicated results container sitting next to the input (e.g.
-// #billQueryDropdown, #invListContainer, #recordsBody, #notesEmptyMsg/#notesList,
-// #editTxDropdown-<id>) via a plain el.innerHTML = ... call. The input element itself is never
-// part of that innerHTML, so it's never destroyed or detached, so there's nothing for the IME to
-// get silently interrupted by — no debounce needed, at any typing speed. A full render() still
-// happens for anything else that changes the page (selecting a match, adding an item, switching
-// tabs, cloud sync, etc.), which is fine since those aren't mid-keystroke events. See
-// onBillQuery/refreshBillQueryDropdown, onInvQuery/renderInvList, onRecordsSearch/
-// renderRecordsBody, onEditTxQuery/refreshEditTxDropdown, and onNotesSearch/renderNotesListBody.
-// Still used below by applyRemoteSnapshot() — an incoming cloud-sync update is a full render()
-// triggered by a BACKGROUND event, unrelated to whatever the person happens to be typing into at
-// that moment (possibly a plain, non-search input the fix above doesn't cover). Trailing-debounce
-// it the same way a search box's own typing used to be debounced, so it waits for typing to
-// pause first instead of landing mid-keystroke.
+/* The Records/Inventory search boxes, and the New Bill medicine + special-medicine search
+   boxes, all re-filter a whole list on every keystroke, making their render heavier than a
+   typical input's — heavy enough that even the once-per-frame scheduleRender() above can still
+   land a render mid-hold and interrupt the OS's native "hold backspace to repeat-delete" gesture
+   (same underlying issue as scheduleRender, just not fully solved by it for these). These use a
+   trailing debounce instead: no render happens until typing/deleting actually pauses, so the
+   input's DOM node is never touched while a key is held down, letting the native repeat-delete
+   run uninterrupted; releasing the key (or a single tap) still updates the results shortly
+   after, same as before. */
 let searchRenderTimer = null;
 function scheduleSearchRender(){
   if(searchRenderTimer) clearTimeout(searchRenderTimer);
   searchRenderTimer = setTimeout(()=>{ searchRenderTimer = null; render(); }, 220);
+}
+// Search boxes were still dropping characters during fast forward typing even after the
+// general dropped-character fix above (render()'s "swap the original node back" logic) was
+// applied everywhere — because render() still MOMENTARILY DETACHES the focused input from the
+// document as part of resetting main's innerHTML, before reattaching that same node a moment
+// later. Browsers treat a focused element becoming detached as an implicit blur, which aborts
+// whatever the Android keyboard's IME was mid-composing (composition state lives on the DOM
+// node's live attachment, not just the node object) — even though the exact node comes back.
+// scheduleRender()'s near-immediate (~16ms, one animation frame) cadence means there's barely
+// ever more than a single character "in flight" and uncommitted when that interruption lands,
+// so the loss is imperceptible — which is why every other input in the app was already fine.
+// scheduleSearchRender()'s 220ms debounce, by contrast, gives Gboard's predictive/batched
+// composition far longer to build up a whole in-flight word before that same interruption
+// hits, losing several characters at once instead of at most one.
+// Fix: only use the slower debounce for an actual deletion (still needed so a HELD backspace's
+// native OS repeat-delete gesture isn't interrupted mid-hold) — forward typing (value getting
+// longer, or same length e.g. after a select-all-retype) now uses the same fast scheduleRender()
+// that already works correctly everywhere else. Comparing the old vs. new value's length avoids
+// needing a separate keydown listener just to tell forward typing apart from deletion.
+function scheduleQueryRender(prevValue, newValue){
+  if((newValue||"").length < (prevValue||"").length) scheduleSearchRender();
+  else scheduleRender();
 }
 /* ===================== RENDER (with focus preservation) ===================== */
 function syncHeaderOffset(){
@@ -1233,7 +1224,7 @@ function anyMenuOpen(){
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
-    remarksUi.editing || receiptUi.open || inv.editId || inv.restockId || inv.showForm || inv.copyMenuOpen || inv.editCopyMenuOpen || notesUi.openId!==null);
+    remarksUi.editing || receiptUi.open || inv.editId || inv.restockId || inv.showForm || notesUi.openId!==null);
 }
 function closeTopMenu(){
   // Ordered so whatever can appear layered on top of another open menu/dropdown is checked
@@ -1265,10 +1256,8 @@ function closeTopMenu(){
   if(bill.testsMenuOpen){ bill.testsMenuOpen=false; testPriceEditorOpen=false; render(); return; }
   if(remarksUi.editing){ remarksUi.editing=false; render(); return; }
   if(receiptUi.open){ closeReceiptModal(); return; }
-  if(inv.editCopyMenuOpen){ inv.editCopyMenuOpen=false; render(); return; }
   if(inv.editId){ inv.editId=null; render(); return; }
   if(inv.restockId){ inv.restockId=null; render(); return; }
-  if(inv.copyMenuOpen){ inv.copyMenuOpen=false; render(); return; }
   if(inv.showForm){ inv.showForm=false; render(); return; }
   // The notepad editor's own "← Back" button auto-saves the draft (see backFromNote()) rather
   // than discarding it — a note left half-typed shouldn't vanish — so back-button behaves the
@@ -1290,17 +1279,6 @@ function render(){
   const isTextField = active && (active.tagName==="INPUT" || active.tagName==="TEXTAREA");
   const selStart = active && typeof active.selectionStart==="number" ? active.selectionStart : null;
   const selEnd = active && typeof active.selectionEnd==="number" ? active.selectionEnd : null;
-  // #app is the single scrolling container for the whole page (see its own comment above).
-  // Re-rendering only ever replaces its CHILDREN, never #app itself, so its scrollTop is
-  // normally left alone by the browser automatically — except when a re-render's new content
-  // is temporarily SHORTER than what's on screen right now (e.g. a long list that repopulates
-  // itself starting from a small first batch — see renderInvList()'s _invListLoadedFor for the
-  // specific fix for that), which clamps scrollTop down, and the browser does not restore it
-  // once the content grows back. Capturing/restoring it here is a cheap safety net against
-  // that class of bug wherever it crops up, on any tab, without needing every render path to
-  // handle it individually.
-  const appEl = document.getElementById("app");
-  const prevScrollTop = appEl ? appEl.scrollTop : 0;
 
   renderBanner();
   renderHeaderMenu();
@@ -1328,19 +1306,7 @@ function render(){
   renderNav();
   renderCloudSizeBadge();
   if(tab==="bill") renderBill();
-  else if(tab==="inventory"){
-    // If the Inventory shell (search box + header pills) is already on screen, this render()
-    // call is a refresh of an already-open tab — most commonly an incoming cloud-sync update —
-    // not the person switching into it. Only touch the results list in that case, both so the
-    // search input is never rebuilt out from under someone typing (see the note further up on
-    // scheduleQueryRender) and so renderInvList() takes its "already fully loaded" fast path
-    // (a single synchronous rebuild) instead of collapsing back to a first batch of 15 and
-    // re-chunking the rest — which is what used to make a button tap land on the wrong
-    // medicine after scrolling past the first ~50 while a sync happened to land at that
-    // exact moment.
-    if(document.getElementById("invQueryInput")) renderInvList();
-    else renderInventory();
-  }
+  else if(tab==="inventory") renderInventory();
   else if(tab==="records") renderRecords();
   else if(tab==="stock") renderStock();
   else if(tab==="notes") renderNotes();
@@ -1356,7 +1322,6 @@ function render(){
   renderPostTransferChoiceModal();
   renderPrivilegeConfirmModal();
   renderReceiptModal();
-  renderScanMethodModal();
   renderRecoveryModal();
   renderDatePickerModal();
   renderScanModal();
@@ -1386,7 +1351,6 @@ function render(){
   }
   syncMenuHistory();
   syncHeaderOffset();
-  if(appEl && appEl.scrollTop !== prevScrollTop) appEl.scrollTop = prevScrollTop;
 }
 
 function renderBanner(){
@@ -1425,12 +1389,6 @@ function setTab(t){
   if(t===tab){ render(); return; }
   const prevTab = tab;
   pushNav(()=>{ tab=prevTab; render(); });
-  // A tap-a-pill filter is meant as a quick, temporary lens on the tab you're currently
-  // looking at — clearing it on the way out means coming back to Inventory/Warnings later
-  // (including via the back button) always starts fresh instead of silently still narrowed
-  // to whatever pill was tapped last time.
-  if(prevTab==="inventory") inv.statFilter=null;
-  if(prevTab==="stock") warnUi.filter=null;
   tab=t;
   render();
 }
@@ -1484,8 +1442,8 @@ function renderShareModal(){
 /* Some in-app browsers / WebViews silently block window.confirm() (it returns
    false with no dialog shown), which made delete buttons look broken.
    This custom modal replaces confirm() everywhere so it always works. */
-let confirmState = null; // { message, onYes, confirmLabel }
-function askConfirm(message, onYes, confirmLabel){ confirmState = { message, onYes, confirmLabel }; renderConfirmModal(); }
+let confirmState = null; // { message, onYes }
+function askConfirm(message, onYes){ confirmState = { message, onYes }; renderConfirmModal(); }
 function cancelConfirm(){ confirmState = null; renderConfirmModal(); }
 function proceedConfirm(){
   const fn = confirmState && confirmState.onYes;
@@ -1504,7 +1462,7 @@ function renderConfirmModal(){
         <div class="modal-body">${esc(confirmState.message)}</div>
         <div class="modal-actions">
           <button class="btn btn-outline flex1" onclick="cancelConfirm()">Cancel</button>
-          <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">${esc(confirmState.confirmLabel || "Delete")}</button>
+          <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">Delete</button>
         </div>
       </div>
     </div>`;
@@ -1669,7 +1627,7 @@ function saveDefaultDoctorFee(){
 
 function onBillPatient(v){ bill.patient=v; scheduleRender(); }
 function onBillFee(v){ bill.fee=v; scheduleRender(); }
-function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; refreshBillQueryDropdown(); }
+function onBillQuery(v){ scheduleQueryRender(bill.query, v); bill.query=v; bill.selectedMedId=null; }
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
 function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
 function onBillRemarks(v){
@@ -1809,7 +1767,7 @@ function pendingSpecialBillSubtotal(){
 
 /* ---- Special-category medicines: separate search/add flow, see specialMatches() in
    renderBill and the state comment in newBillState() ---- */
-function onBillSpecialQuery(v){ bill.specialQuery=v; bill.selectedSpecialMedId=null; refreshBillSpecialQueryDropdown(); }
+function onBillSpecialQuery(v){ scheduleQueryRender(bill.specialQuery, v); bill.specialQuery=v; bill.selectedSpecialMedId=null; }
 function pickBillSpecialMed(id){ bill.selectedSpecialMedId=id; const m=inventory.find(x=>x.id===id); bill.specialQuery=m?m.name:""; render(); }
 function onBillSpecialPills(v){ bill.specialPills=v; scheduleRender(); }
 function setBillSpecialPillsQuick(n){ bill.specialPills=String(n); render(); }
@@ -1954,67 +1912,6 @@ function getReceiptSettings(){
   return { shopName: s.shopName || "Counter Book", address: s.address || "", phone: s.phone || "" };
 }
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
-// Which of the 3 scan methods (USB/Bluetooth scanner, take-a-photo, live camera) the single
-// "📷 Scan barcode" button uses - a one-time choice made in Settings rather than picked per-scan.
-// Defaults to "scanner" since it's the most reliable path fully offline, inside the packaged app.
-function getScanMethod(){
-  try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="photo"||v==="camera") ? v : "scanner"; }catch(e){ return "scanner"; }
-}
-function saveScanMethod(v){ try{ localStorage.setItem("clinic_scan_method", v); }catch(e){} }
-let scanMethodUi = { open:false, method:"scanner" };
-function editScanMethodSettings(){
-  scanMethodUi = { open:true, method:getScanMethod() };
-  render();
-}
-function closeScanMethodModal(){ scanMethodUi.open=false; render(); }
-function setScanMethodChoice(v){ scanMethodUi.method=v; render(); }
-function submitScanMethodSettings(){
-  saveScanMethod(scanMethodUi.method);
-  scanMethodUi.open = false;
-  showToast("✓ Scan method saved");
-  render();
-}
-function renderScanMethodModal(){
-  const root = document.getElementById("scanMethodModalRoot");
-  if(!root) return;
-  if(!scanMethodUi.open){ root.innerHTML=""; return; }
-  const descriptions = {
-    scanner: "Recommended — works fully offline with any handheld USB/Bluetooth barcode scanner, and reliably inside the installed app.",
-    photo: "Opens the phone's own camera app to snap a still photo of the barcode, then reads it from that photo. Full resolution and autofocus, usually reliable for small/dense codes.",
-    camera: "Uses a continuous live camera feed inside the app itself. Depends on the device/WebView granting camera permission — test it first, it may not work inside the installed app."
-  };
-  root.innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this) closeScanMethodModal()">
-      <div class="modal">
-        <div class="modal-head">
-          <strong>Barcode scan method</strong>
-          <button class="modal-x" onclick="closeScanMethodModal()">✕</button>
-        </div>
-        <div style="padding:14px 16px;">
-          <p class="small faint" style="margin:0 0 10px;">How should the "📷 Scan barcode" button work?</p>
-          <div class="flex gap2 mb2" style="flex-wrap:wrap;">
-            <button type="button" class="btn ${scanMethodUi.method==='scanner'?'btn-primary':'btn-outline'}" style="flex:1;min-width:120px;" onclick="setScanMethodChoice('scanner')">USB/Bluetooth scanner</button>
-            <button type="button" class="btn ${scanMethodUi.method==='photo'?'btn-primary':'btn-outline'}" style="flex:1;min-width:120px;" onclick="setScanMethodChoice('photo')">📸 Take a photo</button>
-            <button type="button" class="btn ${scanMethodUi.method==='camera'?'btn-primary':'btn-outline'}" style="flex:1;min-width:120px;" onclick="setScanMethodChoice('camera')">📷 Live camera</button>
-          </div>
-          <p class="small faint" style="margin:0 0 12px;">${descriptions[scanMethodUi.method]}</p>
-          <button class="btn btn-primary" style="width:100%;" onclick="submitScanMethodSettings()">Save</button>
-        </div>
-      </div>
-    </div>`;
-}
-// Single entry point both "📷 Scan barcode" buttons call - routes to whichever of the 3 methods
-// is currently chosen in Settings (see getScanMethod above).
-function startBarcodeScan(target){
-  const method = getScanMethod();
-  if(method==="photo"){ scanFromPhoto(target); return; }
-  if(method==="camera"){ requestCameraThenScan(target); return; }
-  let inputId = "invScanInput";
-  if(target && target.kind==="restock") inputId = `restockScanInput-${target.medId}`;
-  else if(target && target.kind==="edit") inputId = `editScanInput-${target.medId}`;
-  const el = document.getElementById(inputId);
-  if(el){ el.focus(); showToast("📷 Ready — scan the barcode now"); }
-}
 let receiptUi = { open:false, shopName:"", address:"", phone:"" }; // custom in-app modal for editReceiptSettings — replaces the old native window.prompt() dialogs, which can't be restyled to match the app theme
 function editReceiptSettings(){
   if(!can("receiptSetup")){ showToast("Only Admin can change receipt settings"); return; }
@@ -2298,48 +2195,6 @@ function searchRankScore(m, rawQuery){
   return strengthMatchesQuery(m.mg, rawQuery) ? 50 : 0;
 }
 
-// Self-contained: recomputes matches from current state and returns the dropdown/no-match HTML
-// for the "Add medicine" search box. Called both by the initial full renderBill() and by
-// refreshBillQueryDropdown() below on every keystroke, so the two can never drift apart.
-function billQueryDropdownHtml(){
-  const q = bill.query.trim().toLowerCase();
-  const matches = q ? inventory.filter(m=>!m.deleted && !m.specialCategory && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
-  const selMed = inventory.find(m=>m.id===bill.selectedMedId);
-  return (matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
-      <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
-        <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
-          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
-          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-        </button>
-        ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
-      </div>`).join("")}</div>` : "") +
-    (bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : "");
-}
-function refreshBillQueryDropdown(){
-  const el = document.getElementById("billQueryDropdown");
-  if(el) el.innerHTML = billQueryDropdownHtml();
-}
-// Same pattern as billQueryDropdownHtml() above, for the special-category search box.
-function billSpecialQueryDropdownHtml(){
-  const sq = bill.specialQuery.trim().toLowerCase();
-  const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && medicineMatchesQuery(m,sq)).sort((a,b)=>searchRankScore(b,sq)-searchRankScore(a,sq)).slice(0,6) : [];
-  const selSpecialMed = inventory.find(m=>m.id===bill.selectedSpecialMedId);
-  return (specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
-      <button onclick="pickBillSpecialMed('${m.id}')">
-        <div style="min-width:0;">
-          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
-          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-        </div>
-      </button>`).join("")}</div>` : "") +
-    (bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : "");
-}
-function refreshBillSpecialQueryDropdown(){
-  const el = document.getElementById("billSpecialQueryDropdown");
-  if(el) el.innerHTML = billSpecialQueryDropdownHtml();
-}
-
 function renderBill(){
   const q = bill.query.trim().toLowerCase();
   // Medicines carrying a Special category are deliberately excluded from this normal
@@ -2488,7 +2343,16 @@ function renderBill(){
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="billQueryInput" value="${esc(selMed?selMed.name:bill.query)}" oninput="onBillQuery(this.value)" placeholder="Search medicine…">
-        <div id="billQueryDropdown">${billQueryDropdownHtml()}</div>
+        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
+          <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
+            <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
+              <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
+              ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+              <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+            </button>
+            ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
+          </div>`).join("")}</div>` : ""}
+        ${bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : ""}
       </div>
 
       <div class="mt3 divider-top">
@@ -2496,7 +2360,15 @@ function renderBill(){
         <div class="search-wrap">
           <span class="search-icon">🔍</span>
           <input ${NOAC} id="billSpecialQueryInput" value="${esc(selSpecialMed?selSpecialMed.name:bill.specialQuery)}" oninput="onBillSpecialQuery(this.value)" placeholder="Search special medicine…">
-          <div id="billSpecialQueryDropdown">${billSpecialQueryDropdownHtml()}</div>
+          ${specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
+            <button onclick="pickBillSpecialMed('${m.id}')">
+              <div style="min-width:0;">
+                <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
+                ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+                <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+              </div>
+            </button>`).join("")}</div>` : ""}
+          ${bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : ""}
         </div>
 
         ${selSpecialMed ? `
@@ -2658,18 +2530,14 @@ function renderBill(){
       point it at a code, it "types" the decoded text into whatever input is focused, then
       sends Enter — no app-side camera code needed at all, and it works fully offline with
       zero changes to the App Inventor project.
-   2) An optional phone-camera scanner (openCameraScan below) using getUserMedia, and a
-      photo-capture scanner (scanFromPhoto below) using the phone's native camera app, both
-      decoded with zxing-wasm — a WebAssembly build of the real ZXing-C++ engine (not the older,
-      noticeably weaker pure-JavaScript @zxing/library port this used to run on; that port's
-      Data Matrix decoder in particular struggled with anything less than a near-perfectly
-      flat, head-on shot). IMPORTANT CAVEAT: the stock App Inventor WebViewer component does NOT
-      grant camera permission to web content by default (same class of limitation as it not
-      handling file downloads — see checkForAppUpdate's comment above). The live-camera button
-      will likely fail silently inside the packaged APK unless the WebViewer is swapped for a
-      camera-capable variant/extension (the photo-capture button uses the file chooser instead,
-      which is a separate, generally better-supported path). Treat option 1 above as the
-      dependable one regardless. */
+   2) An optional phone-camera scanner (openCameraScan below) using getUserMedia + the ZXing
+      barcode library loaded on demand from a CDN. IMPORTANT CAVEAT: the stock App Inventor
+      WebViewer component does NOT grant camera permission to web content by default (same
+      class of limitation as it not handling file downloads — see checkForAppUpdate's comment
+      above). This button will likely fail silently inside the packaged APK unless the
+      WebViewer is swapped for a camera-capable variant/extension. It works fine when this
+      page is opened directly in a normal mobile browser (e.g. Chrome), which is useful for
+      testing. Treat option 1 above as the dependable one. */
 function gs1SetField(out, ai, value){
   if(ai==="01") out.gtin = value;
   else if(ai==="10") out.batch = value;
@@ -2725,27 +2593,9 @@ function parseGS1Barcode(raw){
   return out;
 }
 
-// zxing-wasm's reader options, shared by both the photo path and the live-camera path below.
-// tryHarder trades a bit of decode speed for accuracy — worth it here since a GS1 DataMatrix is
-// small and dense; maxNumberOfSymbols:1 stops it looking for more than one code per image/frame,
-// which is both faster and avoids ever ambiguously returning the wrong one of two codes in frame.
-const ZXING_READ_OPTIONS = { formats: ["DataMatrix","QRCode","Code128","EAN13","UPCA"], tryHarder: true, maxNumberOfSymbols: 1 };
-let _zxingWasmLoadPromise = null;
-function loadZXingWasm(){
-  if(window.ZXingWASM) return Promise.resolve();
-  if(_zxingWasmLoadPromise) return _zxingWasmLoadPromise;
-  _zxingWasmLoadPromise = new Promise((resolve, reject)=>{
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/zxing-wasm@2.2.1/dist/iife/reader/index.js";
-    s.onload = ()=>resolve();
-    s.onerror = ()=>reject(new Error("Couldn't load the scanner library — needs internet the first time it's used."));
-    document.head.appendChild(s);
-  });
-  return _zxingWasmLoadPromise;
-}
-
 let scanUi = { open:false, pending:null, error:"" }; // pending: "newmed", or {kind:"restock", medId}
 let _pendingCameraTarget = null; // holds the scan target while we wait on the native side's permission round-trip
+let _zxingLoadPromise = null, _zxingReader = null;
 // Entry point for the "📷 use phone camera" buttons. Inside the packaged app, camera access needs
 // an OS-level runtime permission that only Android's own Screen1.AskForPermission can trigger —
 // CustomWebView's own permission grant (see OnPermissionRequest below) can't grant something the
@@ -2773,13 +2623,7 @@ let _pendingPhotoScanTarget = null;
 function scanFromPhoto(target){
   _pendingPhotoScanTarget = target;
   const input = document.getElementById("scanPhotoInput");
-  if(!input){ showToast("⚠ Internal error: photo input missing"); return; }
-  showToast("Opening camera…");
-  try{
-    input.click();
-  }catch(e){
-    showToast("⚠ Couldn't open the file chooser: " + (e && e.message ? e.message : "unknown error"));
-  }
+  if(input) input.click();
 }
 async function handleScanPhotoFile(input){
   const file = input.files && input.files[0];
@@ -2788,29 +2632,56 @@ async function handleScanPhotoFile(input){
   input.value = ""; // reset so picking the exact same photo again still fires onchange next time
   if(!file || !target) return;
   showToast("Reading barcode from photo…");
+  let url = null;
   try{
-    await loadZXingWasm();
-    // Full native-resolution photo goes straight in — zxing-wasm's C++ decoder handles large,
-    // real-world images (skew, uneven lighting, a bit of blur) far more capably than the old
-    // pure-JS port did, so unlike before, this no longer needs a manual downscale/retry loop.
-    const results = await ZXingWASM.readBarcodes(file, ZXING_READ_OPTIONS);
-    if(!results || !results.length || !results[0].text) throw new Error("not found");
+    await loadZXing();
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
+    ]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    url = URL.createObjectURL(file);
+    const result = await reader.decodeFromImageUrl(url);
     scanUi.pending = target;
-    handleScanText(results[0].text);
+    handleScanText(result.getText());
   }catch(e){
     showToast("⚠ Couldn't find a barcode in that photo. Try getting closer/sharper, holding it flat, and retaking.");
+  }finally{
+    if(url) URL.revokeObjectURL(url);
   }
 }
-let _scanMediaStream = null, _scanLoopActive = false;
+function loadZXing(){
+  if(window.ZXing) return Promise.resolve();
+  if(_zxingLoadPromise) return _zxingLoadPromise;
+  _zxingLoadPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+    s.onload = ()=>resolve();
+    s.onerror = ()=>reject(new Error("Couldn't load the scanner library — needs internet the first time it's used."));
+    document.head.appendChild(s);
+  });
+  return _zxingLoadPromise;
+}
 async function openCameraScan(target, _isRetry){
   scanUi = { open:true, pending: target, error:"" };
   renderScanModal();
   syncMenuHistory();
   try{
-    await loadZXingWasm();
+    await loadZXing();
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
+    ]);
+    // TRY_HARDER trades scan speed for accuracy — specifically meant for exactly this situation
+    // (a small, dense 2D code) rather than the fast/lenient pass ZXing normally uses for speed.
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
     // Force the back camera with continuous autofocus and a decent resolution — leaving this to
     // the browser's default often picks the FRONT camera, which can never focus close enough to
-    // read a tiny barcode.
+    // read a tiny barcode. decodeFromConstraints lets us be explicit instead of just naming a device.
     const constraints = {
       video: {
         facingMode: { ideal: "environment" },
@@ -2818,43 +2689,27 @@ async function openCameraScan(target, _isRetry){
         advanced: [{ focusMode: "continuous" }] // ignored harmlessly on devices/browsers that don't support it
       }
     };
-    _scanMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-    const v = document.getElementById("scanVideoEl");
-    if(!v) throw new Error("scanner video element missing");
-    v.srcObject = _scanMediaStream;
+    let scanFrameCount = 0, lastNonNotFoundError = "";
+    await _zxingReader.decodeFromConstraints(constraints, "scanVideoEl", (result, err)=>{
+      if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); return; }
+      scanFrameCount++;
+      // NotFoundException fires on almost every frame while nothing decodable is in view yet —
+      // completely normal. Anything else is worth surfacing since it means frames are failing
+      // for a DIFFERENT reason (a real bug) rather than just "nothing found yet".
+      if(err && err.name && err.name!=="NotFoundException" && err.name!==lastNonNotFoundError){
+        lastNonNotFoundError = err.name;
+      }
+      updateScanDebugLine(scanFrameCount, lastNonNotFoundError);
+    });
     // Some Android WebViews attach the camera stream to the <video> element but don't auto-start
     // playback from the "autoplay" attribute alone, leaving a frozen/black preview with a native
     // "tap to play" overlay. Force it, a couple of times shortly after, as a safety net.
-    v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300);
+    const v = document.getElementById("scanVideoEl");
+    if(v){
+      v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300);
+      v.addEventListener("loadedmetadata", ()=>updateScanDebugLine(0,""), { once:true });
+    }
     attachZoomAndTorchControls();
-    // zxing-wasm's reader works on a still image/frame, not a continuous video stream by itself —
-    // so unlike the old @zxing/library-based version, this drives its own poll loop: grab the
-    // current video frame onto a canvas, hand that single frame to the same decoder the photo
-    // path uses, and repeat every ~350ms (each decode is a real, somewhat-heavy wasm call — no
-    // need to run it every animation frame) until either something decodes or the modal is closed.
-    const canvas = document.createElement("canvas");
-    let frameCount = 0;
-    _scanLoopActive = true;
-    const tick = async ()=>{
-      if(!_scanLoopActive) return;
-      if(v.videoWidth && v.videoHeight){
-        canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-        canvas.getContext("2d").drawImage(v, 0, 0);
-        frameCount++;
-        try{
-          const results = await ZXingWASM.readBarcodes(canvas, ZXING_READ_OPTIONS);
-          updateScanDebugLine(frameCount, "");
-          if(results && results.length && results[0].text){
-            const text = results[0].text;
-            stopCameraScan();
-            handleScanText(text);
-            return;
-          }
-        }catch(e){ updateScanDebugLine(frameCount, (e&&e.message)||"decode error"); }
-      }
-      if(_scanLoopActive) setTimeout(tick, 350);
-    };
-    tick();
   }catch(e){
     const msg = (e && e.message) || "";
     // "NotReadableError: Could not start video source" is a well-known, usually TRANSIENT Android
@@ -2862,7 +2717,7 @@ async function openCameraScan(target, _isRetry){
     // right after the app was closed and reopened). One short, silent retry clears it most of the
     // time without the person needing to do anything.
     if(!_isRetry && /notreadable|could not start video source/i.test(msg)){
-      if(_scanMediaStream){ try{ _scanMediaStream.getTracks().forEach(t=>t.stop()); }catch(err){} _scanMediaStream=null; }
+      if(_zxingReader){ try{ _zxingReader.reset(); }catch(err){} _zxingReader=null; }
       setTimeout(()=>openCameraScan(target, true), 900);
       return;
     }
@@ -2871,10 +2726,9 @@ async function openCameraScan(target, _isRetry){
   }
 }
 function stopCameraScan(){
-  _scanLoopActive = false;
-  if(_scanMediaStream){ try{ _scanMediaStream.getTracks().forEach(t=>t.stop()); }catch(e){} _scanMediaStream=null; }
-  // Belt-and-suspenders: explicitly stop every track on the video element too, in case the above
-  // somehow missed one — this is what leaves a stale camera lock for next time otherwise.
+  if(_zxingReader){ try{ _zxingReader.reset(); }catch(e){} _zxingReader=null; }
+  // Belt-and-suspenders: explicitly stop every track on the video element too, in case reset()
+  // didn't fully release the hardware — this is what leaves a stale camera lock for next time.
   const v = document.getElementById("scanVideoEl");
   if(v && v.srcObject){ try{ v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){} v.srcObject=null; }
   scanUi.open = false;
@@ -2984,7 +2838,6 @@ function handleScanText(raw){
   }
   if(target==="newmed") applyScanToNewMedForm(parsed);
   else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
-  else if(target && target.kind==="edit") applyScanToEditForm(target.medId, parsed);
 }
 function onInvScanInput(v){ inv.scanText=v; }
 function applyInvScan(){
@@ -2995,29 +2848,6 @@ function applyInvScan(){
   handleScanText(text);
 }
 function clearInvScanLink(){ inv.form.gtin=""; render(); }
-// Same as clearInvScanLink/applyInvScan above, but for linking a barcode to an EXISTING
-// medicine from its inline Edit form, rather than a brand-new one being created.
-function onEditScanInput(v){ inv.editScanText=v; }
-function applyEditScan(medId){
-  const text = (inv.editScanText||"").trim();
-  inv.editScanText = "";
-  if(!text) return;
-  scanUi.pending = { kind:"edit", medId };
-  handleScanText(text);
-}
-function clearEditScanLink(){ inv.editForm.gtin=""; render(); }
-function applyScanToEditForm(medId, parsed){
-  if(parsed.gtin){
-    const existing = inventory.find(m=>!m.deleted && m.id!==medId && m.gtin && m.gtin===parsed.gtin);
-    if(existing){
-      showToast(`⚠ This barcode is already linked to "${existing.name}" — not linked here`);
-      return;
-    }
-    inv.editForm.gtin = parsed.gtin;
-  }
-  showToast(parsed.gtin ? "✓ Barcode linked to this medicine" : "Scanned, but no GTIN was found in that code");
-  render();
-}
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
@@ -3065,7 +2895,7 @@ function applyScanToRestock(medId, parsed){
 }
 
 /* ===================== INVENTORY TAB ===================== */
-function onInvQuery(v){ inv.query=v; renderInvList(); }
+function onInvQuery(v){ scheduleQueryRender(inv.query, v); inv.query=v; }
 function searchInvByFormula(formula){
   inv.query = formula || "";
   render();
@@ -3088,7 +2918,7 @@ function onInvCategoryPicked(v){
   else { inv.form.category=v; inv.form.specialCategory=""; }
   render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
-function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
+function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
 function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; render(); }
 function addMedicine(){
   const f = inv.form;
@@ -3111,29 +2941,7 @@ function deleteMedicine(id){
     saveInventory(); render();
   });
 }
-// "S.L" = Stock Lost — a one-tap way to write off a medicine's entire current stock (e.g. it
-// was found spoiled, damaged, or missing during a physical count) without walking through the
-// full Edit form. Unlike a normal sale, this doesn't touch any bill/transaction — it's a pure
-// stock correction, exactly like typing 0 into Edit's "Current stock" field and saving, just
-// faster for this specific case. Guarded behind the same confirm modal as deleting a medicine,
-// since it can't be undone from within the app.
-function markStockLost(id){
-  const m = inventory.find(x=>x.id===id);
-  if(!m || m.stockPills<=0) return;
-  askConfirm(`Mark all ${m.stockPills} medicine of "${m.name}" as lost? This sets its stock to 0 — use this for spoiled, damaged, or missing stock you're writing off, not a normal sale.`, ()=>{
-    // Asked a second time on purpose: this is a single tap sitting right on the medicine
-    // card (easy to hit by mistake while scrolling or reaching for Restock/Edit next to it),
-    // and it can't be undone from within the app once confirmed. A second, more direct
-    // confirmation catches an accidental first tap before stock is actually zeroed out.
-    askConfirm(`Are you absolutely sure? "${m.name}"'s stock will be set to 0 right now — this can't be undone.`, ()=>{
-      adjustStockTo(m, 0);
-      m.updatedAt = Date.now();
-      saveInventory();
-      renderInvList();
-    }, "Yes, set to 0");
-  }, "Mark lost");
-}
-function toggleRestock(id){ inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
+function toggleRestock(id){ inv.editId=null; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
 function onRestockMrp(v){ inv.restockMrp=v; }
@@ -3160,11 +2968,9 @@ function doRestock(id){
 function openEdit(id){
   inv.restockId=null;
   inv.editId = inv.editId===id?null:id;
-  inv.editCopyMenuOpen=false;
-  inv.editScanText="";
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
-    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag, gtin:m.gtin||"" }; }
+    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag }; }
   render();
 }
 function onEditForm(field,v){ inv.editForm[field]=v; }
@@ -3183,7 +2989,6 @@ function saveEdit(id){
     m.mrpPerBox=Number(f.mrp); m.pillsPerBox=Number(f.pillsPerBox);
     m.lowStockAt=Number(f.lowStockAt)||0;
     m.sTag=!!f.sTag;
-    m.gtin=f.gtin||"";
     m.updatedAt=Date.now();
     adjustStockTo(m, Math.max(0,Number(f.stockPills)));
   }
@@ -3192,71 +2997,12 @@ function saveEdit(id){
   render();
 }
 
-/* ===================== S.COPY: save-and-start-a-variant ===================== */
-/* "S.Copy" saves whichever medicine is currently being added/edited exactly as filled in, then
-   immediately reopens the New medicine form pre-filled with those same details — except for
-   whichever one field the person picks to leave blank (plus MRP, always left blank too, since a
-   different formula or strength almost always means a different price). Meant for the common
-   case of a medicine that comes in a plain form and a combination form (D.Formula — leaves
-   Formula + MRP empty, keeps Strength), or in more than one strength (D.Strength — leaves
-   Strength + MRP empty, keeps Formula), so the next entry only needs that one field plus MRP
-   typed in instead of the whole form redone from scratch. */
-function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; render(); }
-function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; render(); }
-// Shared by both entry points below: opens the New medicine form pre-filled from `f` (either an
-// inv.form or inv.editForm snapshot — both carry the same field names this reads), with
-// `variant` deciding which one field is left blank alongside MRP.
-function openCopyVariantForm(f, variant){
-  inv.editId = null;
-  inv.editCopyMenuOpen = false;
-  inv.restockId = null;
-  inv.copyMenuOpen = false;
-  inv.scanText = "";
-  inv.form = {
-    name: f.name.trim(),
-    category: f.category||"",
-    specialCategory: f.specialCategory||"",
-    formula: variant==='formula' ? "" : (f.formula||"").trim(),
-    mg: variant==='strength' ? "" : (f.mg||"").trim(),
-    mrp: "", // a different formula/strength is almost always a different price — always left blank
-    pillsPerBox: f.pillsPerBox||"",
-    lowStockAt: f.lowStockAt||"10",
-    sTag: !!f.sTag,
-    gtin: "" // deliberately NOT carried over — a different formula/strength product has its own barcode
-  };
-  inv.showForm = true;
-  render();
-  showToast(variant==='formula' ? "✓ Saved — enter the different formula & MRP" : "✓ Saved — enter the different strength & MRP");
-}
-// Called from the New medicine form's own S.Copy menu: saves the medicine currently being typed
-// in (same validation addMedicine() itself uses), then reopens the form for the variant.
-function copyNewMedicineVariant(variant){
-  const f = inv.form;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
-  const snapshot = {...f};
-  addMedicine();
-  openCopyVariantForm(snapshot, variant);
-}
-// Called from an existing medicine's inline Edit form's S.Copy menu: saves the edits to THAT
-// medicine (same validation saveEdit() itself uses), then opens the New medicine form for the
-// variant — as a separate, new entry, not a further edit of the one just saved.
-function copyEditVariant(id, variant){
-  const f = inv.editForm;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
-  const snapshot = {...f};
-  saveEdit(id);
-  openCopyVariantForm(snapshot, variant);
-}
-
 // Bumped on every renderInventory() call so a background chunk-loading job from a previous
 // call (before the user switched away, searched something else, or edited a medicine) knows
 // it's been superseded and should stop instead of appending onto a list that's since been
 // replaced. Combined with checking the container element still exists, this is what makes it
 // safe for the background job to keep running across whatever else happens on screen.
 let _invRenderToken = 0;
-// Remembers the query+filter combination the medicine list was last FULLY (not just
-// first-batch) populated for. See renderInvList()'s use of it below.
-let _invListLoadedFor = null;
 function buildInvCard(m){
   // Computed once and reused below — this used to be recomputed independently for the
   // price, the expired check, the "has batches" check, and the batch list itself, each of
@@ -3272,7 +3018,15 @@ function buildInvCard(m){
   if(inv.restockId===m.id){
     extra = `
       <div class="mt2 divider-top8">
-        <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
+        <label class="small" style="display:block;margin-bottom:4px;">Scan the new box's barcode (auto-fills expiry &amp; batch below)</label>
+        <div class="flex gap2 mb1">
+          <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" placeholder="Tap here, then scan">
+          <button type="button" class="btn btn-outline" onclick="applyRestockScanInput('${m.id}')">Apply</button>
+        </div>
+        <div class="flex gap2" style="flex-wrap:wrap;padding:2px 0 8px;">
+          <button type="button" onclick='scanFromPhoto({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📸 Take a photo of it</button>
+          <button type="button" onclick='requestCameraThenScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📷 Or live camera</button>
+        </div>
         <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
@@ -3282,11 +3036,10 @@ function buildInvCard(m){
         </div>
         <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
         <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
-        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)}) — or scan the barcode (auto-fills expiry &amp; batch above)</label>
-        <div class="flex gap2">
-          <input ${NOAC} id="restockMrp-${m.id}" class="flex1" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
-          <button type="button" class="btn btn-outline flex1" onclick='startBarcodeScan({kind:"restock",medId:"${m.id}"})'>📷 Scan barcode</button>
-        </div>
+        <label class="small mt2" style="display:block;">Batch / lot number (optional)</label>
+        <input ${NOAC} id="restockLotNo-${m.id}" value="${esc(inv.restockLotNo)}" oninput="onRestockLotNo(this.value)" placeholder="e.g. 151" class="mb2">
+        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
+        <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
       </div>`;
   }
   if(inv.editId===m.id){
@@ -3316,21 +3069,6 @@ function buildInvCard(m){
         <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
         <label class="small">Warn me when stock falls to (medicine)</label>
         <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
-        <div class="divider-top8" style="padding-top:8px;">
-          <div class="flex gap2">
-            <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleEditCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
-            <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='startBarcodeScan({kind:"edit",medId:"${m.id}"})'>📷 Scan barcode</button>
-          </div>
-          <input ${NOAC} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-          ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
-          ${inv.editCopyMenuOpen ? `
-            <p class="small faint" style="margin:8px 0 6px;">Saves the changes above to this medicine, then opens New medicine filled in the same way for the variant — MRP is always left blank too.</p>
-            <div class="flex gap2 mb2">
-              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','formula')">D.Formula</button>
-              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','strength')">D.Strength</button>
-            </div>
-          ` : ""}
-        </div>
         <div class="flex gap2 mt2">
           <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
           <button class="btn btn-primary flex1" onclick="saveEdit('${m.id}')">Save changes</button>
@@ -3347,7 +3085,6 @@ function buildInvCard(m){
           <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
         </div>
         <div class="flex gap1" style="align-items:center;flex-shrink:0;">
-          ${m.stockPills>0?`<button onclick="markStockLost('${m.id}')" title="Stock Lost — write off all current stock (spoiled/damaged/missing), setting it to 0" style="background:var(--dangerSoft);color:var(--danger);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">S.L</button>`:""}
           ${m.formula?`<button onclick='searchInvByFormula(${JSON.stringify(m.formula)})' title="Find other medicines with this formula" style="background:var(--primarySoft);color:var(--primary);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🔎 S.formula</button>`:""}
           <button onclick="deleteMedicine('${m.id}')" class="icon-del-btn">🗑</button>
         </div>
@@ -3379,87 +3116,21 @@ function buildInvCard(m){
         </div>` : ""}
     </div>`;
 }
-// Fills #invListContainer (the "no matches" message + card list) from the current inv.query,
-// without ever touching #invQueryInput itself. Called once by renderInventory() on a full
-// render, and directly by onInvQuery() on every keystroke — since it never rebuilds the input
-// node, it's safe to call on every single keystroke with no debounce, at any typing speed.
-function renderInvList(){
+function renderInventory(){
   const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
-  const filtered = inventory.filter(m=>{
-    if(m.deleted) return false;
-    if(inv.statFilter==='special' && !m.specialCategory) return false;
-    if(inv.statFilter==='sTag' && !m.sTag) return false;
-    if(inv.statFilter==='nonSpecial' && m.specialCategory) return false;
-    return !q || medicineMatchesQuery(m,q);
-  }).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
-  const filterKey = q+"|"+(inv.statFilter||"");
+  const filtered = inventory.filter(m=>!m.deleted && (!q || medicineMatchesQuery(m,q))).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
 
-  const filterLabels = {special:"Special category", sTag:"S. tagged", nonSpecial:"Non-special"};
-  const filterHtml = inv.statFilter ? `
-    <p class="small faint mb2">Filtered: ${filterLabels[inv.statFilter]} · <button type="button" onclick="toggleInvStatFilter('all')" style="background:none;border:none;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:inherit;">Show all</button></p>` : "";
-
-  const container = document.getElementById("invListContainer");
-  if(!container) return;
-
-  // If this exact result set (same search text + same header-pill filter) was already fully
-  // loaded onto the page before, this call is refreshing that SAME view with fresh data —
-  // typically an incoming cloud-sync update landing while the person is just scrolled through
-  // browsing, not a search/filter they just changed. Rebuilding the whole list in one
-  // synchronous pass here (rather than resetting to a first batch of 15 and re-chunking the
-  // rest in over several animation frames) means the page's height never briefly collapses
-  // and grows back — which is what could clamp the scroll position mid-scroll and land a tap
-  // meant for, say, the 50th medicine's Edit button onto a completely different card that had
-  // snapped into that same screen position for an instant.
-  if(_invListLoadedFor === filterKey){
-    container.innerHTML = `
-      ${filterHtml}
-      ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
-      <div id="invCardsList">${filtered.map(buildInvCard).join("")}</div>
-    `;
-    return;
-  }
-
-  // A genuinely new search/filter/tab-open — chunk it the usual way so THIS first paint of
-  // this particular result set still feels instant even with a large medicine list.
+  // With a large medicine list (280+ in this clinic's case), building every card's full HTML
+  // — batch lists included — and inserting it all into the DOM in one go forces one huge
+  // layout/paint pass before anything appears, which is what made opening this tab feel slow.
+  // Instead: render just enough cards to fill the first screen instantly, then keep appending
+  // the rest in small chunks spread across animation frames, so the tab opens right away and
+  // the remaining medicines fill in moments later without freezing the UI in between.
   const FIRST_BATCH = 15;
   const CHUNK_SIZE = 30;
   const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
-  container.innerHTML = `
-    ${filterHtml}
-    ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
-    <div id="invCardsList">${firstCards}</div>
-  `;
 
-  if(filtered.length <= FIRST_BATCH){ _invListLoadedFor = filterKey; return; }
-  let idx = FIRST_BATCH;
-  const appendNextChunk = ()=>{
-    // Bail out quietly if a newer renderInvList() call has happened since (search edited,
-    // tab changed, a medicine saved/restocked/deleted) or the list container is simply no
-    // longer on screen — either way, this job's work is stale and should not touch the page.
-    if(myToken !== _invRenderToken) return;
-    const listEl = document.getElementById("invCardsList");
-    if(!listEl) return;
-    const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
-    listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
-    idx += CHUNK_SIZE;
-    if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
-    else _invListLoadedFor = filterKey;
-  };
-  requestAnimationFrame(appendNextChunk);
-}
-// Tapping one of the 4 header pills narrows the list below to just that group; tapping the
-// same pill again (or the "Total" pill, which stands for "all") clears the filter. This is a
-// discrete click, not continuous typing, so — unlike onInvQuery — it's fine to redo the whole
-// tab's HTML via renderInventory() rather than only the results container: the pills themselves
-// need their active/inactive styling refreshed too, and there's no keyboard composition here
-// that a full re-render could interrupt.
-function toggleInvStatFilter(kind){
-  inv.statFilter = (kind==='all' || inv.statFilter===kind) ? null : kind;
-  renderInventory();
-}
-function renderInventory(){
-  _invListLoadedFor = null;
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
   // from the normal New Bill search — see specialMatches()). S. tagged = m.sTag, which is a
@@ -3468,29 +3139,41 @@ function renderInventory(){
   const specialMedicines = inventory.filter(m=>!m.deleted && m.specialCategory).length;
   const sTaggedMedicines = inventory.filter(m=>!m.deleted && m.sTag).length;
   const nonSpecialMedicines = inventory.filter(m=>!m.deleted && !m.specialCategory).length;
-  // Each pill below is a button rather than a static span: tapping it narrows invCardsList to
-  // just that group (see toggleInvStatFilter). The active one is filled solid instead of its
-  // usual soft tint so it's clear at a glance which filter (if any) is currently applied.
-  const pillBtn = (active, softVar, solidVar, count, kind)=>
-    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${count}</button>`;
   document.getElementById("main").innerHTML = `
     <div class="mb2" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;">
       <div class="flex gap2">
-        ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
-        ${pillBtn(inv.statFilter==='sTag', '--dangerSoft', '--danger', sTaggedMedicines, 'sTag')}
+        <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);">${specialMedicines}</span>
+        <span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);">${sTaggedMedicines}</span>
       </div>
       <div class="flex gap2">
-        ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
-        ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
+        <span class="pill-badge" style="background:transparent;color:var(--primary);">${totalMedicines}</span>
+        <span class="pill-badge" style="background:var(--successSoft);color:var(--success);">${nonSpecialMedicines}</span>
       </div>
     </div>
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
     </div>
-    <div id="invListContainer"></div>
+    ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
+    <div id="invCardsList">${firstCards}</div>
   `;
-  renderInvList();
+
+  if(filtered.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      // Bail out quietly if a newer renderInventory() call has happened since (tab changed,
+      // search edited, a medicine saved/restocked/deleted) or the list container is simply no
+      // longer on screen — either way, this job's work is stale and should not touch the page.
+      if(myToken !== _invRenderToken) return;
+      const listEl = document.getElementById("invCardsList");
+      if(!listEl) return;
+      const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
+      listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
 }
 
 function renderInvFormModal(){
@@ -3527,18 +3210,15 @@ function renderInvFormModal(){
           <label class="small">Warn me when stock falls to (medicine)</label>
           <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
           <div class="divider-top" style="padding-top:10px;">
-            <div class="flex gap2">
-              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
-              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
+            <label class="small" style="display:block;margin-bottom:4px;">Scan barcode (USB/Bluetooth scanner, or paste the code)</label>
+            <div class="flex gap2 mb1">
+              <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" placeholder="Tap here, then scan">
+              <button type="button" class="btn btn-outline" onclick="applyInvScan()">Apply</button>
             </div>
-            <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-            ${inv.copyMenuOpen ? `
-              <p class="small faint" style="margin:8px 0 6px;">Saves this medicine as it is now, then reopens this form filled in the same way for the variant — MRP is always left blank too.</p>
-              <div class="flex gap2 mb2">
-                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('formula')">D.Formula</button>
-                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('strength')">D.Strength</button>
-              </div>
-            ` : ""}
+            <div class="flex gap2" style="flex-wrap:wrap;padding:2px 0;">
+              <button type="button" onclick="scanFromPhoto('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📸 Take a photo of it</button>
+              <button type="button" onclick="requestCameraThenScan('newmed')" style="background:none;border:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📷 Or live camera</button>
+            </div>
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
@@ -3950,7 +3630,7 @@ function renderRecordArchive(){
 }
 function toggleExpand(id){ rec.expandedId = rec.expandedId===id?null:id; rec.editingId=null; rec.expandedTxSection=null; render(); }
 function toggleTxSection(section){ rec.expandedTxSection = rec.expandedTxSection===section ? null : section; render(); }
-function onRecordsSearch(v){ rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; renderRecordsBody(); }
+function onRecordsSearch(v){ scheduleQueryRender(rec.searchQuery, v); rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; }
 function txDateSearchString(ts){
   const d = new Date(ts);
   return (d.toDateString()+" "+d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleDateString()).toLowerCase();
@@ -3994,27 +3674,7 @@ function openEditTx(id){
 function cancelEditTx(){ rec.editingId=null; render(); }
 function onEditTxPatient(v){ recEdit.patient=v; }
 function onEditTxFee(v){ recEdit.fee=v; scheduleRender(); }
-// Self-contained, same pattern as billQueryDropdownHtml() above: recomputes matches from
-// current state and returns just the dropdown HTML for the edit-bill medicine search box.
-function editTxDropdownHtml(){
-  const q = recEdit.query.trim().toLowerCase();
-  const matches = q ? inventory.filter(m=>!m.deleted && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
-  const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
-  return (matches.length && !selMed) ? `<div class="dropdown">${matches.map(m=>`
-      <button onclick="pickEditTxMed('${m.id}')">
-        <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
-        <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-      </button>`).join("")}</div>` : "";
-}
-// Updates just the dropdown next to the edit-bill medicine search box, keyed off whichever
-// transaction is currently being edited (there's only ever one at a time) — never touches the
-// input itself, and never rebuilds the rest of the Records tab body around it.
-function refreshEditTxDropdown(){
-  if(!rec.editingId) return;
-  const el = document.getElementById("editTxDropdown-"+rec.editingId);
-  if(el) el.innerHTML = editTxDropdownHtml();
-}
-function onEditTxQuery(v){ recEdit.query=v; recEdit.selectedMedId=null; refreshEditTxDropdown(); }
+function onEditTxQuery(v){ scheduleQueryRender(recEdit.query, v); recEdit.query=v; recEdit.selectedMedId=null; }
 function onEditTxPills(v){ recEdit.pills=v; scheduleRender(); }
 function pickEditTxMed(id){ recEdit.selectedMedId=id; const m=inventory.find(x=>x.id===id); recEdit.query=m?m.name:""; render(); }
 function addEditTxItem(){
@@ -4062,6 +3722,8 @@ function saveEditTx(){
 }
 
 function renderTxEditForm(t){
+  const q = recEdit.query.trim().toLowerCase();
+  const matches = q ? inventory.filter(m=>!m.deleted && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
   const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
   return `
     <div class="mt3 divider-top">
@@ -4074,7 +3736,11 @@ function renderTxEditForm(t){
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="editTxQuery-${t.id}" value="${esc(selMed?selMed.name:recEdit.query)}" oninput="onEditTxQuery(this.value)" placeholder="Search medicine…">
-        <div id="editTxDropdown-${t.id}">${editTxDropdownHtml()}</div>
+        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
+          <button onclick="pickEditTxMed('${m.id}')">
+            <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
+            <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+          </button>`).join("")}</div>` : ""}
       </div>
       ${selMed ? `
         <div class="flex gap2 mt2" style="align-items:flex-end;">
@@ -4177,20 +3843,23 @@ function renderTxCard(t){
     </div>`;
 }
 
-// Fills #recordsBody (search results, or the normal month/day view + archive) from the current
-// rec state, without ever touching #recordsSearchInput itself. Called once by renderRecords()
-// on a full render, and directly by onRecordsSearch() on every keystroke — since it never
-// rebuilds the input node, it's safe to call on every keystroke with no debounce, at any typing
-// speed. (An expanded/editing tx card's own nested search box, when open, is handled separately
-// by refreshEditTxDropdown() so that typing there doesn't rebuild this whole body either.)
-function renderRecordsBody(){
-  const container = document.getElementById("recordsBody");
-  if(!container) return;
+function renderRecords(){
+  if(visibleTransactions().length===0){
+    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
+    return;
+  }
+
+  const searchBar = `
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
+    </div>`;
 
   const q = rec.searchQuery.trim().toLowerCase();
   if(q){
     const matched = visibleTransactions().filter(t=>txMatchesQuery(t,q)).sort((a,b)=>b.timestamp-a.timestamp);
-    container.innerHTML = (matched.length===0
+    document.getElementById("main").innerHTML = searchBar +
+      (matched.length===0
         ? `<p class="small faint" style="text-align:center;padding:32px 0;">No bills match "${esc(rec.searchQuery)}".</p>`
         : `<p class="small faint mb2">${matched.length} result${matched.length===1?"":"s"}</p>` + matched.map(renderTxCard).join(""));
     return;
@@ -4247,21 +3916,7 @@ function renderRecordsBody(){
     `;
   }).join("");
 
-  container.innerHTML = monthStat + daysHtml + renderRecordArchive();
-}
-function renderRecords(){
-  if(visibleTransactions().length===0){
-    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
-    return;
-  }
-  document.getElementById("main").innerHTML = `
-    <div class="search-wrap mb2">
-      <span class="search-icon">🔍</span>
-      <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
-    </div>
-    <div id="recordsBody"></div>
-  `;
-  renderRecordsBody();
+  document.getElementById("main").innerHTML = searchBar + monthStat + daysHtml + renderRecordArchive();
 }
 
 /* ===================== LOW STOCK TAB ===================== */
@@ -4348,88 +4003,52 @@ function fillListProgressively(containerId, items, buildRow, myToken){
   };
   requestAnimationFrame(appendNextChunk);
 }
-// Tapping a summary pill narrows the page below to just that one group; tapping the same pill
-// again clears the filter back to showing everything. A discrete click, not continuous typing,
-// so redoing the whole tab via renderStock() (rather than only a results container) is fine —
-// the pills themselves need their active/inactive styling refreshed too.
-function toggleWarnFilter(kind){
-  warnUi.filter = (warnUi.filter===kind) ? null : kind;
-  renderStock();
-}
 function renderStock(){
   const myToken = ++_warnRenderToken;
-  const filter = warnUi.filter; // null|'expired'|'expiringSoon'|'lowStock'
   const list = lowStockList();
   const hidden = inventory.filter(m=>!m.deleted && m.noWarn && m.stockPills <= (m.lowStockAt ?? 0));
   const expiringAll = expiringBatches();
   // expiringBatches() covers both "already past its date" (daysLeft<0) and "expiring soon"
-  // (0-10 days left) in one list — split those apart here so the summary counts (and the
-  // expired/expiringSoon filter pills) match what the individual cards below actually say
-  // (batchExpiryLabel does this same day<0 check).
-  const expiredItems = expiringAll.filter(e=>e.daysLeft<0);
-  const expiringSoonItems = expiringAll.filter(e=>e.daysLeft>=0);
+  // (0-10 days left) in one list — split those apart here so the summary counts match what
+  // the individual cards below actually say (batchExpiryLabel does this same day<0 check).
+  const expiredCount = expiringAll.filter(e=>e.daysLeft<0).length;
+  const expiringSoonCount = expiringAll.length - expiredCount;
 
-  // Nothing-to-show and the pill counts themselves always reflect the TRUE totals, regardless
-  // of any active filter — a filter should never make its own pill (or the others) disappear
-  // or relabel, only narrow what's listed underneath.
-  if(list.length===0 && hidden.length===0 && expiringAll.length===0){
-    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">All medicines are sufficiently stocked and nothing is expiring soon. 👍</p>`;
-    return;
-  }
+  const summaryHtml = (list.length || expiringAll.length) ? `
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      ${expiredCount ? `<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);font-weight:700;">⏳ ${expiredCount} expired</span>` : ""}
+      ${expiringSoonCount ? `<span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-weight:700;">⏳ ${expiringSoonCount} expiring soon</span>` : ""}
+      ${list.length ? `<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);font-weight:700;">📦 ${list.length} low stock</span>` : ""}
+    </div>` : "";
 
-  const pillBtn = (active, softVar, solidVar, label, kind)=>
-    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;font-weight:700;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleWarnFilter('${kind}')">${label}</button>`;
-  const summaryHtml = `
-    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-      ${expiredItems.length ? pillBtn(filter==='expired', '--dangerSoft', '--danger', `⏳ ${expiredItems.length} expired`, 'expired') : ""}
-      ${expiringSoonItems.length ? pillBtn(filter==='expiringSoon', '--warningSoft', '--warning', `⏳ ${expiringSoonItems.length} expiring soon`, 'expiringSoon') : ""}
-      ${list.length ? pillBtn(filter==='lowStock', '--dangerSoft', '--danger', `📦 ${list.length} low stock`, 'lowStock') : ""}
-    </div>
-    ${filter ? `<p class="small faint mb2">Filtered · <button type="button" onclick="toggleWarnFilter('${filter}')" style="background:none;border:none;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:inherit;">Show all</button></p>` : ""}
-  `;
-
-  // Which section(s) the current pill (if any) leaves visible — hidden (suppressed-warning)
-  // items are grouped with low stock since that's what they are underneath, just muted.
-  const showLowStock = !filter || filter==='lowStock';
-  const showHidden = !filter || filter==='lowStock';
-  const expiringToShow = filter==='expired' ? expiredItems : filter==='expiringSoon' ? expiringSoonItems : (filter==='lowStock' ? [] : expiringAll);
-  const expiringHeadingText = filter==='expired' ? "⏳ Expired" : filter==='expiringSoon' ? "⏳ Expiring soon (within 10 days)" : "⏳ Expiring within 10 days";
-
-  const listToShow = showLowStock ? list : [];
-  const hiddenToShow = showHidden ? hidden : [];
-
-  if(listToShow.length===0 && hiddenToShow.length===0 && expiringToShow.length===0){
-    // The filtered-down group happens to be empty right now (e.g. the last expired batch was
-    // just disposed of while this pill was active) even though the tab as a whole isn't.
-    document.getElementById("main").innerHTML = `
-      ${summaryHtml}
-      <p class="small faint" style="text-align:center;padding:32px 0;">Nothing in this group right now. 👍</p>
-    `;
-    return;
-  }
-
-  const hiddenHeadingHtml = hiddenToShow.length ? `
-    <p class="small" style="font-weight:700;color:var(--warning);margin:${listToShow.length?"18px":"0"} 0 8px;">
+  const hiddenHeadingHtml = hidden.length ? `
+    <p class="small" style="font-weight:700;color:var(--warning);margin:${list.length?"18px":"0"} 0 8px;">
       ⚠ These are actually low too, but their warning is turned off
     </p>
     <div id="warnHiddenList"></div>` : "";
 
-  const expiringHeadingHtml = expiringToShow.length ? `
-    <p class="small" style="font-weight:700;color:var(--danger);margin:${listToShow.length||hiddenToShow.length?"18px":"0"} 0 8px;">
-      ${expiringHeadingText}
+  const expiring = expiringAll;
+  const expiringHeadingHtml = expiring.length ? `
+    <p class="small" style="font-weight:700;color:var(--danger);margin:${list.length||hidden.length?"18px":"0"} 0 8px;">
+      ⏳ Expiring within 10 days
     </p>
     <div id="warnExpiringList"></div>` : "";
 
+  if(list.length===0 && hidden.length===0 && expiring.length===0){
+    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">All medicines are sufficiently stocked and nothing is expiring soon. 👍</p>`;
+    return;
+  }
+
   document.getElementById("main").innerHTML = `
     ${summaryHtml}
-    ${listToShow.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
+    ${list.length ? `<button class="btn btn-danger" style="width:100%;padding:12px;margin-bottom:12px;" onclick="shareLowStock()">📤 Share low-stock list</button>` : ""}
     <div id="warnLowStockList"></div>
     ${hiddenHeadingHtml}
     ${expiringHeadingHtml}
   `;
-  fillListProgressively("warnLowStockList", listToShow, buildLowStockRow, myToken);
-  if(hiddenToShow.length) fillListProgressively("warnHiddenList", hiddenToShow, buildHiddenLowStockRow, myToken);
-  if(expiringToShow.length) fillListProgressively("warnExpiringList", expiringToShow, buildExpiringRow, myToken);
+  fillListProgressively("warnLowStockList", list, buildLowStockRow, myToken);
+  if(hidden.length) fillListProgressively("warnHiddenList", hidden, buildHiddenLowStockRow, myToken);
+  if(expiring.length) fillListProgressively("warnExpiringList", expiring, buildExpiringRow, myToken);
 }
 
 /* ===================== USERS / ROLES / LOGIN ===================== */
@@ -5267,7 +4886,7 @@ function renderManageUsersModal(){
 }
 
 /* ===================== NOTEPAD TAB (multiple notes, one private notepad per logged-in user) ===================== */
-function onNotesSearch(v){ notesUi.searchQuery=v; renderNotesListBody(); }
+function onNotesSearch(v){ scheduleQueryRender(notesUi.searchQuery, v); notesUi.searchQuery=v; }
 function openNewNote(){ notesUi.openId="new"; notesUi.draftTitle=""; notesUi.draftBody=""; render(); }
 function openExistingNote(id){
   const n = notes.find(x=>x.id===id);
@@ -5321,48 +4940,8 @@ function buildNoteCard(n){
         </div>
       </div>`;
 }
-// Fills #notesEmptyMsg + #notesList from the current notesUi.searchQuery, without ever
-// touching #notesSearchInput itself. Called once by renderNotes() on a full render, and
-// directly by onNotesSearch() on every keystroke — since it never rebuilds the input node,
-// it's safe to call on every keystroke with no debounce, at any typing speed.
-function renderNotesListBody(){
-  const myToken = ++_notesRenderToken;
-  const sorted = notes
-    .filter(n=>{
-      if(n.deleted) return false;
-      const q = notesUi.searchQuery.trim().toLowerCase();
-      if(!q) return true;
-      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
-    })
-    .sort((a,b)=>b.updatedAt-a.updatedAt);
-
-  const emptyEl = document.getElementById("notesEmptyMsg");
-  if(emptyEl) emptyEl.innerHTML = sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:"";
-
-  // Same instant-first-batch, background-chunk-the-rest approach as Inventory/Warnings —
-  // future-proofing against notes piling up over years the same way bills and medicines can.
-  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
-  const listEl = document.getElementById("notesList");
-  if(listEl) listEl.innerHTML = sorted.slice(0, FIRST_BATCH).map(buildNoteCard).join("");
-  if(sorted.length > FIRST_BATCH){
-    let idx = FIRST_BATCH;
-    const appendNextChunk = ()=>{
-      if(myToken !== _notesRenderToken) return;
-      const el = document.getElementById("notesList");
-      if(!el) return;
-      const chunk = sorted.slice(idx, idx+CHUNK_SIZE);
-      el.insertAdjacentHTML("beforeend", chunk.map(buildNoteCard).join(""));
-      idx += CHUNK_SIZE;
-      if(idx < sorted.length) requestAnimationFrame(appendNextChunk);
-    };
-    requestAnimationFrame(appendNextChunk);
-  }
-}
 function renderNotes(){
-  // Invalidates any still-in-flight background chunk job from a previous list-view render
-  // before doing anything else — including here in the "opened a note" branch below, which
-  // has no list of its own to hand a fresh token to.
-  ++_notesRenderToken;
+  const myToken = ++_notesRenderToken;
   const meLabel = `
     <div class="card" style="padding:10px 14px;">
       <p class="small faint" style="margin:0;">Notepad for <strong style="color:var(--text);">${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")}</strong> — private to you, not visible to other logged-in users on this device.</p>
@@ -5383,17 +4962,43 @@ function renderNotes(){
     return;
   }
 
+  const sorted = notes
+    .filter(n=>{
+      if(n.deleted) return false;
+      const q = notesUi.searchQuery.trim().toLowerCase();
+      if(!q) return true;
+      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
+    })
+    .sort((a,b)=>b.updatedAt-a.updatedAt);
   document.getElementById("main").innerHTML = meLabel + `
     <button class="btn-dashed mb2" onclick="openNewNote()">+ New note</button>
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="notesSearchInput" value="${esc(notesUi.searchQuery)}" oninput="onNotesSearch(this.value)" placeholder="Search notes by topic or text…">
     </div>
-    <div id="notesEmptyMsg"></div>
+
+    ${sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:""}
     <div id="notesList"></div>
     <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes. Medicines, bills, and records are shared with everyone on this device.</p>
   `;
-  renderNotesListBody();
+  // Same instant-first-batch, background-chunk-the-rest approach as Inventory/Warnings —
+  // future-proofing against notes piling up over years the same way bills and medicines can.
+  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
+  const listEl = document.getElementById("notesList");
+  if(listEl) listEl.innerHTML = sorted.slice(0, FIRST_BATCH).map(buildNoteCard).join("");
+  if(sorted.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      if(myToken !== _notesRenderToken) return;
+      const el = document.getElementById("notesList");
+      if(!el) return;
+      const chunk = sorted.slice(idx, idx+CHUNK_SIZE);
+      el.insertAdjacentHTML("beforeend", chunk.map(buildNoteCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < sorted.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
 }
 
 /* ===================== BACKUP & RESTORE ===================== */
@@ -5691,7 +5296,6 @@ function renderHeaderMenu(){
   if(can("printer")) items.push({label:"🖨 Printer", action:"selectPrinter()"});
   items.push({label:"💾 Backup", action:"toggleBackupModal()"});
   if(can("receiptSetup")) items.push({label:"🧾 Receipt setup", action:"editReceiptSettings()"});
-  items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
   items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
