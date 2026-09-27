@@ -407,6 +407,8 @@ function newBillState(){
 let bill = newBillState();
 let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""},
             scanText:"", // transient: text sitting in the New medicine form's "scan or paste barcode" box
+            copyMenuOpen:false, // whether the "S.Copy" D.Formula/D.Strength popup is open in the New medicine form
+            editCopyMenuOpen:false, // same, but for the inline Edit form's own "S.Copy" popup
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", restockLotNo:"", restockScanText:"", editId:null,
             editForm:{name:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"",stockPills:""} };
 let backupUi = { open:false };
@@ -1067,41 +1069,42 @@ function scheduleRender(){
   renderScheduled = true;
   requestAnimationFrame(()=>{ renderScheduled = false; render(); });
 }
-/* The Records/Inventory search boxes, and the New Bill medicine + special-medicine search
-   boxes, all re-filter a whole list on every keystroke, making their render heavier than a
-   typical input's — heavy enough that even the once-per-frame scheduleRender() above can still
-   land a render mid-hold and interrupt the OS's native "hold backspace to repeat-delete" gesture
-   (same underlying issue as scheduleRender, just not fully solved by it for these). These use a
-   trailing debounce instead: no render happens until typing/deleting actually pauses, so the
-   input's DOM node is never touched while a key is held down, letting the native repeat-delete
-   run uninterrupted; releasing the key (or a single tap) still updates the results shortly
-   after, same as before. */
+// The Records/Inventory search boxes, and the New Bill / special-medicine / edit-bill medicine
+// search boxes, used to funnel every keystroke through scheduleRender()/render() like any other
+// input, just with an extra trailing-debounce variant (scheduleQueryRender, since removed, which
+// called the scheduleSearchRender() below for deletions) for deletions. That was only ever a
+// mitigation, not a fix: render() rebuilds a whole tab's innerHTML, which — even with the "swap
+// the original node back" trick below — MOMENTARILY DETACHES the focused input from the document
+// while the new HTML is being inserted, before the old node is swapped back in. Browsers treat a
+// focused element becoming detached as an implicit blur, which silently aborts whatever the
+// Android keyboard's IME was mid-composing (composition state lives on the node's live DOM
+// attachment, not just the node object) — even though the exact same node comes back a moment
+// later. A fast render cadence (scheduleRender's ~16ms) kept the loss down to about one character
+// per interruption, imperceptible for ordinary inputs; a search box's heavier
+// re-filter-the-whole-list render made that interruption land more often, and the 220ms debounce
+// tried for deletions gave Gboard's predictive/batched composition far longer to build up a whole
+// in-flight word before the hit, losing several characters at once during fast typing instead of
+// at most one.
+// The actual fix: these search boxes now never call render() (or scheduleRender) while the
+// person is typing at all. Each one's oninput handler updates its own state and then writes
+// straight into a small, dedicated results container sitting next to the input (e.g.
+// #billQueryDropdown, #invListContainer, #recordsBody, #notesEmptyMsg/#notesList,
+// #editTxDropdown-<id>) via a plain el.innerHTML = ... call. The input element itself is never
+// part of that innerHTML, so it's never destroyed or detached, so there's nothing for the IME to
+// get silently interrupted by — no debounce needed, at any typing speed. A full render() still
+// happens for anything else that changes the page (selecting a match, adding an item, switching
+// tabs, cloud sync, etc.), which is fine since those aren't mid-keystroke events. See
+// onBillQuery/refreshBillQueryDropdown, onInvQuery/renderInvList, onRecordsSearch/
+// renderRecordsBody, onEditTxQuery/refreshEditTxDropdown, and onNotesSearch/renderNotesListBody.
+// Still used below by applyRemoteSnapshot() — an incoming cloud-sync update is a full render()
+// triggered by a BACKGROUND event, unrelated to whatever the person happens to be typing into at
+// that moment (possibly a plain, non-search input the fix above doesn't cover). Trailing-debounce
+// it the same way a search box's own typing used to be debounced, so it waits for typing to
+// pause first instead of landing mid-keystroke.
 let searchRenderTimer = null;
 function scheduleSearchRender(){
   if(searchRenderTimer) clearTimeout(searchRenderTimer);
   searchRenderTimer = setTimeout(()=>{ searchRenderTimer = null; render(); }, 220);
-}
-// Search boxes were still dropping characters during fast forward typing even after the
-// general dropped-character fix above (render()'s "swap the original node back" logic) was
-// applied everywhere — because render() still MOMENTARILY DETACHES the focused input from the
-// document as part of resetting main's innerHTML, before reattaching that same node a moment
-// later. Browsers treat a focused element becoming detached as an implicit blur, which aborts
-// whatever the Android keyboard's IME was mid-composing (composition state lives on the DOM
-// node's live attachment, not just the node object) — even though the exact node comes back.
-// scheduleRender()'s near-immediate (~16ms, one animation frame) cadence means there's barely
-// ever more than a single character "in flight" and uncommitted when that interruption lands,
-// so the loss is imperceptible — which is why every other input in the app was already fine.
-// scheduleSearchRender()'s 220ms debounce, by contrast, gives Gboard's predictive/batched
-// composition far longer to build up a whole in-flight word before that same interruption
-// hits, losing several characters at once instead of at most one.
-// Fix: only use the slower debounce for an actual deletion (still needed so a HELD backspace's
-// native OS repeat-delete gesture isn't interrupted mid-hold) — forward typing (value getting
-// longer, or same length e.g. after a select-all-retype) now uses the same fast scheduleRender()
-// that already works correctly everywhere else. Comparing the old vs. new value's length avoids
-// needing a separate keydown listener just to tell forward typing apart from deletion.
-function scheduleQueryRender(prevValue, newValue){
-  if((newValue||"").length < (prevValue||"").length) scheduleSearchRender();
-  else scheduleRender();
 }
 /* ===================== RENDER (with focus preservation) ===================== */
 function syncHeaderOffset(){
@@ -1224,7 +1227,7 @@ function anyMenuOpen(){
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
-    remarksUi.editing || receiptUi.open || inv.editId || inv.restockId || inv.showForm || notesUi.openId!==null);
+    remarksUi.editing || receiptUi.open || inv.editId || inv.restockId || inv.showForm || inv.copyMenuOpen || inv.editCopyMenuOpen || notesUi.openId!==null);
 }
 function closeTopMenu(){
   // Ordered so whatever can appear layered on top of another open menu/dropdown is checked
@@ -1256,8 +1259,10 @@ function closeTopMenu(){
   if(bill.testsMenuOpen){ bill.testsMenuOpen=false; testPriceEditorOpen=false; render(); return; }
   if(remarksUi.editing){ remarksUi.editing=false; render(); return; }
   if(receiptUi.open){ closeReceiptModal(); return; }
+  if(inv.editCopyMenuOpen){ inv.editCopyMenuOpen=false; render(); return; }
   if(inv.editId){ inv.editId=null; render(); return; }
   if(inv.restockId){ inv.restockId=null; render(); return; }
+  if(inv.copyMenuOpen){ inv.copyMenuOpen=false; render(); return; }
   if(inv.showForm){ inv.showForm=false; render(); return; }
   // The notepad editor's own "← Back" button auto-saves the draft (see backFromNote()) rather
   // than discarding it — a note left half-typed shouldn't vanish — so back-button behaves the
@@ -1627,7 +1632,7 @@ function saveDefaultDoctorFee(){
 
 function onBillPatient(v){ bill.patient=v; scheduleRender(); }
 function onBillFee(v){ bill.fee=v; scheduleRender(); }
-function onBillQuery(v){ scheduleQueryRender(bill.query, v); bill.query=v; bill.selectedMedId=null; }
+function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; refreshBillQueryDropdown(); }
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
 function onBillPaymentMode(v){ bill.paymentMode=v; render(); }
 function onBillRemarks(v){
@@ -1767,7 +1772,7 @@ function pendingSpecialBillSubtotal(){
 
 /* ---- Special-category medicines: separate search/add flow, see specialMatches() in
    renderBill and the state comment in newBillState() ---- */
-function onBillSpecialQuery(v){ scheduleQueryRender(bill.specialQuery, v); bill.specialQuery=v; bill.selectedSpecialMedId=null; }
+function onBillSpecialQuery(v){ bill.specialQuery=v; bill.selectedSpecialMedId=null; refreshBillSpecialQueryDropdown(); }
 function pickBillSpecialMed(id){ bill.selectedSpecialMedId=id; const m=inventory.find(x=>x.id===id); bill.specialQuery=m?m.name:""; render(); }
 function onBillSpecialPills(v){ bill.specialPills=v; scheduleRender(); }
 function setBillSpecialPillsQuick(n){ bill.specialPills=String(n); render(); }
@@ -2195,6 +2200,48 @@ function searchRankScore(m, rawQuery){
   return strengthMatchesQuery(m.mg, rawQuery) ? 50 : 0;
 }
 
+// Self-contained: recomputes matches from current state and returns the dropdown/no-match HTML
+// for the "Add medicine" search box. Called both by the initial full renderBill() and by
+// refreshBillQueryDropdown() below on every keystroke, so the two can never drift apart.
+function billQueryDropdownHtml(){
+  const q = bill.query.trim().toLowerCase();
+  const matches = q ? inventory.filter(m=>!m.deleted && !m.specialCategory && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
+  const selMed = inventory.find(m=>m.id===bill.selectedMedId);
+  return (matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
+      <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
+        <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
+          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
+          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+        </button>
+        ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
+      </div>`).join("")}</div>` : "") +
+    (bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : "");
+}
+function refreshBillQueryDropdown(){
+  const el = document.getElementById("billQueryDropdown");
+  if(el) el.innerHTML = billQueryDropdownHtml();
+}
+// Same pattern as billQueryDropdownHtml() above, for the special-category search box.
+function billSpecialQueryDropdownHtml(){
+  const sq = bill.specialQuery.trim().toLowerCase();
+  const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && medicineMatchesQuery(m,sq)).sort((a,b)=>searchRankScore(b,sq)-searchRankScore(a,sq)).slice(0,6) : [];
+  const selSpecialMed = inventory.find(m=>m.id===bill.selectedSpecialMedId);
+  return (specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
+      <button onclick="pickBillSpecialMed('${m.id}')">
+        <div style="min-width:0;">
+          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
+          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
+          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+        </div>
+      </button>`).join("")}</div>` : "") +
+    (bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : "");
+}
+function refreshBillSpecialQueryDropdown(){
+  const el = document.getElementById("billSpecialQueryDropdown");
+  if(el) el.innerHTML = billSpecialQueryDropdownHtml();
+}
+
 function renderBill(){
   const q = bill.query.trim().toLowerCase();
   // Medicines carrying a Special category are deliberately excluded from this normal
@@ -2343,16 +2390,7 @@ function renderBill(){
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="billQueryInput" value="${esc(selMed?selMed.name:bill.query)}" oninput="onBillQuery(this.value)" placeholder="Search medicine…">
-        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
-          <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
-            <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
-              <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
-              ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-              <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-            </button>
-            ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
-          </div>`).join("")}</div>` : ""}
-        ${bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : ""}
+        <div id="billQueryDropdown">${billQueryDropdownHtml()}</div>
       </div>
 
       <div class="mt3 divider-top">
@@ -2360,15 +2398,7 @@ function renderBill(){
         <div class="search-wrap">
           <span class="search-icon">🔍</span>
           <input ${NOAC} id="billSpecialQueryInput" value="${esc(selSpecialMed?selSpecialMed.name:bill.specialQuery)}" oninput="onBillSpecialQuery(this.value)" placeholder="Search special medicine…">
-          ${specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
-            <button onclick="pickBillSpecialMed('${m.id}')">
-              <div style="min-width:0;">
-                <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
-                ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-                <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-              </div>
-            </button>`).join("")}</div>` : ""}
-          ${bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : ""}
+          <div id="billSpecialQueryDropdown">${billSpecialQueryDropdownHtml()}</div>
         </div>
 
         ${selSpecialMed ? `
@@ -2901,7 +2931,7 @@ function applyScanToRestock(medId, parsed){
 }
 
 /* ===================== INVENTORY TAB ===================== */
-function onInvQuery(v){ scheduleQueryRender(inv.query, v); inv.query=v; }
+function onInvQuery(v){ inv.query=v; renderInvList(); }
 function searchInvByFormula(formula){
   inv.query = formula || "";
   render();
@@ -2924,7 +2954,7 @@ function onInvCategoryPicked(v){
   else { inv.form.category=v; inv.form.specialCategory=""; }
   render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
-function toggleInvForm(){ inv.showForm=!inv.showForm; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
+function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
 function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; render(); }
 function addMedicine(){
   const f = inv.form;
@@ -2947,7 +2977,7 @@ function deleteMedicine(id){
     saveInventory(); render();
   });
 }
-function toggleRestock(id){ inv.editId=null; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
+function toggleRestock(id){ inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
 function onRestockMrp(v){ inv.restockMrp=v; }
@@ -2974,6 +3004,7 @@ function doRestock(id){
 function openEdit(id){
   inv.restockId=null;
   inv.editId = inv.editId===id?null:id;
+  inv.editCopyMenuOpen=false;
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
     pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag }; }
@@ -3001,6 +3032,62 @@ function saveEdit(id){
   saveInventory();
   inv.editId=null;
   render();
+}
+
+/* ===================== S.COPY: save-and-start-a-variant ===================== */
+/* "S.Copy" saves whichever medicine is currently being added/edited exactly as filled in, then
+   immediately reopens the New medicine form pre-filled with those same details — except for
+   whichever one field the person picks to leave blank (plus MRP, always left blank too, since a
+   different formula or strength almost always means a different price). Meant for the common
+   case of a medicine that comes in a plain form and a combination form (D.Formula — leaves
+   Formula + MRP empty, keeps Strength), or in more than one strength (D.Strength — leaves
+   Strength + MRP empty, keeps Formula), so the next entry only needs that one field plus MRP
+   typed in instead of the whole form redone from scratch. */
+function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; render(); }
+function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; render(); }
+// Shared by both entry points below: opens the New medicine form pre-filled from `f` (either an
+// inv.form or inv.editForm snapshot — both carry the same field names this reads), with
+// `variant` deciding which one field is left blank alongside MRP.
+function openCopyVariantForm(f, variant){
+  inv.editId = null;
+  inv.editCopyMenuOpen = false;
+  inv.restockId = null;
+  inv.copyMenuOpen = false;
+  inv.scanText = "";
+  inv.form = {
+    name: f.name.trim(),
+    category: f.category||"",
+    specialCategory: f.specialCategory||"",
+    formula: variant==='formula' ? "" : (f.formula||"").trim(),
+    mg: variant==='strength' ? "" : (f.mg||"").trim(),
+    mrp: "", // a different formula/strength is almost always a different price — always left blank
+    pillsPerBox: f.pillsPerBox||"",
+    lowStockAt: f.lowStockAt||"10",
+    sTag: !!f.sTag,
+    gtin: "" // deliberately NOT carried over — a different formula/strength product has its own barcode
+  };
+  inv.showForm = true;
+  render();
+  showToast(variant==='formula' ? "✓ Saved — enter the different formula & MRP" : "✓ Saved — enter the different strength & MRP");
+}
+// Called from the New medicine form's own S.Copy menu: saves the medicine currently being typed
+// in (same validation addMedicine() itself uses), then reopens the form for the variant.
+function copyNewMedicineVariant(variant){
+  const f = inv.form;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
+  const snapshot = {...f};
+  addMedicine();
+  openCopyVariantForm(snapshot, variant);
+}
+// Called from an existing medicine's inline Edit form's S.Copy menu: saves the edits to THAT
+// medicine (same validation saveEdit() itself uses), then opens the New medicine form for the
+// variant — as a separate, new entry, not a further edit of the one just saved.
+function copyEditVariant(id, variant){
+  const f = inv.editForm;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
+  const snapshot = {...f};
+  saveEdit(id);
+  openCopyVariantForm(snapshot, variant);
 }
 
 // Bumped on every renderInventory() call so a background chunk-loading job from a previous
@@ -3075,6 +3162,16 @@ function buildInvCard(m){
         <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
         <label class="small">Warn me when stock falls to (medicine)</label>
         <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
+        <div class="divider-top8" style="padding-top:8px;">
+          <button type="button" class="btn btn-outline" style="width:100%;font-size:12px;padding:8px;" onclick="toggleEditCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+          ${inv.editCopyMenuOpen ? `
+            <p class="small faint" style="margin:8px 0 6px;">Saves the changes above to this medicine, then opens New medicine filled in the same way for the variant — MRP is always left blank too.</p>
+            <div class="flex gap2 mb2">
+              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','formula')">D.Formula</button>
+              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','strength')">D.Strength</button>
+            </div>
+          ` : ""}
+        </div>
         <div class="flex gap2 mt2">
           <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
           <button class="btn btn-primary flex1" onclick="saveEdit('${m.id}')">Save changes</button>
@@ -3122,7 +3219,11 @@ function buildInvCard(m){
         </div>` : ""}
     </div>`;
 }
-function renderInventory(){
+// Fills #invListContainer (the "no matches" message + card list) from the current inv.query,
+// without ever touching #invQueryInput itself. Called once by renderInventory() on a full
+// render, and directly by onInvQuery() on every keystroke — since it never rebuilds the input
+// node, it's safe to call on every single keystroke with no debounce, at any typing speed.
+function renderInvList(){
   const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
   const filtered = inventory.filter(m=>!m.deleted && (!q || medicineMatchesQuery(m,q))).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
@@ -3137,6 +3238,31 @@ function renderInventory(){
   const CHUNK_SIZE = 30;
   const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
 
+  const container = document.getElementById("invListContainer");
+  if(!container) return;
+  container.innerHTML = `
+    ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
+    <div id="invCardsList">${firstCards}</div>
+  `;
+
+  if(filtered.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      // Bail out quietly if a newer renderInvList() call has happened since (search edited,
+      // tab changed, a medicine saved/restocked/deleted) or the list container is simply no
+      // longer on screen — either way, this job's work is stale and should not touch the page.
+      if(myToken !== _invRenderToken) return;
+      const listEl = document.getElementById("invCardsList");
+      if(!listEl) return;
+      const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
+      listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
+}
+function renderInventory(){
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
   // from the normal New Bill search — see specialMatches()). S. tagged = m.sTag, which is a
@@ -3160,26 +3286,9 @@ function renderInventory(){
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
     </div>
-    ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
-    <div id="invCardsList">${firstCards}</div>
+    <div id="invListContainer"></div>
   `;
-
-  if(filtered.length > FIRST_BATCH){
-    let idx = FIRST_BATCH;
-    const appendNextChunk = ()=>{
-      // Bail out quietly if a newer renderInventory() call has happened since (tab changed,
-      // search edited, a medicine saved/restocked/deleted) or the list container is simply no
-      // longer on screen — either way, this job's work is stale and should not touch the page.
-      if(myToken !== _invRenderToken) return;
-      const listEl = document.getElementById("invCardsList");
-      if(!listEl) return;
-      const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
-      listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
-      idx += CHUNK_SIZE;
-      if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
-    };
-    requestAnimationFrame(appendNextChunk);
-  }
+  renderInvList();
 }
 
 function renderInvFormModal(){
@@ -3215,6 +3324,16 @@ function renderInvFormModal(){
           </div>
           <label class="small">Warn me when stock falls to (medicine)</label>
           <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
+          <div class="divider-top" style="padding-top:10px;">
+            <button type="button" class="btn btn-outline" style="width:100%;font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+            ${inv.copyMenuOpen ? `
+              <p class="small faint" style="margin:8px 0 6px;">Saves this medicine as it is now, then reopens this form filled in the same way for the variant — MRP is always left blank too.</p>
+              <div class="flex gap2 mb2">
+                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('formula')">D.Formula</button>
+                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('strength')">D.Strength</button>
+              </div>
+            ` : ""}
+          </div>
           <div class="divider-top" style="padding-top:10px;">
             <label class="small" style="display:block;margin-bottom:4px;">Scan barcode (USB/Bluetooth scanner, or paste the code)</label>
             <div class="flex gap2 mb1">
@@ -3636,7 +3755,7 @@ function renderRecordArchive(){
 }
 function toggleExpand(id){ rec.expandedId = rec.expandedId===id?null:id; rec.editingId=null; rec.expandedTxSection=null; render(); }
 function toggleTxSection(section){ rec.expandedTxSection = rec.expandedTxSection===section ? null : section; render(); }
-function onRecordsSearch(v){ scheduleQueryRender(rec.searchQuery, v); rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; }
+function onRecordsSearch(v){ rec.searchQuery=v; rec.expandedId=null; rec.editingId=null; renderRecordsBody(); }
 function txDateSearchString(ts){
   const d = new Date(ts);
   return (d.toDateString()+" "+d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleDateString()).toLowerCase();
@@ -3680,7 +3799,27 @@ function openEditTx(id){
 function cancelEditTx(){ rec.editingId=null; render(); }
 function onEditTxPatient(v){ recEdit.patient=v; }
 function onEditTxFee(v){ recEdit.fee=v; scheduleRender(); }
-function onEditTxQuery(v){ scheduleQueryRender(recEdit.query, v); recEdit.query=v; recEdit.selectedMedId=null; }
+// Self-contained, same pattern as billQueryDropdownHtml() above: recomputes matches from
+// current state and returns just the dropdown HTML for the edit-bill medicine search box.
+function editTxDropdownHtml(){
+  const q = recEdit.query.trim().toLowerCase();
+  const matches = q ? inventory.filter(m=>!m.deleted && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
+  const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
+  return (matches.length && !selMed) ? `<div class="dropdown">${matches.map(m=>`
+      <button onclick="pickEditTxMed('${m.id}')">
+        <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
+        <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+      </button>`).join("")}</div>` : "";
+}
+// Updates just the dropdown next to the edit-bill medicine search box, keyed off whichever
+// transaction is currently being edited (there's only ever one at a time) — never touches the
+// input itself, and never rebuilds the rest of the Records tab body around it.
+function refreshEditTxDropdown(){
+  if(!rec.editingId) return;
+  const el = document.getElementById("editTxDropdown-"+rec.editingId);
+  if(el) el.innerHTML = editTxDropdownHtml();
+}
+function onEditTxQuery(v){ recEdit.query=v; recEdit.selectedMedId=null; refreshEditTxDropdown(); }
 function onEditTxPills(v){ recEdit.pills=v; scheduleRender(); }
 function pickEditTxMed(id){ recEdit.selectedMedId=id; const m=inventory.find(x=>x.id===id); recEdit.query=m?m.name:""; render(); }
 function addEditTxItem(){
@@ -3728,8 +3867,6 @@ function saveEditTx(){
 }
 
 function renderTxEditForm(t){
-  const q = recEdit.query.trim().toLowerCase();
-  const matches = q ? inventory.filter(m=>!m.deleted && medicineMatchesQuery(m,q)).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)).slice(0,6) : [];
   const selMed = inventory.find(m=>m.id===recEdit.selectedMedId);
   return `
     <div class="mt3 divider-top">
@@ -3742,11 +3879,7 @@ function renderTxEditForm(t){
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="editTxQuery-${t.id}" value="${esc(selMed?selMed.name:recEdit.query)}" oninput="onEditTxQuery(this.value)" placeholder="Search medicine…">
-        ${matches.length && !selMed ? `<div class="dropdown">${matches.map(m=>`
-          <button onclick="pickEditTxMed('${m.id}')">
-            <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
-            <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
-          </button>`).join("")}</div>` : ""}
+        <div id="editTxDropdown-${t.id}">${editTxDropdownHtml()}</div>
       </div>
       ${selMed ? `
         <div class="flex gap2 mt2" style="align-items:flex-end;">
@@ -3849,23 +3982,20 @@ function renderTxCard(t){
     </div>`;
 }
 
-function renderRecords(){
-  if(visibleTransactions().length===0){
-    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
-    return;
-  }
-
-  const searchBar = `
-    <div class="search-wrap mb2">
-      <span class="search-icon">🔍</span>
-      <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
-    </div>`;
+// Fills #recordsBody (search results, or the normal month/day view + archive) from the current
+// rec state, without ever touching #recordsSearchInput itself. Called once by renderRecords()
+// on a full render, and directly by onRecordsSearch() on every keystroke — since it never
+// rebuilds the input node, it's safe to call on every keystroke with no debounce, at any typing
+// speed. (An expanded/editing tx card's own nested search box, when open, is handled separately
+// by refreshEditTxDropdown() so that typing there doesn't rebuild this whole body either.)
+function renderRecordsBody(){
+  const container = document.getElementById("recordsBody");
+  if(!container) return;
 
   const q = rec.searchQuery.trim().toLowerCase();
   if(q){
     const matched = visibleTransactions().filter(t=>txMatchesQuery(t,q)).sort((a,b)=>b.timestamp-a.timestamp);
-    document.getElementById("main").innerHTML = searchBar +
-      (matched.length===0
+    container.innerHTML = (matched.length===0
         ? `<p class="small faint" style="text-align:center;padding:32px 0;">No bills match "${esc(rec.searchQuery)}".</p>`
         : `<p class="small faint mb2">${matched.length} result${matched.length===1?"":"s"}</p>` + matched.map(renderTxCard).join(""));
     return;
@@ -3922,7 +4052,21 @@ function renderRecords(){
     `;
   }).join("");
 
-  document.getElementById("main").innerHTML = searchBar + monthStat + daysHtml + renderRecordArchive();
+  container.innerHTML = monthStat + daysHtml + renderRecordArchive();
+}
+function renderRecords(){
+  if(visibleTransactions().length===0){
+    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
+    return;
+  }
+  document.getElementById("main").innerHTML = `
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
+    </div>
+    <div id="recordsBody"></div>
+  `;
+  renderRecordsBody();
 }
 
 /* ===================== LOW STOCK TAB ===================== */
@@ -4892,7 +5036,7 @@ function renderManageUsersModal(){
 }
 
 /* ===================== NOTEPAD TAB (multiple notes, one private notepad per logged-in user) ===================== */
-function onNotesSearch(v){ scheduleQueryRender(notesUi.searchQuery, v); notesUi.searchQuery=v; }
+function onNotesSearch(v){ notesUi.searchQuery=v; renderNotesListBody(); }
 function openNewNote(){ notesUi.openId="new"; notesUi.draftTitle=""; notesUi.draftBody=""; render(); }
 function openExistingNote(id){
   const n = notes.find(x=>x.id===id);
@@ -4946,8 +5090,48 @@ function buildNoteCard(n){
         </div>
       </div>`;
 }
-function renderNotes(){
+// Fills #notesEmptyMsg + #notesList from the current notesUi.searchQuery, without ever
+// touching #notesSearchInput itself. Called once by renderNotes() on a full render, and
+// directly by onNotesSearch() on every keystroke — since it never rebuilds the input node,
+// it's safe to call on every keystroke with no debounce, at any typing speed.
+function renderNotesListBody(){
   const myToken = ++_notesRenderToken;
+  const sorted = notes
+    .filter(n=>{
+      if(n.deleted) return false;
+      const q = notesUi.searchQuery.trim().toLowerCase();
+      if(!q) return true;
+      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
+    })
+    .sort((a,b)=>b.updatedAt-a.updatedAt);
+
+  const emptyEl = document.getElementById("notesEmptyMsg");
+  if(emptyEl) emptyEl.innerHTML = sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:"";
+
+  // Same instant-first-batch, background-chunk-the-rest approach as Inventory/Warnings —
+  // future-proofing against notes piling up over years the same way bills and medicines can.
+  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
+  const listEl = document.getElementById("notesList");
+  if(listEl) listEl.innerHTML = sorted.slice(0, FIRST_BATCH).map(buildNoteCard).join("");
+  if(sorted.length > FIRST_BATCH){
+    let idx = FIRST_BATCH;
+    const appendNextChunk = ()=>{
+      if(myToken !== _notesRenderToken) return;
+      const el = document.getElementById("notesList");
+      if(!el) return;
+      const chunk = sorted.slice(idx, idx+CHUNK_SIZE);
+      el.insertAdjacentHTML("beforeend", chunk.map(buildNoteCard).join(""));
+      idx += CHUNK_SIZE;
+      if(idx < sorted.length) requestAnimationFrame(appendNextChunk);
+    };
+    requestAnimationFrame(appendNextChunk);
+  }
+}
+function renderNotes(){
+  // Invalidates any still-in-flight background chunk job from a previous list-view render
+  // before doing anything else — including here in the "opened a note" branch below, which
+  // has no list of its own to hand a fresh token to.
+  ++_notesRenderToken;
   const meLabel = `
     <div class="card" style="padding:10px 14px;">
       <p class="small faint" style="margin:0;">Notepad for <strong style="color:var(--text);">${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")}</strong> — private to you, not visible to other logged-in users on this device.</p>
@@ -4968,43 +5152,17 @@ function renderNotes(){
     return;
   }
 
-  const sorted = notes
-    .filter(n=>{
-      if(n.deleted) return false;
-      const q = notesUi.searchQuery.trim().toLowerCase();
-      if(!q) return true;
-      return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q);
-    })
-    .sort((a,b)=>b.updatedAt-a.updatedAt);
   document.getElementById("main").innerHTML = meLabel + `
     <button class="btn-dashed mb2" onclick="openNewNote()">+ New note</button>
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="notesSearchInput" value="${esc(notesUi.searchQuery)}" oninput="onNotesSearch(this.value)" placeholder="Search notes by topic or text…">
     </div>
-
-    ${sorted.length===0?`<p class="small faint" style="text-align:center;padding:24px 0;">${notesUi.searchQuery.trim()?`No notes match "${esc(notesUi.searchQuery)}".`:"No notes yet — jot down reminders, supplier calls, or things to order."}</p>`:""}
+    <div id="notesEmptyMsg"></div>
     <div id="notesList"></div>
     <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes. Medicines, bills, and records are shared with everyone on this device.</p>
   `;
-  // Same instant-first-batch, background-chunk-the-rest approach as Inventory/Warnings —
-  // future-proofing against notes piling up over years the same way bills and medicines can.
-  const FIRST_BATCH = 15, CHUNK_SIZE = 30;
-  const listEl = document.getElementById("notesList");
-  if(listEl) listEl.innerHTML = sorted.slice(0, FIRST_BATCH).map(buildNoteCard).join("");
-  if(sorted.length > FIRST_BATCH){
-    let idx = FIRST_BATCH;
-    const appendNextChunk = ()=>{
-      if(myToken !== _notesRenderToken) return;
-      const el = document.getElementById("notesList");
-      if(!el) return;
-      const chunk = sorted.slice(idx, idx+CHUNK_SIZE);
-      el.insertAdjacentHTML("beforeend", chunk.map(buildNoteCard).join(""));
-      idx += CHUNK_SIZE;
-      if(idx < sorted.length) requestAnimationFrame(appendNextChunk);
-    };
-    requestAnimationFrame(appendNextChunk);
-  }
+  renderNotesListBody();
 }
 
 /* ===================== BACKUP & RESTORE ===================== */
