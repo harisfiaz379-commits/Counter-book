@@ -1290,6 +1290,17 @@ function render(){
   const isTextField = active && (active.tagName==="INPUT" || active.tagName==="TEXTAREA");
   const selStart = active && typeof active.selectionStart==="number" ? active.selectionStart : null;
   const selEnd = active && typeof active.selectionEnd==="number" ? active.selectionEnd : null;
+  // #app is the single scrolling container for the whole page (see its own comment above).
+  // Re-rendering only ever replaces its CHILDREN, never #app itself, so its scrollTop is
+  // normally left alone by the browser automatically — except when a re-render's new content
+  // is temporarily SHORTER than what's on screen right now (e.g. a long list that repopulates
+  // itself starting from a small first batch — see renderInvList()'s _invListLoadedFor for the
+  // specific fix for that), which clamps scrollTop down, and the browser does not restore it
+  // once the content grows back. Capturing/restoring it here is a cheap safety net against
+  // that class of bug wherever it crops up, on any tab, without needing every render path to
+  // handle it individually.
+  const appEl = document.getElementById("app");
+  const prevScrollTop = appEl ? appEl.scrollTop : 0;
 
   renderBanner();
   renderHeaderMenu();
@@ -1317,7 +1328,19 @@ function render(){
   renderNav();
   renderCloudSizeBadge();
   if(tab==="bill") renderBill();
-  else if(tab==="inventory") renderInventory();
+  else if(tab==="inventory"){
+    // If the Inventory shell (search box + header pills) is already on screen, this render()
+    // call is a refresh of an already-open tab — most commonly an incoming cloud-sync update —
+    // not the person switching into it. Only touch the results list in that case, both so the
+    // search input is never rebuilt out from under someone typing (see the note further up on
+    // scheduleQueryRender) and so renderInvList() takes its "already fully loaded" fast path
+    // (a single synchronous rebuild) instead of collapsing back to a first batch of 15 and
+    // re-chunking the rest — which is what used to make a button tap land on the wrong
+    // medicine after scrolling past the first ~50 while a sync happened to land at that
+    // exact moment.
+    if(document.getElementById("invQueryInput")) renderInvList();
+    else renderInventory();
+  }
   else if(tab==="records") renderRecords();
   else if(tab==="stock") renderStock();
   else if(tab==="notes") renderNotes();
@@ -1363,6 +1386,7 @@ function render(){
   }
   syncMenuHistory();
   syncHeaderOffset();
+  if(appEl && appEl.scrollTop !== prevScrollTop) appEl.scrollTop = prevScrollTop;
 }
 
 function renderBanner(){
@@ -2634,14 +2658,18 @@ function renderBill(){
       point it at a code, it "types" the decoded text into whatever input is focused, then
       sends Enter — no app-side camera code needed at all, and it works fully offline with
       zero changes to the App Inventor project.
-   2) An optional phone-camera scanner (openCameraScan below) using getUserMedia + the ZXing
-      barcode library loaded on demand from a CDN. IMPORTANT CAVEAT: the stock App Inventor
-      WebViewer component does NOT grant camera permission to web content by default (same
-      class of limitation as it not handling file downloads — see checkForAppUpdate's comment
-      above). This button will likely fail silently inside the packaged APK unless the
-      WebViewer is swapped for a camera-capable variant/extension. It works fine when this
-      page is opened directly in a normal mobile browser (e.g. Chrome), which is useful for
-      testing. Treat option 1 above as the dependable one. */
+   2) An optional phone-camera scanner (openCameraScan below) using getUserMedia, and a
+      photo-capture scanner (scanFromPhoto below) using the phone's native camera app, both
+      decoded with zxing-wasm — a WebAssembly build of the real ZXing-C++ engine (not the older,
+      noticeably weaker pure-JavaScript @zxing/library port this used to run on; that port's
+      Data Matrix decoder in particular struggled with anything less than a near-perfectly
+      flat, head-on shot). IMPORTANT CAVEAT: the stock App Inventor WebViewer component does NOT
+      grant camera permission to web content by default (same class of limitation as it not
+      handling file downloads — see checkForAppUpdate's comment above). The live-camera button
+      will likely fail silently inside the packaged APK unless the WebViewer is swapped for a
+      camera-capable variant/extension (the photo-capture button uses the file chooser instead,
+      which is a separate, generally better-supported path). Treat option 1 above as the
+      dependable one regardless. */
 function gs1SetField(out, ai, value){
   if(ai==="01") out.gtin = value;
   else if(ai==="10") out.batch = value;
@@ -2697,9 +2725,27 @@ function parseGS1Barcode(raw){
   return out;
 }
 
+// zxing-wasm's reader options, shared by both the photo path and the live-camera path below.
+// tryHarder trades a bit of decode speed for accuracy — worth it here since a GS1 DataMatrix is
+// small and dense; maxNumberOfSymbols:1 stops it looking for more than one code per image/frame,
+// which is both faster and avoids ever ambiguously returning the wrong one of two codes in frame.
+const ZXING_READ_OPTIONS = { formats: ["DataMatrix","QRCode","Code128","EAN13","UPCA"], tryHarder: true, maxNumberOfSymbols: 1 };
+let _zxingWasmLoadPromise = null;
+function loadZXingWasm(){
+  if(window.ZXingWASM) return Promise.resolve();
+  if(_zxingWasmLoadPromise) return _zxingWasmLoadPromise;
+  _zxingWasmLoadPromise = new Promise((resolve, reject)=>{
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/zxing-wasm@2.2.1/dist/iife/reader/index.js";
+    s.onload = ()=>resolve();
+    s.onerror = ()=>reject(new Error("Couldn't load the scanner library — needs internet the first time it's used."));
+    document.head.appendChild(s);
+  });
+  return _zxingWasmLoadPromise;
+}
+
 let scanUi = { open:false, pending:null, error:"" }; // pending: "newmed", or {kind:"restock", medId}
 let _pendingCameraTarget = null; // holds the scan target while we wait on the native side's permission round-trip
-let _zxingLoadPromise = null, _zxingReader = null;
 // Entry point for the "📷 use phone camera" buttons. Inside the packaged app, camera access needs
 // an OS-level runtime permission that only Android's own Screen1.AskForPermission can trigger —
 // CustomWebView's own permission grant (see OnPermissionRequest below) can't grant something the
@@ -2742,56 +2788,29 @@ async function handleScanPhotoFile(input){
   input.value = ""; // reset so picking the exact same photo again still fires onchange next time
   if(!file || !target) return;
   showToast("Reading barcode from photo…");
-  let url = null;
   try{
-    await loadZXing();
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
-    ]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    const reader = new ZXing.BrowserMultiFormatReader(hints);
-    url = URL.createObjectURL(file);
-    const result = await reader.decodeFromImageUrl(url);
+    await loadZXingWasm();
+    // Full native-resolution photo goes straight in — zxing-wasm's C++ decoder handles large,
+    // real-world images (skew, uneven lighting, a bit of blur) far more capably than the old
+    // pure-JS port did, so unlike before, this no longer needs a manual downscale/retry loop.
+    const results = await ZXingWASM.readBarcodes(file, ZXING_READ_OPTIONS);
+    if(!results || !results.length || !results[0].text) throw new Error("not found");
     scanUi.pending = target;
-    handleScanText(result.getText());
+    handleScanText(results[0].text);
   }catch(e){
     showToast("⚠ Couldn't find a barcode in that photo. Try getting closer/sharper, holding it flat, and retaking.");
-  }finally{
-    if(url) URL.revokeObjectURL(url);
   }
 }
-function loadZXing(){
-  if(window.ZXing) return Promise.resolve();
-  if(_zxingLoadPromise) return _zxingLoadPromise;
-  _zxingLoadPromise = new Promise((resolve, reject)=>{
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
-    s.onload = ()=>resolve();
-    s.onerror = ()=>reject(new Error("Couldn't load the scanner library — needs internet the first time it's used."));
-    document.head.appendChild(s);
-  });
-  return _zxingLoadPromise;
-}
+let _scanMediaStream = null, _scanLoopActive = false;
 async function openCameraScan(target, _isRetry){
   scanUi = { open:true, pending: target, error:"" };
   renderScanModal();
   syncMenuHistory();
   try{
-    await loadZXing();
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
-    ]);
-    // TRY_HARDER trades scan speed for accuracy — specifically meant for exactly this situation
-    // (a small, dense 2D code) rather than the fast/lenient pass ZXing normally uses for speed.
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+    await loadZXingWasm();
     // Force the back camera with continuous autofocus and a decent resolution — leaving this to
     // the browser's default often picks the FRONT camera, which can never focus close enough to
-    // read a tiny barcode. decodeFromConstraints lets us be explicit instead of just naming a device.
+    // read a tiny barcode.
     const constraints = {
       video: {
         facingMode: { ideal: "environment" },
@@ -2799,27 +2818,43 @@ async function openCameraScan(target, _isRetry){
         advanced: [{ focusMode: "continuous" }] // ignored harmlessly on devices/browsers that don't support it
       }
     };
-    let scanFrameCount = 0, lastNonNotFoundError = "";
-    await _zxingReader.decodeFromConstraints(constraints, "scanVideoEl", (result, err)=>{
-      if(result){ const text = result.getText(); stopCameraScan(); handleScanText(text); return; }
-      scanFrameCount++;
-      // NotFoundException fires on almost every frame while nothing decodable is in view yet —
-      // completely normal. Anything else is worth surfacing since it means frames are failing
-      // for a DIFFERENT reason (a real bug) rather than just "nothing found yet".
-      if(err && err.name && err.name!=="NotFoundException" && err.name!==lastNonNotFoundError){
-        lastNonNotFoundError = err.name;
-      }
-      updateScanDebugLine(scanFrameCount, lastNonNotFoundError);
-    });
+    _scanMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const v = document.getElementById("scanVideoEl");
+    if(!v) throw new Error("scanner video element missing");
+    v.srcObject = _scanMediaStream;
     // Some Android WebViews attach the camera stream to the <video> element but don't auto-start
     // playback from the "autoplay" attribute alone, leaving a frozen/black preview with a native
     // "tap to play" overlay. Force it, a couple of times shortly after, as a safety net.
-    const v = document.getElementById("scanVideoEl");
-    if(v){
-      v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300);
-      v.addEventListener("loadedmetadata", ()=>updateScanDebugLine(0,""), { once:true });
-    }
+    v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}), 300);
     attachZoomAndTorchControls();
+    // zxing-wasm's reader works on a still image/frame, not a continuous video stream by itself —
+    // so unlike the old @zxing/library-based version, this drives its own poll loop: grab the
+    // current video frame onto a canvas, hand that single frame to the same decoder the photo
+    // path uses, and repeat every ~350ms (each decode is a real, somewhat-heavy wasm call — no
+    // need to run it every animation frame) until either something decodes or the modal is closed.
+    const canvas = document.createElement("canvas");
+    let frameCount = 0;
+    _scanLoopActive = true;
+    const tick = async ()=>{
+      if(!_scanLoopActive) return;
+      if(v.videoWidth && v.videoHeight){
+        canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+        canvas.getContext("2d").drawImage(v, 0, 0);
+        frameCount++;
+        try{
+          const results = await ZXingWASM.readBarcodes(canvas, ZXING_READ_OPTIONS);
+          updateScanDebugLine(frameCount, "");
+          if(results && results.length && results[0].text){
+            const text = results[0].text;
+            stopCameraScan();
+            handleScanText(text);
+            return;
+          }
+        }catch(e){ updateScanDebugLine(frameCount, (e&&e.message)||"decode error"); }
+      }
+      if(_scanLoopActive) setTimeout(tick, 350);
+    };
+    tick();
   }catch(e){
     const msg = (e && e.message) || "";
     // "NotReadableError: Could not start video source" is a well-known, usually TRANSIENT Android
@@ -2827,7 +2862,7 @@ async function openCameraScan(target, _isRetry){
     // right after the app was closed and reopened). One short, silent retry clears it most of the
     // time without the person needing to do anything.
     if(!_isRetry && /notreadable|could not start video source/i.test(msg)){
-      if(_zxingReader){ try{ _zxingReader.reset(); }catch(err){} _zxingReader=null; }
+      if(_scanMediaStream){ try{ _scanMediaStream.getTracks().forEach(t=>t.stop()); }catch(err){} _scanMediaStream=null; }
       setTimeout(()=>openCameraScan(target, true), 900);
       return;
     }
@@ -2836,9 +2871,10 @@ async function openCameraScan(target, _isRetry){
   }
 }
 function stopCameraScan(){
-  if(_zxingReader){ try{ _zxingReader.reset(); }catch(e){} _zxingReader=null; }
-  // Belt-and-suspenders: explicitly stop every track on the video element too, in case reset()
-  // didn't fully release the hardware — this is what leaves a stale camera lock for next time.
+  _scanLoopActive = false;
+  if(_scanMediaStream){ try{ _scanMediaStream.getTracks().forEach(t=>t.stop()); }catch(e){} _scanMediaStream=null; }
+  // Belt-and-suspenders: explicitly stop every track on the video element too, in case the above
+  // somehow missed one — this is what leaves a stale camera lock for next time otherwise.
   const v = document.getElementById("scanVideoEl");
   if(v && v.srcObject){ try{ v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){} v.srcObject=null; }
   scanUi.open = false;
@@ -3218,6 +3254,9 @@ function copyEditVariant(id, variant){
 // replaced. Combined with checking the container element still exists, this is what makes it
 // safe for the background job to keep running across whatever else happens on screen.
 let _invRenderToken = 0;
+// Remembers the query+filter combination the medicine list was last FULLY (not just
+// first-batch) populated for. See renderInvList()'s use of it below.
+let _invListLoadedFor = null;
 function buildInvCard(m){
   // Computed once and reused below — this used to be recomputed independently for the
   // price, the expired check, the "has batches" check, and the batch list itself, each of
@@ -3354,16 +3393,7 @@ function renderInvList(){
     if(inv.statFilter==='nonSpecial' && m.specialCategory) return false;
     return !q || medicineMatchesQuery(m,q);
   }).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
-
-  // With a large medicine list (280+ in this clinic's case), building every card's full HTML
-  // — batch lists included — and inserting it all into the DOM in one go forces one huge
-  // layout/paint pass before anything appears, which is what made opening this tab feel slow.
-  // Instead: render just enough cards to fill the first screen instantly, then keep appending
-  // the rest in small chunks spread across animation frames, so the tab opens right away and
-  // the remaining medicines fill in moments later without freezing the UI in between.
-  const FIRST_BATCH = 15;
-  const CHUNK_SIZE = 30;
-  const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
+  const filterKey = q+"|"+(inv.statFilter||"");
 
   const filterLabels = {special:"Special category", sTag:"S. tagged", nonSpecial:"Non-special"};
   const filterHtml = inv.statFilter ? `
@@ -3371,28 +3401,52 @@ function renderInvList(){
 
   const container = document.getElementById("invListContainer");
   if(!container) return;
+
+  // If this exact result set (same search text + same header-pill filter) was already fully
+  // loaded onto the page before, this call is refreshing that SAME view with fresh data —
+  // typically an incoming cloud-sync update landing while the person is just scrolled through
+  // browsing, not a search/filter they just changed. Rebuilding the whole list in one
+  // synchronous pass here (rather than resetting to a first batch of 15 and re-chunking the
+  // rest in over several animation frames) means the page's height never briefly collapses
+  // and grows back — which is what could clamp the scroll position mid-scroll and land a tap
+  // meant for, say, the 50th medicine's Edit button onto a completely different card that had
+  // snapped into that same screen position for an instant.
+  if(_invListLoadedFor === filterKey){
+    container.innerHTML = `
+      ${filterHtml}
+      ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
+      <div id="invCardsList">${filtered.map(buildInvCard).join("")}</div>
+    `;
+    return;
+  }
+
+  // A genuinely new search/filter/tab-open — chunk it the usual way so THIS first paint of
+  // this particular result set still feels instant even with a large medicine list.
+  const FIRST_BATCH = 15;
+  const CHUNK_SIZE = 30;
+  const firstCards = filtered.slice(0, FIRST_BATCH).map(buildInvCard).join("");
   container.innerHTML = `
     ${filterHtml}
     ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
     <div id="invCardsList">${firstCards}</div>
   `;
 
-  if(filtered.length > FIRST_BATCH){
-    let idx = FIRST_BATCH;
-    const appendNextChunk = ()=>{
-      // Bail out quietly if a newer renderInvList() call has happened since (search edited,
-      // tab changed, a medicine saved/restocked/deleted) or the list container is simply no
-      // longer on screen — either way, this job's work is stale and should not touch the page.
-      if(myToken !== _invRenderToken) return;
-      const listEl = document.getElementById("invCardsList");
-      if(!listEl) return;
-      const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
-      listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
-      idx += CHUNK_SIZE;
-      if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
-    };
-    requestAnimationFrame(appendNextChunk);
-  }
+  if(filtered.length <= FIRST_BATCH){ _invListLoadedFor = filterKey; return; }
+  let idx = FIRST_BATCH;
+  const appendNextChunk = ()=>{
+    // Bail out quietly if a newer renderInvList() call has happened since (search edited,
+    // tab changed, a medicine saved/restocked/deleted) or the list container is simply no
+    // longer on screen — either way, this job's work is stale and should not touch the page.
+    if(myToken !== _invRenderToken) return;
+    const listEl = document.getElementById("invCardsList");
+    if(!listEl) return;
+    const chunk = filtered.slice(idx, idx+CHUNK_SIZE);
+    listEl.insertAdjacentHTML("beforeend", chunk.map(buildInvCard).join(""));
+    idx += CHUNK_SIZE;
+    if(idx < filtered.length) requestAnimationFrame(appendNextChunk);
+    else _invListLoadedFor = filterKey;
+  };
+  requestAnimationFrame(appendNextChunk);
 }
 // Tapping one of the 4 header pills narrows the list below to just that group; tapping the
 // same pill again (or the "Total" pill, which stands for "all") clears the filter. This is a
@@ -3405,6 +3459,7 @@ function toggleInvStatFilter(kind){
   renderInventory();
 }
 function renderInventory(){
+  _invListLoadedFor = null;
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
   // from the normal New Bill search — see specialMatches()). S. tagged = m.sTag, which is a
