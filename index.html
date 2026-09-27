@@ -408,6 +408,7 @@ function newBillState(){
 let bill = newBillState();
 let inv = { query:"", showForm:false, form:{name:"",category:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""},
             scanText:"", // transient: text sitting in the New medicine form's "scan or paste barcode" box
+            editScanText:"", // same, but for an existing medicine's inline Edit form
             copyMenuOpen:false, // whether the "S.Copy" D.Formula/D.Strength popup is open in the New medicine form
             editCopyMenuOpen:false, // same, but for the inline Edit form's own "S.Copy" popup
             restockId:null, restockBoxes:"", restockExpiry:"", restockMrp:"", restockLotNo:"", restockScanText:"", editId:null,
@@ -1974,7 +1975,9 @@ function startBarcodeScan(target){
   const method = getScanMethod();
   if(method==="photo"){ scanFromPhoto(target); return; }
   if(method==="camera"){ requestCameraThenScan(target); return; }
-  const inputId = (target && target.kind==="restock") ? `restockScanInput-${target.medId}` : "invScanInput";
+  let inputId = "invScanInput";
+  if(target && target.kind==="restock") inputId = `restockScanInput-${target.medId}`;
+  else if(target && target.kind==="edit") inputId = `editScanInput-${target.medId}`;
   const el = document.getElementById(inputId);
   if(el){ el.focus(); showToast("📷 Ready — scan the barcode now"); }
 }
@@ -2935,6 +2938,7 @@ function handleScanText(raw){
   }
   if(target==="newmed") applyScanToNewMedForm(parsed);
   else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
+  else if(target && target.kind==="edit") applyScanToEditForm(target.medId, parsed);
 }
 function onInvScanInput(v){ inv.scanText=v; }
 function applyInvScan(){
@@ -2945,6 +2949,29 @@ function applyInvScan(){
   handleScanText(text);
 }
 function clearInvScanLink(){ inv.form.gtin=""; render(); }
+// Same as clearInvScanLink/applyInvScan above, but for linking a barcode to an EXISTING
+// medicine from its inline Edit form, rather than a brand-new one being created.
+function onEditScanInput(v){ inv.editScanText=v; }
+function applyEditScan(medId){
+  const text = (inv.editScanText||"").trim();
+  inv.editScanText = "";
+  if(!text) return;
+  scanUi.pending = { kind:"edit", medId };
+  handleScanText(text);
+}
+function clearEditScanLink(){ inv.editForm.gtin=""; render(); }
+function applyScanToEditForm(medId, parsed){
+  if(parsed.gtin){
+    const existing = inventory.find(m=>!m.deleted && m.id!==medId && m.gtin && m.gtin===parsed.gtin);
+    if(existing){
+      showToast(`⚠ This barcode is already linked to "${existing.name}" — not linked here`);
+      return;
+    }
+    inv.editForm.gtin = parsed.gtin;
+  }
+  showToast(parsed.gtin ? "✓ Barcode linked to this medicine" : "Scanned, but no GTIN was found in that code");
+  render();
+}
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
@@ -3066,9 +3093,10 @@ function openEdit(id){
   inv.restockId=null;
   inv.editId = inv.editId===id?null:id;
   inv.editCopyMenuOpen=false;
+  inv.editScanText="";
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
-    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag }; }
+    pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag, gtin:m.gtin||"" }; }
   render();
 }
 function onEditForm(field,v){ inv.editForm[field]=v; }
@@ -3087,6 +3115,7 @@ function saveEdit(id){
     m.mrpPerBox=Number(f.mrp); m.pillsPerBox=Number(f.pillsPerBox);
     m.lowStockAt=Number(f.lowStockAt)||0;
     m.sTag=!!f.sTag;
+    m.gtin=f.gtin||"";
     m.updatedAt=Date.now();
     adjustStockTo(m, Math.max(0,Number(f.stockPills)));
   }
@@ -3172,10 +3201,8 @@ function buildInvCard(m){
   if(inv.restockId===m.id){
     extra = `
       <div class="mt2 divider-top8">
-        <label class="small" style="display:block;margin-bottom:4px;">Scan the new box's barcode (auto-fills expiry &amp; batch below)</label>
-        <button type="button" class="btn btn-outline" style="width:100%;" onclick='startBarcodeScan({kind:"restock",medId:"${m.id}"})'>📷 Scan barcode</button>
         <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-        <div class="flex gap2 mt2" style="align-items:flex-end;">
+        <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
             <input ${NOAC} id="restockInput-${m.id}" type="text" inputmode="numeric" value="${esc(inv.restockBoxes)}" oninput="onRestockBoxes(this.value)" placeholder="e.g. 5">
@@ -3184,8 +3211,11 @@ function buildInvCard(m){
         </div>
         <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
         <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
-        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)})</label>
-        <input ${NOAC} id="restockMrp-${m.id}" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
+        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)}) — or scan the barcode (auto-fills expiry &amp; batch above)</label>
+        <div class="flex gap2">
+          <input ${NOAC} id="restockMrp-${m.id}" class="flex1" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
+          <button type="button" class="btn btn-outline flex1" onclick='startBarcodeScan({kind:"restock",medId:"${m.id}"})'>📷 Scan barcode</button>
+        </div>
       </div>`;
   }
   if(inv.editId===m.id){
@@ -3216,7 +3246,12 @@ function buildInvCard(m){
         <label class="small">Warn me when stock falls to (medicine)</label>
         <input ${NOAC} id="editLow-${m.id}" type="text" inputmode="numeric" value="${esc(f.lowStockAt)}" oninput="onEditForm('lowStockAt',this.value)" class="mb2">
         <div class="divider-top8" style="padding-top:8px;">
-          <button type="button" class="btn btn-outline" style="width:100%;font-size:12px;padding:8px;" onclick="toggleEditCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+          <div class="flex gap2">
+            <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleEditCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+            <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='startBarcodeScan({kind:"edit",medId:"${m.id}"})'>📷 Scan barcode</button>
+          </div>
+          <input ${NOAC} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
+          ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           ${inv.editCopyMenuOpen ? `
             <p class="small faint" style="margin:8px 0 6px;">Saves the changes above to this medicine, then opens New medicine filled in the same way for the variant — MRP is always left blank too.</p>
             <div class="flex gap2 mb2">
@@ -3378,7 +3413,11 @@ function renderInvFormModal(){
           <label class="small">Warn me when stock falls to (medicine)</label>
           <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
           <div class="divider-top" style="padding-top:10px;">
-            <button type="button" class="btn btn-outline" style="width:100%;font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+            <div class="flex gap2">
+              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
+              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
+            </div>
+            <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
             ${inv.copyMenuOpen ? `
               <p class="small faint" style="margin:8px 0 6px;">Saves this medicine as it is now, then reopens this form filled in the same way for the variant — MRP is always left blank too.</p>
               <div class="flex gap2 mb2">
@@ -3386,10 +3425,6 @@ function renderInvFormModal(){
                 <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('strength')">D.Strength</button>
               </div>
             ` : ""}
-          </div>
-          <div class="divider-top" style="padding-top:10px;">
-            <button type="button" class="btn btn-outline" style="width:100%;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
-            <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
