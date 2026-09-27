@@ -330,6 +330,7 @@
 <div id="datePickerModalRoot"></div>
 <div id="addUserLoginModalRoot"></div>
 <div id="scanModalRoot"></div>
+<input type="file" id="scanPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="handleScanPhotoFile(this)">
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
 
@@ -2612,6 +2613,45 @@ function requestCameraThenScan(target){
   // own getUserMedia permission prompt directly, no extra round-trip needed.
   openCameraScan(target);
 }
+
+let _pendingPhotoScanTarget = null;
+// Alternative to the live-video scanner above: instead of a continuous getUserMedia feed (limited
+// resolution, iffy autofocus inside a WebView), this opens the phone's own native camera APP via
+// a plain <input type="file" capture> file chooser — full resolution, real hardware autofocus/HDR,
+// the same camera pipeline every other app on the phone uses — then decodes that single still
+// photo. Often far more reliable for a small, dense code than the live-feed approach.
+function scanFromPhoto(target){
+  _pendingPhotoScanTarget = target;
+  const input = document.getElementById("scanPhotoInput");
+  if(input) input.click();
+}
+async function handleScanPhotoFile(input){
+  const file = input.files && input.files[0];
+  const target = _pendingPhotoScanTarget;
+  _pendingPhotoScanTarget = null;
+  input.value = ""; // reset so picking the exact same photo again still fires onchange next time
+  if(!file || !target) return;
+  showToast("Reading barcode from photo…");
+  let url = null;
+  try{
+    await loadZXing();
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A
+    ]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    url = URL.createObjectURL(file);
+    const result = await reader.decodeFromImageUrl(url);
+    scanUi.pending = target;
+    handleScanText(result.getText());
+  }catch(e){
+    showToast("⚠ Couldn't find a barcode in that photo. Try getting closer/sharper, holding it flat, and retaking.");
+  }finally{
+    if(url) URL.revokeObjectURL(url);
+  }
+}
 function loadZXing(){
   if(window.ZXing) return Promise.resolve();
   if(_zxingLoadPromise) return _zxingLoadPromise;
@@ -2983,7 +3023,10 @@ function buildInvCard(m){
           <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" placeholder="Tap here, then scan">
           <button type="button" class="btn btn-outline" onclick="applyRestockScanInput('${m.id}')">Apply</button>
         </div>
-        <button type="button" onclick='requestCameraThenScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0 8px;">📷 Or use phone camera</button>
+        <div class="flex gap2" style="flex-wrap:wrap;padding:2px 0 8px;">
+          <button type="button" onclick='scanFromPhoto({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📸 Take a photo of it</button>
+          <button type="button" onclick='requestCameraThenScan({kind:"restock",medId:"${m.id}"})' style="background:none;border:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📷 Or live camera</button>
+        </div>
         <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
@@ -3172,7 +3215,10 @@ function renderInvFormModal(){
               <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" placeholder="Tap here, then scan">
               <button type="button" class="btn btn-outline" onclick="applyInvScan()">Apply</button>
             </div>
-            <button type="button" onclick="requestCameraThenScan('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;">📷 Or use phone camera</button>
+            <div class="flex gap2" style="flex-wrap:wrap;padding:2px 0;">
+              <button type="button" onclick="scanFromPhoto('newmed')" style="background:none;border:none;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📸 Take a photo of it</button>
+              <button type="button" onclick="requestCameraThenScan('newmed')" style="background:none;border:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;padding:0;">📷 Or live camera</button>
+            </div>
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
