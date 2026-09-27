@@ -2623,7 +2623,13 @@ let _pendingPhotoScanTarget = null;
 function scanFromPhoto(target){
   _pendingPhotoScanTarget = target;
   const input = document.getElementById("scanPhotoInput");
-  if(input) input.click();
+  if(!input){ showToast("⚠ Internal error: photo input missing"); return; }
+  showToast("Opening camera…");
+  try{
+    input.click();
+  }catch(e){
+    showToast("⚠ Couldn't open the file chooser: " + (e && e.message ? e.message : "unknown error"));
+  }
 }
 async function handleScanPhotoFile(input){
   const file = input.files && input.files[0];
