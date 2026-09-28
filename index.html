@@ -430,9 +430,9 @@ let notesUi = { openId:null, draftTitle:"", draftBody:"", searchQuery:"" };
 let sessionAuthed = false; // whether someone has entered a correct PIN this session; persists until "Switch User" is tapped
 let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock screen
 let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
-let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false}, editingId:null, editRole:"", editPin:"", editPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false} }; // admin-only "Manage Users" screen
+let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false}, editingId:null, editRole:"", editPin:"", editPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} }; // admin-only "Manage Users" screen
 let forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" }; // Admin-only "Forgot PIN" recovery flow on the login screen
-let addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false} }; // "+ Add new user" flow reachable from the login screen — gated behind a live Admin PIN check (NOT can(), which reflects whoever last logged in, not who's actually present right now)
+let addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} }; // "+ Add new user" flow reachable from the login screen — gated behind a live Admin PIN check (NOT can(), which reflects whoever last logged in, not who's actually present right now)
 
 /* ===================== HELPERS ===================== */
 let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
@@ -444,6 +444,10 @@ let catUi = { open:false, renameDrafts:{}, newCategoryDraft:"" }; // transient: 
 // the same way as MED_CATEGORIES (own editor modal, add/rename/delete, rename cascades to
 // every medicine set to the old name) but kept as a completely separate list.
 let SPECIAL_CATEGORIES = ["Controlled","Cold-chain","High-value"]; // user-editable via specialCatUi below
+// Timestamp of the last real edit to EITHER category list (regular or special) — they're
+// synced together as one unit, last-write-wins across devices, same shape as the default
+// doctor fee/name (see mergeCategories). 0 = never edited on any device.
+let categoriesUpdatedAt = 0;
 let specialCatUi = { open:false, renameDrafts:{}, newCategoryDraft:"" }; // transient: in-progress edits while the special-category-manager modal is open
 const TEST_CATALOG = [
   {id:"cbc", name:"CBC"},
@@ -555,12 +559,23 @@ function loadAll(){
     try{ localStorage.setItem("clinic_test_item_updated_at", JSON.stringify(testItemUpdatedAt)); }catch(e){}
   }
   try{
+    categoriesUpdatedAt = Number(localStorage.getItem("clinic_categories_updated_at"))||0;
     const savedCats = JSON.parse(localStorage.getItem("clinic_med_categories")||"null");
-    if(Array.isArray(savedCats) && savedCats.length) MED_CATEGORIES = savedCats;
+    // An empty list is only trusted once categories have actually been edited/synced
+    // (categoriesUpdatedAt>0) — otherwise it's just "nothing saved yet" and defaults apply.
+    if(Array.isArray(savedCats) && (savedCats.length || categoriesUpdatedAt>0)) MED_CATEGORIES = savedCats;
   }catch(e){}
   try{
     const savedSpecialCats = JSON.parse(localStorage.getItem("clinic_special_categories")||"null");
-    if(Array.isArray(savedSpecialCats) && savedSpecialCats.length) SPECIAL_CATEGORIES = savedSpecialCats;
+    if(Array.isArray(savedSpecialCats) && (savedSpecialCats.length || categoriesUpdatedAt>0)) SPECIAL_CATEGORIES = savedSpecialCats;
+    // Device that already had custom categories saved locally from before category sync
+    // existed: give them a tiny non-zero timestamp so they get uploaded on the next sync
+    // (cloud has none yet) but any real edit made anywhere afterwards still wins over them.
+    const savedCatsAgain = JSON.parse(localStorage.getItem("clinic_med_categories")||"null");
+    if(categoriesUpdatedAt===0 && ((Array.isArray(savedCatsAgain)&&savedCatsAgain.length) || (Array.isArray(savedSpecialCats)&&savedSpecialCats.length))){
+      categoriesUpdatedAt = 1;
+      try{ localStorage.setItem("clinic_categories_updated_at","1"); }catch(e){}
+    }
   }catch(e){}
 
   // Migrate an old single shared notepad (from before profiles existed) into its own profile,
@@ -666,6 +681,13 @@ function saveMedCategoriesStorage(){
 function saveSpecialCategoriesStorage(){
   try{ localStorage.setItem("clinic_special_categories", JSON.stringify(SPECIAL_CATEGORIES)); }catch(e){}
 }
+// Call after ANY real edit to either category list: stamps the change and uploads it, so other
+// devices pick the new lists up (whole-list, last-write-wins — see mergeCategories).
+function touchCategories(){
+  categoriesUpdatedAt = Date.now();
+  try{ localStorage.setItem("clinic_categories_updated_at", String(categoriesUpdatedAt)); }catch(e){}
+  schedulePushToCloud();
+}
 /* Category options for a select: the saved list, plus the medicine's current category if it
    was since removed from the list — so an old/deleted category never silently disappears
    from a medicine that's already using it. */
@@ -697,6 +719,7 @@ function mergedCategoryOptionsHtml(current){
    there's only a single "Edit" button next to the merged picker, so opening/closing/saving it
    drives both catUi and specialCatUi together instead of needing two separate modals. */
 function openCategoryEditor(){
+  if(!can("manageCategories")){ showToast("Only Admin (or a Semi-Admin with this privilege) can edit categories"); return; }
   catUi.open = true;
   catUi.renameDrafts = {};
   MED_CATEGORIES.forEach(c=>{ catUi.renameDrafts[c]=c; });
@@ -710,6 +733,7 @@ function closeCategoryEditor(){ catUi.open=false; render(); }
 function onCategoryRenameDraft(origName, v){ catUi.renameDrafts[origName]=v; }
 function onNewCategoryDraft(v){ catUi.newCategoryDraft=v; scheduleRender(); }
 function addNewCategoryFromEditor(){
+  if(!can("manageCategories")) return;
   const name = catUi.newCategoryDraft.trim();
   if(!name) return;
   if(MED_CATEGORIES.some(c=>c.toLowerCase()===name.toLowerCase())){ showToast("That category already exists"); return; }
@@ -717,23 +741,28 @@ function addNewCategoryFromEditor(){
   catUi.renameDrafts[name] = name;
   catUi.newCategoryDraft = "";
   saveMedCategoriesStorage();
+  touchCategories();
   render();
   showToast("✓ Category added");
 }
 function deleteCategoryFromEditor(name){
+  if(!can("manageCategories")) return;
   askConfirm(`Remove "${name}" from the category list? Medicines already set to this category keep showing it, but you won't be able to pick it for new or edited ones.`, ()=>{
     MED_CATEGORIES = MED_CATEGORIES.filter(c=>c!==name);
     delete catUi.renameDrafts[name];
     saveMedCategoriesStorage();
+    touchCategories();
     render();
   });
 }
 function saveAllCategoryChanges(){
+  if(!can("manageCategories")){ catUi.open=false; render(); return; }
   // Applying a rename updates the list entry AND cascades to every medicine currently set
   // to the old name, so existing medicines' category tags stay correct instead of pointing
   // at a name that no longer exists in the list. Runs for both the regular list and the
   // special list, since one shared Edit button/editor now manages both together.
   let invChanged = false;
+  const categoriesBefore = JSON.stringify([MED_CATEGORIES, SPECIAL_CATEGORIES]);
 
   const renamePairs = [];
   MED_CATEGORIES = MED_CATEGORIES.map(oldName=>{
@@ -764,6 +793,7 @@ function saveAllCategoryChanges(){
     });
   }
   saveSpecialCategoriesStorage();
+  if(JSON.stringify([MED_CATEGORIES, SPECIAL_CATEGORIES]) !== categoriesBefore) touchCategories();
 
   if(invChanged) saveInventory();
   catUi.open = false;
@@ -782,6 +812,7 @@ function renderCategoryModal(){
           <button class="modal-x" onclick="closeCategoryEditor()">✕</button>
         </div>
         <div style="padding:14px 16px;overflow-y:auto;">
+          <p class="small faint" style="margin:0 0 10px;">${categoriesUpdatedAt>1 ? "Last changed "+esc(fmtDateTime(categoriesUpdatedAt))+" · shared with all devices" : "Not edited yet · shared with all devices once changed"}</p>
           <p class="small faint" style="font-weight:700;margin:0 0 8px;">Categories</p>
           ${MED_CATEGORIES.length===0 ? `<p class="small faint mb2">No categories yet — add one below.</p>` : MED_CATEGORIES.map(c=>`
             <div class="flex gap2 mb2" style="align-items:center;">
@@ -815,6 +846,7 @@ function renderCategoryModal(){
 function onSpecialCategoryRenameDraft(origName, v){ specialCatUi.renameDrafts[origName]=v; }
 function onNewSpecialCategoryDraft(v){ specialCatUi.newCategoryDraft=v; scheduleRender(); }
 function addNewSpecialCategoryFromEditor(){
+  if(!can("manageCategories")) return;
   const name = specialCatUi.newCategoryDraft.trim();
   if(!name) return;
   if(SPECIAL_CATEGORIES.some(c=>c.toLowerCase()===name.toLowerCase())){ showToast("That special category already exists"); return; }
@@ -822,14 +854,17 @@ function addNewSpecialCategoryFromEditor(){
   specialCatUi.renameDrafts[name] = name;
   specialCatUi.newCategoryDraft = "";
   saveSpecialCategoriesStorage();
+  touchCategories();
   render();
   showToast("✓ Special category added");
 }
 function deleteSpecialCategoryFromEditor(name){
+  if(!can("manageCategories")) return;
   askConfirm(`Remove "${name}" from the special category list? Medicines already set to this special category keep showing it, but you won't be able to pick it for new or edited ones.`, ()=>{
     SPECIAL_CATEGORIES = SPECIAL_CATEGORIES.filter(c=>c!==name);
     delete specialCatUi.renameDrafts[name];
     saveSpecialCategoriesStorage();
+    touchCategories();
     render();
   });
 }
@@ -1268,8 +1303,8 @@ function closeTopMenu(){
   if(inv.editCopyMenuOpen){ inv.editCopyMenuOpen=false; render(); return; }
   if(inv.editId){ inv.editId=null; render(); return; }
   if(inv.restockId){ inv.restockId=null; render(); return; }
-  if(inv.copyMenuOpen){ inv.copyMenuOpen=false; render(); return; }
-  if(inv.showForm){ inv.showForm=false; render(); return; }
+  if(inv.copyMenuOpen){ inv.copyMenuOpen=false; refreshInvFormOnly(); return; }
+  if(inv.showForm){ inv.showForm=false; refreshInvFormOnly(); return; }
   // The notepad editor's own "← Back" button auto-saves the draft (see backFromNote()) rather
   // than discarding it — a note left half-typed shouldn't vanish — so back-button behaves the
   // same way here for consistency, instead of silently dropping what was written.
@@ -3157,7 +3192,7 @@ function applyInvScan(){
   scanUi.pending = "newmed";
   handleScanText(text);
 }
-function clearInvScanLink(){ inv.form.gtin=""; render(); }
+function clearInvScanLink(){ inv.form.gtin=""; refreshInvFormOnly(); }
 // Same as clearInvScanLink/applyInvScan above, but for linking a barcode to an EXISTING
 // medicine from its inline Edit form, rather than a brand-new one being created.
 function onEditScanInput(v){ inv.editScanText=v; }
@@ -3168,7 +3203,7 @@ function applyEditScan(medId){
   scanUi.pending = { kind:"edit", medId };
   handleScanText(text);
 }
-function clearEditScanLink(){ inv.editForm.gtin=""; render(); }
+function clearEditScanLink(){ inv.editForm.gtin=""; refreshInvCard(inv.editId); }
 function applyScanToEditForm(medId, parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.id!==medId && m.gtin && m.gtin===parsed.gtin);
@@ -3180,6 +3215,53 @@ function applyScanToEditForm(medId, parsed){
   }
   showToast(parsed.gtin ? "✓ Barcode linked to this medicine" : "Scanned, but no GTIN was found in that code");
   render();
+}
+/* Barcodes often carry the full product title in one string, e.g. "Terbisil 10 lotion 20 mL".
+   Split it into the pieces the New medicine form actually has boxes for:
+   - dosage form word (lotion/tablet/syrup/...) -> Category
+   - quantities with a unit (20 mL, 500 mg, 5 %) -> Strength, volumes first
+   - a bare number sitting right before the dosage form word (the "10" above) -> mg
+   - whatever is left is the medicine's name ("Terbisil").
+   Deliberately conservative: only known dosage-form words are recognised, and if stripping
+   would leave the name empty, nothing is split at all. */
+const DOSAGE_FORM_WORDS = {
+  tablet:"Tablet", tablets:"Tablet", tab:"Tablet", tabs:"Tablet",
+  capsule:"Capsule", capsules:"Capsule", cap:"Capsule", caps:"Capsule",
+  injection:"Injection", inj:"Injection", syrup:"Syrup", suspension:"Suspension", lotion:"Lotion",
+  cream:"Cream", ointment:"Ointment", gel:"Gel", drops:"Drops", drop:"Drops", sachet:"Sachet",
+  drip:"Drip", powder:"Powder", spray:"Spray", shampoo:"Shampoo", solution:"Solution"
+};
+function splitScannedProductName(raw){
+  const original = String(raw||"").replace(/\s+/g," ").trim();
+  const UNIT = "ml|l|mg|mcg|gm|g|iu|%";
+  const glued = new RegExp("^(\\d+(?:\\.\\d+)?)("+UNIT+")$","i");
+  const unitOnly = new RegExp("^("+UNIT+")$","i");
+  const isNum = t=>/^\d+(?:\.\d+)?$/.test(t);
+  const measures = [];
+  let tokens = original.split(" ").filter(Boolean);
+  // 1) quantities that already carry a unit ("20 mL" or "20mL")
+  const rest = [];
+  for(let i=0;i<tokens.length;i++){
+    const t = tokens[i];
+    const g = t.match(glued);
+    if(g){ measures.push({text:g[1]+" "+g[2], vol:/^(ml|l)$/i.test(g[2])}); continue; }
+    if(isNum(t) && i+1<tokens.length && unitOnly.test(tokens[i+1])){
+      measures.push({text:t+" "+tokens[i+1], vol:/^(ml|l)$/i.test(tokens[i+1])}); i++; continue;
+    }
+    rest.push(t);
+  }
+  // 2) dosage form word, plus a bare number directly before it (= mg)
+  let category = "";
+  const fi = rest.findIndex(t=>DOSAGE_FORM_WORDS[t.toLowerCase().replace(/[^a-z]/g,"")]);
+  if(fi>0){ // fi===0 would leave the name empty — leave such names alone
+    category = DOSAGE_FORM_WORDS[rest[fi].toLowerCase().replace(/[^a-z]/g,"")];
+    rest.splice(fi,1);
+    if(fi-1>=0 && isNum(rest[fi-1])){ measures.push({text:rest[fi-1]+" mg", vol:false}); rest.splice(fi-1,1); }
+  }
+  const name = rest.join(" ").trim();
+  if(!name || (!category && !measures.length)) return { name: original, category:"", strength:"" };
+  const ordered = measures.filter(m=>m.vol).concat(measures.filter(m=>!m.vol));
+  return { name, category, strength: ordered.map(m=>m.text).join(" ") };
 }
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
@@ -3196,7 +3278,21 @@ function applyScanToNewMedForm(parsed){
   // Some codes also carry the product name and MRP (GS1 field 240) — fill those in, but ONLY into
   // fields that are still empty, so anything already typed is never overwritten.
   const filled = [];
-  if(parsed.productName && !String(inv.form.name||"").trim()){ inv.form.name = parsed.productName; filled.push("name"); }
+  if(parsed.productName && !String(inv.form.name||"").trim()){
+    const split = splitScannedProductName(parsed.productName);
+    inv.form.name = split.name; filled.push("name");
+    // Strength/category only ever go into boxes that are still empty, same as everything here.
+    if(split.strength && !String(inv.form.mg||"").trim()){ inv.form.mg = split.strength; filled.push("strength"); }
+    if(split.category && !inv.form.category && !inv.form.specialCategory){
+      // Use the existing category if there is one (any capitalisation); otherwise add it to
+      // the shared list so it's selectable here and synced to the other devices.
+      let cat = MED_CATEGORIES.find(c=>c.toLowerCase()===split.category.toLowerCase());
+      // Creating a brand-new category is an Admin-only edit like any other; anyone else just
+      // gets an existing category assigned, or none.
+      if(!cat && can("manageCategories")){ cat = split.category; MED_CATEGORIES.push(cat); saveMedCategoriesStorage(); touchCategories(); }
+      if(cat){ inv.form.category = cat; filled.push("category"); }
+    }
+  }
   if(parsed.price && !String(inv.form.mrp||"").trim()){ inv.form.mrp = String(parsed.price); filled.push("MRP"); }
   // A brand-new medicine has no batch yet, so a scanned batch/expiry has nowhere to land here —
   // only the GTIN link and the name/MRP above can actually be saved from this form. Tell the user
@@ -3246,7 +3342,9 @@ function searchInvByFormula(formula){
   inv.query = formula || "";
   render();
   const el = document.getElementById("invQueryInput");
-  if(el){ el.focus(); }
+  // render() only refreshes the results list (not the search box itself) when Inventory is
+  // already open, so a programmatic jump like this must set the visible text itself.
+  if(el){ el.value = inv.query; el.focus(); }
 }
 function searchBillByFormula(formula){
   bill.query = formula || "";
@@ -3262,10 +3360,10 @@ function onInvForm(field,v){ inv.form[field]=v; }
 function onInvCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.form.category=""; inv.form.specialCategory=v; }
   else { inv.form.category=v; inv.form.specialCategory=""; }
-  render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
+  refreshInvFormOnly(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
-function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } render(); }
-function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; render(); }
+function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } refreshInvFormOnly(); }
+function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; refreshInvFormOnly(); }
 function addMedicine(){
   const f = inv.form;
   if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
@@ -3284,7 +3382,9 @@ function deleteMedicine(id){
     // outright would just cause it to reappear once another device's data came back in.
     const m = inventory.find(x=>x.id===id);
     if(m){ m.deleted = true; m.updatedAt = Date.now(); }
-    saveInventory(); render();
+    saveInventory();
+    removeInvCard(id);
+    renderNav();
   });
 }
 // "S.L" = Stock Lost — a one-tap way to write off a medicine's entire current stock (e.g. it
@@ -3305,11 +3405,18 @@ function markStockLost(id){
       adjustStockTo(m, 0);
       m.updatedAt = Date.now();
       saveInventory();
-      renderInvList();
+      refreshInvCard(id);
+      renderNav();
     }, "Yes, set to 0");
   }, "Mark lost");
 }
-function toggleRestock(id){ inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText=""; render(); }
+function toggleRestock(id){
+  const prevEditId = inv.editId, prevRestockId = inv.restockId;
+  inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id;
+  inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText="";
+  // Edit/Restock are single global ids, so opening one can close another card's — refresh all involved.
+  refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id);
+}
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
 function onRestockMrp(v){ inv.restockMrp=v; }
@@ -3331,9 +3438,11 @@ function doRestock(id){
   }
   saveInventory();
   inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText="";
-  render();
+  refreshInvCard(id);
+  renderNav();
 }
 function openEdit(id){
+  const prevEditId = inv.editId, prevRestockId = inv.restockId;
   inv.restockId=null;
   inv.editId = inv.editId===id?null:id;
   inv.editCopyMenuOpen=false;
@@ -3341,14 +3450,14 @@ function openEdit(id){
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
     pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag, gtin:m.gtin||"" }; }
-  render();
+  refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id);
 }
 function onEditForm(field,v){ inv.editForm[field]=v; }
-function toggleEditSTag(){ inv.editForm.sTag = !inv.editForm.sTag; render(); }
+function toggleEditSTag(){ inv.editForm.sTag = !inv.editForm.sTag; refreshInvCard(inv.editId); }
 function onEditCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.editForm.category=""; inv.editForm.specialCategory=v; }
   else { inv.editForm.category=v; inv.editForm.specialCategory=""; }
-  render(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
+  refreshInvCard(inv.editId); // keep the "S.<Category>" toggle label in sync with whatever category is picked
 }
 function saveEdit(id){
   const f = inv.editForm;
@@ -3365,7 +3474,8 @@ function saveEdit(id){
   }
   saveInventory();
   inv.editId=null;
-  render();
+  refreshInvCard(id);
+  renderNav();
 }
 
 /* ===================== S.COPY: save-and-start-a-variant ===================== */
@@ -3377,8 +3487,8 @@ function saveEdit(id){
    Formula + MRP empty, keeps Strength), or in more than one strength (D.Strength — leaves
    Strength + MRP empty, keeps Formula), so the next entry only needs that one field plus MRP
    typed in instead of the whole form redone from scratch. */
-function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; render(); }
-function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; render(); }
+function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; refreshInvFormOnly(); }
+function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; refreshInvCard(inv.editId); }
 // Shared by both entry points below: opens the New medicine form pre-filled from `f` (either an
 // inv.form or inv.editForm snapshot — both carry the same field names this reads), with
 // `variant` deciding which one field is left blank alongside MRP.
@@ -3433,6 +3543,40 @@ let _invRenderToken = 0;
 // Remembers the query+filter combination the medicine list was last FULLY (not just
 // first-batch) populated for. See renderInvList()'s use of it below.
 let _invListLoadedFor = null;
+// Updates ONE medicine's card in place, leaving every other card untouched. Every per-card
+// action (Edit, Restock, Save, S.L, category/S-tag toggles) only ever changes that card, so
+// re-filtering/re-sorting/rebuilding all ~300 cards through render() just to reflect it was
+// what made opening Edit/Restock lag once the list was fully loaded. This is O(1) instead.
+function refreshInvCard(id){
+  if(!id) return;
+  const el = document.getElementById("invCard-"+id);
+  if(!el) return; // not on screen (filtered out / chunk not loaded yet) — nothing to patch
+  const m = inventory.find(x=>x.id===id);
+  if(!m || m.deleted) return;
+  el.outerHTML = buildInvCard(m);
+}
+function removeInvCard(id){
+  const el = document.getElementById("invCard-"+id);
+  if(el) el.remove();
+}
+// Name / S-tag / Category block shared by the New medicine form and an existing medicine's Edit
+// form. People allowed to edit categories (Admin, or a Semi-Admin with that privilege) get the
+// original layout: name + S on one row, then the category picker with its Edit button below.
+// Everyone else gets one row split into two equal halves, matching the two-column rows below it:
+// the name takes the left half, and the category picker plus the small S toggle share the right.
+function nameCategoryRowsHtml(c){
+  const sBtn = `<button type="button" onclick="${c.sToggle}" title="Mark as S.${esc(c.sTitle||'Category')}" style="flex:0 0 36px;display:flex;align-items:center;justify-content:center;border:1px solid ${c.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${c.sTag?'var(--primary)':'var(--page)'};color:${c.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>`;
+  const select = `<select id="${c.selectId}" onchange="${c.selectOnchange}"><option value="" ${!c.category && !c.specialCategory?"selected":""}>Category</option>${mergedCategoryOptionsHtml(c.specialCategory||c.category)}</select>`;
+  const nameInput = (style)=>`<input ${NOAC} id="${c.nameId}" value="${esc(c.name)}" oninput="${c.nameOnInput}" placeholder="Medicine name" class="flex1"${style?` style="${style}"`:""}>`;
+  if(can("manageCategories")){
+    return `<div class="flex gap2 mb2">${nameInput("")}${sBtn}</div>
+        <div class="cat-picker mb2">${select}<button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button></div>`;
+  }
+  // The name input sits inside its own padding-free wrapper: an <input> that is itself the flex
+  // item can never shrink below its own left+right padding and border (~26px), even with
+  // flex-basis 0, so it always came out that much wider than the padding-free right half.
+  return `<div class="flex gap2 mb2"><div style="flex:1 1 0;min-width:0;">${nameInput("width:100%;")}</div><div class="flex gap2" style="flex:1 1 0;min-width:0;"><div class="cat-picker" style="flex:1;min-width:0;">${select}</div>${sBtn}</div></div>`;
+}
 function buildInvCard(m){
   // Computed once and reused below — this used to be recomputed independently for the
   // price, the expired check, the "has batches" check, and the batch list itself, each of
@@ -3469,17 +3613,7 @@ function buildInvCard(m){
     const f = inv.editForm;
     extra = `
       <div class="mt2 divider-top8">
-        <div class="flex gap2 mb2">
-          <input ${NOAC} id="editName-${m.id}" value="${esc(f.name)}" oninput="onEditForm('name',this.value)" placeholder="Medicine name" class="flex1">
-          <button type="button" onclick="toggleEditSTag()" title="Mark as S.${esc(f.category||f.specialCategory||'Category')}" style="flex:0 0 36px;display:flex;align-items:center;justify-content:center;border:1px solid ${f.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${f.sTag?'var(--primary)':'var(--page)'};color:${f.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
-        </div>
-        <div class="cat-picker mb2">
-          <select id="editCategory-${m.id}" onchange="onEditCategoryPicked(this.value)">
-            <option value="" ${!f.category && !f.specialCategory?"selected":""}>Category</option>
-            ${mergedCategoryOptionsHtml(f.specialCategory||f.category)}
-          </select>
-          <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
-        </div>
+        ${nameCategoryRowsHtml({ nameId:"editName-"+m.id, name:f.name, nameOnInput:"onEditForm('name',this.value)", sToggle:"toggleEditSTag()", sTag:f.sTag, sTitle:f.category||f.specialCategory, selectId:"editCategory-"+m.id, selectOnchange:"onEditCategoryPicked(this.value)", category:f.category, specialCategory:f.specialCategory })}
         <div class="flex gap2 mb2">
           <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onEditForm('formula',this.value)" placeholder="Formula / composition">
           <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
@@ -3514,7 +3648,7 @@ function buildInvCard(m){
       </div>`;
   }
   return `
-    <div class="card">
+    <div class="card" id="invCard-${m.id}">
       <div class="flex" style="justify-content:space-between;align-items:flex-start;">
         <div>
           <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
@@ -3669,6 +3803,18 @@ function renderInventory(){
   renderInvList();
 }
 
+// Opening/closing/toggling things INSIDE the New medicine form only changes the form itself —
+// nothing on the page behind it. A full render() rebuilds the nav, the whole inventory list
+// (hundreds of cards) and ~15 other modal roots, which is what made the form take about a
+// second to open and close. This redraws just the modal, and keeps the floating "+" button and
+// the back-button history in step with whether it's open.
+function refreshInvFormOnly(){
+  renderInvFormModal();
+  const fab = document.getElementById("invFab");
+  if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
+  syncMenuHistory();
+}
+
 function renderInvFormModal(){
   const root = document.getElementById("invFormModalRoot");
   if(!root) return;
@@ -3681,17 +3827,7 @@ function renderInvFormModal(){
           <button class="modal-x" onclick="toggleInvForm()">✕</button>
         </div>
         <div style="padding:14px 16px;overflow-y:auto;">
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="invName" value="${esc(inv.form.name)}" oninput="onInvForm('name',this.value)" placeholder="Medicine name" class="flex1">
-            <button type="button" onclick="toggleInvSTag()" title="Mark as S.${esc(inv.form.category||inv.form.specialCategory||'Category')}" style="flex:0 0 36px;display:flex;align-items:center;justify-content:center;border:1px solid ${inv.form.sTag?'var(--primary)':'var(--border)'};border-radius:8px;background:${inv.form.sTag?'var(--primary)':'var(--page)'};color:${inv.form.sTag?'#fff':'var(--muted)'};font-size:13px;font-weight:700;cursor:pointer;">S</button>
-          </div>
-          <div class="cat-picker mb2">
-            <select id="invCategory" onchange="onInvCategoryPicked(this.value)">
-              <option value="" ${!inv.form.category && !inv.form.specialCategory?"selected":""}>Category</option>
-              ${mergedCategoryOptionsHtml(inv.form.specialCategory||inv.form.category)}
-            </select>
-            <button type="button" title="Add, rename, or delete categories" onclick="openCategoryEditor()">Edit</button>
-          </div>
+          ${nameCategoryRowsHtml({ nameId:"invName", name:inv.form.name, nameOnInput:"onInvForm('name',this.value)", sToggle:"toggleInvSTag()", sTag:inv.form.sTag, sTitle:inv.form.category||inv.form.specialCategory, selectId:"invCategory", selectOnchange:"onInvCategoryPicked(this.value)", category:inv.form.category, specialCategory:inv.form.specialCategory })}
           <div class="flex gap2 mb2">
             <input ${NOAC} id="invFormula" value="${esc(inv.form.formula)}" oninput="onInvForm('formula',this.value)" placeholder="Formula / composition">
             <input ${NOAC} id="invMg" value="${esc(inv.form.mg)}" oninput="onInvForm('mg',this.value)" placeholder="Strength (mg)">
@@ -4654,16 +4790,20 @@ function renderUserBadge(){
 // open to every role.
 function can(action){
   const role = currentRole();
+  // Manage Users is Admin-only outright — Semi-Admins never get it, whatever is ticked.
   if(action==="manageUsers") return role==="admin";
   if(role==="admin") return true;
   if(role==="semiadmin"){
     const p = profiles.find(x=>x.id===currentProfileId);
     const priv = (p && p.privileges) || {};
+    // Categories are Admin by default; a Semi-Admin only gets them if that privilege was ticked.
+    if(action==="manageCategories") return !!priv.editCategories;
     if(action==="printer") return !!priv.printer;
     if(action==="receiptSetup") return !!priv.receiptSetup;
     if(action==="monthlyTotal") return !!priv.monthlyTotal;
     return true;
   }
+  if(action==="manageCategories") return false;
   if(action==="printer") return false;
   if(action==="receiptSetup") return false;
   if(action==="monthlyTotal") return role==="doctor";
@@ -4895,7 +5035,7 @@ function renderForgotPinModal(){
 function openAddUserFromLogin(){
   const admins = visibleProfiles().filter(p=>p.role==="admin");
   if(!admins.length){ showToast("No Admin account exists yet"); return; }
-  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false} };
+  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} };
   render();
 }
 function closeAddUserFromLogin(){ addUserLoginUi.open=false; render(); }
@@ -4929,7 +5069,7 @@ function submitAddUserFromLogin(){
   profiles.push(p);
   saveProfiles();
   showToast(`✓ ${name} added — they can log in now`);
-  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false} };
+  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} };
   render();
 }
 function renderAddUserLoginModal(){
@@ -4945,7 +5085,8 @@ function renderAddUserLoginModal(){
   const PRIVILEGE_ITEMS = [
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
-    {key:"monthlyTotal", label:"Monthly Total Sales"}
+    {key:"monthlyTotal", label:"Monthly Total Sales"},
+    {key:"editCategories", label:"Edit medicine categories"}
   ];
   let body = "";
   if(addUserLoginUi.step==="verify"){
@@ -4996,7 +5137,7 @@ function renderAddUserLoginModal(){
 function toggleAddUser(){
   manageUi.addingUser = !manageUi.addingUser;
   manageUi.newName=""; manageUi.newRole="receptionist"; manageUi.newPin="";
-  manageUi.newPrivileges = {printer:false, receiptSetup:false, monthlyTotal:false};
+  manageUi.newPrivileges = {printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false};
   render();
 }
 function onNewUserName(v){ manageUi.newName=v; }
@@ -5031,7 +5172,7 @@ function startEditUser(id){
   manageUi.editingId = id;
   manageUi.editRole = p.role;
   manageUi.editPin = p.pin || "";
-  manageUi.editPrivileges = Object.assign({printer:false, receiptSetup:false, monthlyTotal:false}, p.privileges||{});
+  manageUi.editPrivileges = Object.assign({printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false}, p.privileges||{});
   render();
 }
 function cancelEditUser(){ manageUi.editingId=null; render(); }
@@ -5117,7 +5258,8 @@ function renderPrivilegeConfirmModal(){
   const items = [
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
-    {key:"monthlyTotal", label:"Monthly Total Sales"}
+    {key:"monthlyTotal", label:"Monthly Total Sales"},
+    {key:"editCategories", label:"Edit medicine categories"}
   ];
   const chosen = items.filter(it=>d.privileges && d.privileges[it.key]).map(it=>it.label);
   root.innerHTML = `
@@ -5379,7 +5521,8 @@ function renderManageUsersModal(){
   const PRIVILEGE_ITEMS = [
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
-    {key:"monthlyTotal", label:"Monthly Total Sales"}
+    {key:"monthlyTotal", label:"Monthly Total Sales"},
+    {key:"editCategories", label:"Edit medicine categories"}
   ];
   const privilegeCheckboxesHtml = (privileges, toggleFn) => `
     <label class="field-label" style="text-align:left;">Privileges (Manage Users is never included)</label>
@@ -5699,6 +5842,20 @@ function mergeDefaultDoctorFee(data){
     }
   }
 }
+// Both category lists travel together as one unit: whichever device edited them most recently
+// wins outright. (Whole-list rather than per-item merging is what lets a DELETE propagate —
+// a union merge would just bring a deleted category back from the other device.)
+function mergeCategories(data){
+  const incomingTs = data.categoriesUpdatedAt || 0;
+  if(incomingTs > categoriesUpdatedAt && Array.isArray(data.medCategories) && Array.isArray(data.specialCategories)){
+    MED_CATEGORIES = data.medCategories.slice();
+    SPECIAL_CATEGORIES = data.specialCategories.slice();
+    categoriesUpdatedAt = incomingTs;
+    saveMedCategoriesStorage();
+    saveSpecialCategoriesStorage();
+    try{ localStorage.setItem("clinic_categories_updated_at", String(categoriesUpdatedAt)); }catch(e){}
+  }
+}
 function mergeDefaultDoctorName(data){
   const incomingTs = data.defaultDoctorNameUpdatedAt || 0;
   if(incomingTs > defaultDoctorNameUpdatedAt){
@@ -5828,6 +5985,7 @@ function mergeDataInto(data, inventoryMergeFn, live){
   mergeTestSettings(data);
   mergeDefaultDoctorFee(data);
   mergeDefaultDoctorName(data);
+  mergeCategories(data);
 
   saveInventory(); saveTransactions(); saveProfiles(); saveMonthAdjustments();
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
@@ -5931,6 +6089,7 @@ function buildFullStatePayload(){
     customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
     defaultDoctorFee, defaultDoctorFeeUpdatedAt,
     defaultDoctorName, defaultDoctorNameUpdatedAt,
+    medCategories: MED_CATEGORIES, specialCategories: SPECIAL_CATEGORIES, categoriesUpdatedAt,
     updatedAt: Date.now()
   };
 }
@@ -6207,7 +6366,8 @@ function exportBackup(){
     notesByProfile: collectAllNotes(),
     customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
     defaultDoctorFee, defaultDoctorFeeUpdatedAt,
-    defaultDoctorName, defaultDoctorNameUpdatedAt
+    defaultDoctorName, defaultDoctorNameUpdatedAt,
+    medCategories: MED_CATEGORIES, specialCategories: SPECIAL_CATEGORIES, categoriesUpdatedAt
   };
   // Inside the App Inventor app, a normal blob/<a download> click has nowhere to land (no
   // native download handler registered), so hand the data to the native side instead via
