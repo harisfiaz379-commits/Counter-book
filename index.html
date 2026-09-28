@@ -2730,6 +2730,38 @@ function parseGS1Barcode(raw){
 // small and dense; maxNumberOfSymbols:1 stops it looking for more than one code per image/frame,
 // which is both faster and avoids ever ambiguously returning the wrong one of two codes in frame.
 const ZXING_READ_OPTIONS = { formats: ["DataMatrix","QRCode","Code128"], tryHarder: true, maxNumberOfSymbols: 1 };
+// A dotty inkjet-printed Data Matrix (very common on medicine boxes) can defeat the library's
+// default settings even when it looks perfectly sharp to a person — the printed dots bleed into
+// each other or leave gaps, so the "black/white" decision the decoder makes per module comes out
+// wrong. Different settings win on different prints, so instead of betting on one, the live
+// scanner cycles through several ("profiles"), one per camera frame, and the photo scanner tries
+// them all in turn. tryDenoise = a morphological closing filter for 2D codes (fills small gaps in
+// dotted modules); the binarizer picks how the image is turned into black/white.
+const ZXING_PROFILES = [
+  { name:"default",         opts:{} },
+  { name:"denoise",         opts:{ tryDenoise:true } },
+  { name:"global-threshold",opts:{ binarizer:"GlobalHistogram" } },
+  { name:"denoise+global",  opts:{ tryDenoise:true, binarizer:"GlobalHistogram" } },
+  { name:"fixed-threshold", opts:{ binarizer:"FixedThreshold" } },
+  { name:"no-downscale",    opts:{ tryDownscale:false } }
+];
+function zxingOptionsFor(i){ return Object.assign({}, ZXING_READ_OPTIONS, ZXING_PROFILES[i % ZXING_PROFILES.length].opts); }
+// Chrome on Android exposes Google's own barcode engine as the standard BarcodeDetector API in
+// some setups. If this WebView has it AND it supports Data Matrix, it's tried first each frame
+// (it's fast, and it's the same family of engine other phone scanner apps use); zxing-wasm above
+// is the fallback. Returns null when it isn't available, which is common inside a WebView.
+let _nativeDetector = null, _nativeDetectorChecked = false;
+async function getNativeBarcodeDetector(){
+  if(_nativeDetectorChecked) return _nativeDetector;
+  _nativeDetectorChecked = true;
+  try{
+    if(typeof BarcodeDetector === "undefined") return null;
+    const fmts = await BarcodeDetector.getSupportedFormats();
+    if(!fmts || fmts.indexOf("data_matrix") === -1) return null;
+    _nativeDetector = new BarcodeDetector({ formats: ["data_matrix","qr_code","code_128"] });
+  }catch(e){ _nativeDetector = null; }
+  return _nativeDetector;
+}
 let _zxingWasmLoadPromise = null;
 function loadZXingWasm(){
   if(window.ZXingWASM) return Promise.resolve();
@@ -2805,7 +2837,15 @@ async function handleScanPhotoFile(input){
     // Full native-resolution photo goes straight in — zxing-wasm's C++ decoder handles large,
     // real-world images (skew, uneven lighting, a bit of blur) far more capably than the old
     // pure-JS port did, so unlike before, this no longer needs a manual downscale/retry loop.
-    const results = await ZXingWASM.readBarcodes(file, ZXING_READ_OPTIONS);
+    const results = await (async ()=>{
+      for(let i=0;i<ZXING_PROFILES.length;i++){
+        try{
+          const r = await ZXingWASM.readBarcodes(file, zxingOptionsFor(i));
+          if(r && r.length && r[0].text) return r;
+        }catch(e){ /* this profile failed — try the next one */ }
+      }
+      return [];
+    })();
     if(!results || !results.length || !results[0].text) throw new Error("not found");
     scanUi.pending = target;
     handleScanText(results[0].text);
@@ -2848,6 +2888,7 @@ async function openCameraScan(target, _isRetry){
     // element — so each frame is converted to ImageData via getImageData() before decoding.
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const nativeDet = await getNativeBarcodeDetector();
     let frameCount = 0;
     _scanLoopActive = true;
     const tick = async ()=>{
@@ -2856,20 +2897,29 @@ async function openCameraScan(target, _isRetry){
         canvas.width = v.videoWidth; canvas.height = v.videoHeight;
         ctx.drawImage(v, 0, 0);
         frameCount++;
+        const profileIdx = frameCount % ZXING_PROFILES.length;
+        const engineLabel = (nativeDet ? "native+zxing" : "zxing-wasm") + " · " + ZXING_PROFILES[profileIdx].name;
         try{
           const t0 = performance.now();
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const results = await ZXingWASM.readBarcodes(imageData, ZXING_READ_OPTIONS);
-          updateScanDebugLine(frameCount, "", Math.round(performance.now()-t0));
-          if(results && results.length && results[0].text){
-            const text = results[0].text;
+          let text = null;
+          if(nativeDet){
+            const codes = await nativeDet.detect(v);
+            if(codes && codes.length && codes[0].rawValue) text = codes[0].rawValue;
+          }
+          if(!text){
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const results = await ZXingWASM.readBarcodes(imageData, zxingOptionsFor(profileIdx));
+            if(results && results.length && results[0].text) text = results[0].text;
+          }
+          updateScanDebugLine(frameCount, "", Math.round(performance.now()-t0), engineLabel);
+          if(text){
             stopCameraScan();
             handleScanText(text);
             return;
           }
-        }catch(e){ updateScanDebugLine(frameCount, (e&&e.message)||"decode error"); }
+        }catch(e){ updateScanDebugLine(frameCount, (e&&e.message)||"decode error", null, engineLabel); }
       }
-      if(_scanLoopActive) setTimeout(tick, 350);
+      if(_scanLoopActive) setTimeout(tick, 250);
     };
     tick();
   }catch(e){
@@ -2900,7 +2950,7 @@ function stopCameraScan(){
 // Shows exactly what resolution the camera actually negotiated (which can be far lower than
 // requested — a common, silent cause of "looks clear to my eye but never decodes") plus a live
 // frame counter proving the scan loop is actually running rather than stuck.
-function updateScanDebugLine(frameCount, lastError, decodeMs){
+function updateScanDebugLine(frameCount, lastError, decodeMs, engineLabel){
   const v = document.getElementById("scanVideoEl");
   const anchor = document.getElementById("scanControlsAnchor");
   if(!v || !anchor) return;
@@ -2913,7 +2963,7 @@ function updateScanDebugLine(frameCount, lastError, decodeMs){
     anchor.appendChild(line);
   }
   const res = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}×${v.videoHeight}` : "…";
-  let text = `zxing-wasm · camera: ${res} · frames: ${frameCount||0}`;
+  let text = `${engineLabel||"zxing-wasm"} · camera: ${res} · frames: ${frameCount||0}`;
   if(decodeMs!=null) text += ` · ${decodeMs}ms/frame`;
   if(lastError) text += ` · ERROR: ${lastError}`;
   line.textContent = text;
