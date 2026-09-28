@@ -2673,6 +2673,8 @@ function renderBill(){
 function gs1SetField(out, ai, value){
   if(ai==="01") out.gtin = value;
   else if(ai==="10") out.batch = value;
+  else if(ai==="21") out.serial = value;
+  else if(ai==="240") out.productText = value;
   else if(ai==="11") out.mfgDate = gs1DateToIso(value);
   else if(ai==="17") out.expiryDate = gs1DateToIso(value);
 }
@@ -2692,36 +2694,121 @@ function gs1DateToIso(yymmdd){
   if(dd<1||dd>31) return null;
   return ymd(year, mm-1, dd);
 }
-// Parses a scanned/typed GS1 element string into just the fields Counter Book uses. Handles
-// two shapes a scanner can hand back:
-//  - raw form: AIs run back-to-back, with an ASCII GS (0x1D) character ending any
-//    variable-length field that isn't already the last one in the string
-//  - "human-readable" form some scanners/apps emit instead, e.g. "(01)08901234567890(17)280430(10)ABC123"
+// Longest value allowed for the variable-length AIs we might meet. Only used when separators
+// are missing and we have to guess where one field ends and the next begins.
+function gs1MaxLen(ai){ return (ai==="10"||ai==="21"||ai==="22") ? 20 : (ai==="30"||ai==="37") ? 8 : 30; }
+// Describes the GS1 Application Identifier at the start of `s`: its text, and whether its value
+// is a fixed number of characters (fixed>0) or runs until the next GS separator / end (fixed=0).
+// Only needs to be right about LENGTHS so that fields Counter Book doesn't use (weights, prices,
+// party codes...) can be skipped correctly instead of derailing the whole parse. null = unknown AI.
+function gs1AiInfo(s){
+  const d2 = s.slice(0,2), n2 = Number(d2);
+  const FIXED2 = {"00":18,"01":14,"02":14,"11":6,"12":6,"13":6,"14":6,"15":6,"16":6,"17":6,"18":6,"19":6,"20":2};
+  if(FIXED2[d2]!=null) return { ai:d2, fixed:FIXED2[d2] };
+  if(d2==="10"||d2==="21"||d2==="22"||d2==="30"||d2==="37"||(n2>=90&&n2<=99)) return { ai:d2, fixed:0 };
+  if(n2>=31 && n2<=36 && s.length>=4) return { ai:s.slice(0,4), fixed:6 };        // measures, e.g. 310n weight
+  if(n2===41 && s.length>=3) return { ai:s.slice(0,3), fixed:13 };                 // party GLNs 410-417
+  if((n2===24||n2===25||n2===40||n2===42||n2===43) && s.length>=3) return { ai:s.slice(0,3), fixed:0 }; // incl. 240 = manufacturer's extra product info
+  if((n2===39||(n2>=70&&n2<=82)) && s.length>=4) return { ai:s.slice(0,4), fixed:0 }; // price, 7xxx, 8xxx
+  return null;
+}
+// Strict parse of the WHOLE string into [ai, value] pairs, or null if it can't be read end to end.
+// Normal case: each variable-length value ends at a GS separator (or the end of the string) and
+// this just reads straight through. If a decoder dropped the separators, a field is instead
+// allowed to end early, right before another valid AI starts — with backtracking to find the one
+// reading that consumes everything, and each AI allowed only once (which rules out bogus splits).
+let _gs1Budget = 0;
+function gs1Parse(s, i, seen){
+  if(--_gs1Budget < 0) return null;
+  const GS = "\x1D";
+  while(i<s.length && s[i]===GS) i++;
+  if(i>=s.length) return [];
+  const info = gs1AiInfo(s.slice(i, i+4));
+  if(!info || !/^\d+$/.test(info.ai) || seen[info.ai]) return null; // real AIs are always digits
+  const start = i + info.ai.length;
+  const seen2 = Object.assign({}, seen); seen2[info.ai] = true;
+  if(info.fixed){
+    const val = s.substr(start, info.fixed);
+    if(val.length<info.fixed || !/^\d+$/.test(val)) return null;
+    const rest = gs1Parse(s, start+info.fixed, seen2);
+    return rest && [[info.ai, val]].concat(rest);
+  }
+  const g = s.indexOf(GS, start);
+  const hardEnd = g===-1 ? s.length : g;
+  const max = gs1MaxLen(info.ai);
+  const ends = [];
+  if(hardEnd-start>=1 && hardEnd-start<=max) ends.push(hardEnd);                  // the conformant reading first
+  for(let e=start+1; e<=Math.min(hardEnd-1, start+max); e++) ends.push(e);        // then: next AI follows immediately
+  for(const e of ends){
+    const rest = gs1Parse(s, e, seen2);
+    if(rest) return [[info.ai, s.slice(start, e)]].concat(rest);
+  }
+  return null;
+}
+function gs1ParseAll(s){ _gs1Budget = 20000; return gs1Parse(s, 0, {}); }
+// Lenient fallback: reads as far as it can and quietly stops at anything it can't place.
+function gs1Walk(s, out){
+  const GS = "\x1D";
+  while(s.length>=2){
+    const info = gs1AiInfo(s);
+    if(!info || !/^\d+$/.test(info.ai)) break;
+    s = s.slice(info.ai.length);
+    let val;
+    if(info.fixed){
+      if(s.length<info.fixed) break;
+      val = s.slice(0,info.fixed); s = s.slice(info.fixed);
+    } else {
+      const g = s.indexOf(GS);
+      val = g===-1 ? s : s.slice(0,g);
+      s = g===-1 ? "" : s.slice(g+1);
+    }
+    gs1SetField(out, info.ai, val);
+    s = s.replace(/^\x1D+/, ""); // tolerate a separator after a fixed-length field too
+  }
+}
+// AI 240 ("additional product identification assigned by the manufacturer") is free text, and
+// some manufacturers put the product name and the MRP in it, e.g. "Terbisil 10 lotion 20mL Rs.380.00".
+// Splits that into a name and a price when it looks like that, so they can pre-fill the form.
+function gs1DeriveProduct(out){
+  const t = out.productText;
+  if(!t) return;
+  let name = String(t).trim(), price = null;
+  const m = name.match(/^(.*?)[\s,;:\-]*(?:MRP|M\.R\.P\.?|Rs\.?|INR|₹)\s*[:.\-]?\s*(\d+(?:\.\d+)?)\s*$/i);
+  if(m){ name = m[1].trim(); price = Number(m[2]); }
+  // Some codes run words and numbers together ("Terbisil10lotion20mL"): if there are no spaces at
+  // all, put one at every letter/number boundary so it reads "Terbisil 10 lotion 20 mL".
+  if(name && !/\s/.test(name)) name = name.replace(/([A-Za-z])(\d)/g,"$1 $2").replace(/(\d)([A-Za-z])/g,"$1 $2");
+  out.productName = name || null;
+  out.price = (price>0) ? price : null;
+}
+// Parses a scanned/typed GS1 element string into just the fields Counter Book uses. Copes with:
+//  - a symbology identifier some scanners prepend (e.g. "]d2" for GS1 Data Matrix)
+//  - leading separator/control characters (the GS1 "FNC1" start marker often shows up as one)
+//  - raw form: AIs back-to-back, ASCII GS (0x1D) ending any variable-length field that isn't last
+//  - the same but with the separators missing (see gs1Parse)
+//  - "human-readable" form: "(01)08901234567890(17)280430(10)ABC123"
+//  - junk in front of the data: re-syncs on the first "01"+14 digits it can find
 function parseGS1Barcode(raw){
-  const out = { gtin:null, batch:null, mfgDate:null, expiryDate:null };
+  const out = { gtin:null, batch:null, mfgDate:null, expiryDate:null, serial:null, productText:null, productName:null, price:null };
   if(!raw) return out;
-  if(raw.indexOf("(")!==-1){
+  let s = String(raw);
+  s = s.replace(/^\][A-Za-z][0-9A-Za-z]/, "");   // symbology identifier
+  s = s.replace(/^[\x00-\x20\x7f]+/, "");        // leading control chars / whitespace / FNC1
+  const found = ()=> out.gtin || out.batch || out.mfgDate || out.expiryDate;
+  if(s.indexOf("(")!==-1){
     const re = /\((\d{2,4})\)([^(]*)/g;
     let m;
-    while((m = re.exec(raw))) gs1SetField(out, m[1], m[2].trim());
-    if(out.gtin || out.batch || out.mfgDate || out.expiryDate) return out;
+    while((m = re.exec(s))) gs1SetField(out, m[1], m[2].trim());
+    if(found()){ gs1DeriveProduct(out); return out; }
   }
-  const GS = "\x1D";
-  let s = raw;
-  while(s.length>=2){
-    const ai = s.slice(0,2);
-    if(ai==="01" && s.length>=16){ gs1SetField(out,"01", s.slice(2,16)); s = s.slice(16); continue; }
-    if((ai==="11"||ai==="17") && s.length>=8){ gs1SetField(out, ai, s.slice(2,8)); s = s.slice(8); continue; }
-    if(ai==="10" || ai==="21"){
-      const rest = s.slice(2);
-      const gsIdx = rest.indexOf(GS);
-      const val = gsIdx===-1 ? rest : rest.slice(0,gsIdx);
-      gs1SetField(out, ai, val);
-      s = gsIdx===-1 ? "" : rest.slice(gsIdx+1);
-      continue;
-    }
-    break; // unsupported/unknown AI — stop rather than mis-parsing whatever follows it
+  let pairs = gs1ParseAll(s);
+  if(!pairs){ const idx = s.search(/01\d{14}/); if(idx>0) pairs = gs1ParseAll(s.slice(idx)); }
+  if(pairs){ pairs.forEach(pr => gs1SetField(out, pr[0], pr[1])); }
+  else {
+    gs1Walk(s, out);
+    if(!found()){ const idx = s.search(/01\d{14}/); if(idx>0) gs1Walk(s.slice(idx), out); }
   }
+  gs1DeriveProduct(out);
   return out;
 }
 
@@ -3040,6 +3127,11 @@ function renderScanModal(){
     </div>`;
 }
 // Shared entry point for BOTH the scan-and-paste box and the camera callback.
+// Makes invisible characters visible so a scanned string can actually be read/diagnosed:
+// GS (0x1D) -> <GS>, other control characters -> <0xNN>.
+function visibleScanText(s){
+  return String(s).replace(/[\x00-\x1f\x7f]/g, c => c==="\x1D" ? "<GS>" : "<0x"+c.charCodeAt(0).toString(16).padStart(2,"0")+">");
+}
 function handleScanText(raw){
   const target = scanUi.pending;
   scanUi.pending = null;
@@ -3047,7 +3139,10 @@ function handleScanText(raw){
   if(!text) return;
   const parsed = parseGS1Barcode(text);
   if(!parsed.gtin && !parsed.batch && !parsed.expiryDate){
-    showToast("⚠ Couldn't find a GTIN, batch, or expiry in that code");
+    // The barcode WAS read successfully — it just isn't in a shape the GS1 parser recognises.
+    // Show exactly what it contained (rather than a toast that vanishes) so it can be copied/shared.
+    const hex = Array.from(text.slice(0,24)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
+    openShare("The barcode was read, but not recognised as a medicine (GS1) code.\n\nScanned text (" + text.length + " characters):\n" + visibleScanText(text) + "\n\nFirst bytes (hex): " + hex);
     return;
   }
   if(target==="newmed") applyScanToNewMedForm(parsed);
@@ -3098,11 +3193,17 @@ function applyScanToNewMedForm(parsed){
     }
     inv.form.gtin = parsed.gtin;
   }
+  // Some codes also carry the product name and MRP (GS1 field 240) — fill those in, but ONLY into
+  // fields that are still empty, so anything already typed is never overwritten.
+  const filled = [];
+  if(parsed.productName && !String(inv.form.name||"").trim()){ inv.form.name = parsed.productName; filled.push("name"); }
+  if(parsed.price && !String(inv.form.mrp||"").trim()){ inv.form.mrp = String(parsed.price); filled.push("MRP"); }
   // A brand-new medicine has no batch yet, so a scanned batch/expiry has nowhere to land here —
-  // only the GTIN link (above) can actually be saved from this form. Tell the user plainly
-  // instead of pretending those fields were captured.
+  // only the GTIN link and the name/MRP above can actually be saved from this form. Tell the user
+  // plainly instead of pretending those fields were captured.
   const bits = [];
   if(parsed.gtin) bits.push("barcode linked to this medicine");
+  if(filled.length) bits.push(filled.join(" & ") + " filled in — please check");
   if(parsed.expiryDate || parsed.batch) bits.push("enter its batch/expiry on the first Restock");
   showToast(bits.length ? "✓ "+bits.join(" — ") : "Scanned, but nothing usable was found in that code");
   render();
@@ -3122,11 +3223,18 @@ function applyScanToRestock(medId, parsed){
     if(parsed.expiryDate) inv.restockExpiry = parsed.expiryDate;
     if(parsed.batch) inv.restockLotNo = parsed.batch;
     if(parsed.gtin && !m.gtin){ m.gtin = parsed.gtin; m.updatedAt = Date.now(); saveInventory(); }
-    showToast("✓ Batch details filled in from the scan — check them, then tap Add");
+    // If the code carries an MRP that differs from what's on file, pre-fill the batch's MRP field
+    // (it's still optional and editable — and left alone when the price hasn't changed).
+    let priceNote = "";
+    if(parsed.price && Number(parsed.price)!==Number(m.mrpPerBox)){
+      inv.restockMrp = String(parsed.price);
+      priceNote = ` (new MRP ${CURRENCY}${money(parsed.price)} filled in)`;
+    }
+    showToast("✓ Batch details filled in from the scan" + priceNote + " — check them, then tap Add");
     render();
   };
   if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
-    askConfirm(`This barcode doesn't match ${esc(m.name)}'s saved barcode. Use the scanned batch/expiry anyway?`, proceed);
+    askConfirm(`This barcode doesn't match ${m.name}'s saved barcode. Use the scanned batch/expiry anyway?`, proceed);
   } else {
     proceed();
   }
