@@ -524,6 +524,10 @@ function genRecoveryCode(){
   return out; // e.g. "7F3K-9QX2-RT"
 }
 function money(n){ const v=Number(n)||0; return v.toFixed(2).replace(/\.00$/,""); }
+// For medicine MRP / per-pill price display only: caps the shown text to its first 8
+// characters. Storage and every calculation still use the full number untouched — this only
+// shortens what's printed on screen.
+function mrpDisplay(n){ return money(n).slice(0,8); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtDateTime(ts){
   const d=new Date(ts);
@@ -2764,7 +2768,7 @@ function renderBill(){
               <input ${NOAC} id="billApplyingFeeDraftInput" type="text" inputmode="decimal" value="${esc(bill.applyingFeeDraft)}" oninput="onApplyingFeeDraft(this.value)" placeholder="0">
             </div>
           ` : ""}
-          ${billComputedSpecialPills()>0 ? `<p class="small mt2" style="margin-bottom:0;">${CURRENCY}${money(nextBatchUnitPrice(selSpecialMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selSpecialMed)*billComputedSpecialPills())}</p>` : ""}
+          ${billComputedSpecialPills()>0 ? `<p class="small mt2" style="margin-bottom:0;">${CURRENCY}${mrpDisplay(nextBatchUnitPrice(selSpecialMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selSpecialMed)*billComputedSpecialPills())}</p>` : ""}
           <button class="btn btn-primary mt2" style="width:100%;" ${!canAddSpecialBillItem()?"disabled":""} onclick="addSpecialBillItem()">+ Add special medicine</button>
         ` : ""}
       </div>
@@ -2808,7 +2812,7 @@ function renderBill(){
           ${bill.daysMode==='same' && !Number(bill.globalDays) ? `<p class="small mt2">Days not set yet — you can add medicines now and set the days once, any time. Medicine/price fill in for all of them as soon as you do.</p>` : ""}
           ${billComputedPills()>0 ? `<p class="small mt2">= ${billComputedPills()} medicine total</p>` : ""}
         `}
-        ${billComputedPills()>0 ? `<p class="small mt2">${CURRENCY}${money(nextBatchUnitPrice(selMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selMed)*billComputedPills())}</p>` : ""}
+        ${billComputedPills()>0 ? `<p class="small mt2">${CURRENCY}${mrpDisplay(nextBatchUnitPrice(selMed))} / medicine → subtotal ${CURRENCY}${money(nextBatchUnitPrice(selMed)*billComputedPills())}</p>` : ""}
       ` : ""}
     </div>
 
@@ -3432,28 +3436,36 @@ const DOSAGE_FORM_WORDS = {
   capsule:"Capsule", capsules:"Capsule", cap:"Capsule", caps:"Capsule",
   injection:"Injection", inj:"Injection", syrup:"Syrup", suspension:"Suspension", lotion:"Lotion",
   cream:"Cream", ointment:"Ointment", gel:"Gel", drops:"Drops", drop:"Drops", sachet:"Sachet",
-  drip:"Drip", powder:"Powder", spray:"Spray", shampoo:"Shampoo", solution:"Solution"
+  drip:"Drip", powder:"Powder", spray:"Spray", shampoo:"Shampoo", solution:"Solution",
+  // Common abbreviations printed on Indian medicine boxes
+  oint:"Ointment", ointments:"Ointment", crm:"Cream", susp:"Suspension", syp:"Syrup", soln:"Solution"
 };
 function splitScannedProductName(raw){
   const original = String(raw||"").replace(/\s+/g," ").trim();
   const UNIT = "ml|l|mg|mcg|gm|g|iu|%";
-  const glued = new RegExp("^(\\d+(?:\\.\\d+)?)("+UNIT+")$","i");
+  // A quantity may be a plain number ("15") or a ratio/combination ("0.5/30", "500/125").
+  const NUM = "\\d+(?:\\.\\d+)?(?:\\/\\d+(?:\\.\\d+)?)*";
+  const glued = new RegExp("^("+NUM+")("+UNIT+")$","i");
   const unitOnly = new RegExp("^("+UNIT+")$","i");
-  const isNum = t=>/^\d+(?:\.\d+)?$/.test(t);
+  const isNum = t=>new RegExp("^"+NUM+"$").test(t);
+  // "g"/"gm" are written out as "gram" in the Strength box; other units stay as scanned.
+  const niceUnit = u=>/^(g|gm)$/i.test(u) ? "gram" : u;
+  // Pack size units (volume/weight of the whole tube/bottle) are listed first in Strength.
+  const isPackUnit = u=>/^(ml|l|g|gm)$/i.test(u);
   const measures = [];
   let tokens = original.split(" ").filter(Boolean);
-  // 1) quantities that already carry a unit ("20 mL" or "20mL")
+  // 1) quantities that already carry a unit ("20 mL", "20mL", "15 g")
   const rest = [];
   for(let i=0;i<tokens.length;i++){
     const t = tokens[i];
     const g = t.match(glued);
-    if(g){ measures.push({text:g[1]+" "+g[2], vol:/^(ml|l)$/i.test(g[2])}); continue; }
+    if(g){ measures.push({text:g[1]+" "+niceUnit(g[2]), vol:isPackUnit(g[2])}); continue; }
     if(isNum(t) && i+1<tokens.length && unitOnly.test(tokens[i+1])){
-      measures.push({text:t+" "+tokens[i+1], vol:/^(ml|l)$/i.test(tokens[i+1])}); i++; continue;
+      measures.push({text:t+" "+niceUnit(tokens[i+1]), vol:isPackUnit(tokens[i+1])}); i++; continue;
     }
     rest.push(t);
   }
-  // 2) dosage form word, plus a bare number directly before it (= mg)
+  // 2) dosage form word, plus a bare number/ratio directly before it (= mg)
   let category = "";
   const fi = rest.findIndex(t=>DOSAGE_FORM_WORDS[t.toLowerCase().replace(/[^a-z]/g,"")]);
   if(fi>0){ // fi===0 would leave the name empty — leave such names alone
@@ -3861,7 +3873,7 @@ function buildInvCard(m){
         <div>
           <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
           ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-          <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${money(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${money(pricePerPill)}/medicine</p>
+          <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${mrpDisplay(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${mrpDisplay(pricePerPill)}/medicine</p>
           <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
         </div>
         <div class="flex gap1" style="align-items:center;flex-shrink:0;">
@@ -3887,7 +3899,7 @@ function buildInvCard(m){
             return `
             <div class="flex gap2 mt2" style="align-items:center;">
               <span class="small" style="flex-shrink:0;">${b.pillsRemaining} medicine</span>
-              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${money(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
+              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
               ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
               <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
               ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
