@@ -321,6 +321,7 @@
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
 <div id="manageUsersModalRoot"></div>
+<div id="historyModalRoot"></div>
 <div id="adminTransferModalRoot"></div>
 <div id="postTransferChoiceModalRoot"></div>
 <div id="privilegeConfirmModalRoot"></div>
@@ -370,6 +371,23 @@ let defaultDoctorNameUpdatedAt = 0; // timestamp of the last real edit, used for
 // persisted to plain localStorage (device-local, like MED_CATEGORIES) since it's a UI habit,
 // not clinic data; not part of cloud sync or the backup file.
 let billModePrefs = { qtyMode:"total", daysMode:"perMed" };
+// ===== Per-user activity history (see LOGACTIVITY / PROCESSHISTORYSYNC below) =====
+// activityLog: { profileId: { "YYYY-MM-DD": [{t,a,s}, ...] } } — device-local only, NEVER part
+// of buildFullStatePayload/cloud sync, and never recorded for the admin's own actions.
+let activityLog = {};
+// historyRequests/historyResponses: tiny metadata objects that DO ride along on the normal
+// cloud sync payload (like monthAdjustments) so an admin's request can reach the one device
+// that holds a given user's log, and that device's answer can reach the admin back — the bulk
+// activityLog itself never syncs, only these small on-demand messages do.
+let historyRequests = {};   // { requestId: {profileId, from, to, requestedAt, requestedBy} }
+let historyResponses = {};  // { requestId: {profileId, entries:[{d,t,a,s}], respondedAt} }
+// adminReceivedHistory: device-local only, on whichever device is the admin — history other
+// devices have sent back in response to a request, kept here until the admin clears it.
+let adminReceivedHistory = {}; // { profileId: {entries:[...], receivedAt} }
+// historyProcessedRequestIds: device-local only — stops this device from answering the same
+// request over and over as it echoes back through sync.
+let historyProcessedRequestIds = {};
+let historyUi = { open:false, profileId:null, fromDraft:"", toDraft:"" };
 function saveBillModePrefs(){
   try{ localStorage.setItem("clinic_bill_mode_prefs", JSON.stringify(billModePrefs)); }catch(e){}
 }
@@ -590,6 +608,13 @@ function loadAll(){
     }
   }
 
+  try{ activityLog = JSON.parse(localStorage.getItem("clinic_activity_log")||"{}"); }catch(e){ activityLog={}; }
+  try{ historyRequests = JSON.parse(localStorage.getItem("clinic_history_requests")||"{}"); }catch(e){ historyRequests={}; }
+  try{ historyResponses = JSON.parse(localStorage.getItem("clinic_history_responses")||"{}"); }catch(e){ historyResponses={}; }
+  try{ adminReceivedHistory = JSON.parse(localStorage.getItem("clinic_admin_history")||"{}"); }catch(e){ adminReceivedHistory={}; }
+  try{ historyProcessedRequestIds = JSON.parse(localStorage.getItem("clinic_history_processed")||"{}"); }catch(e){ historyProcessedRequestIds={}; }
+  purgeOldActivityLogs();
+
   currentProfileId = localStorage.getItem("clinic_current_profile") || null;
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
     currentProfileId = null;
@@ -628,6 +653,176 @@ function saveProfiles(){
 function saveMonthAdjustments(){
   try{ localStorage.setItem("clinic_month_adjustments", JSON.stringify(monthAdjustments)); }catch(e){}
   schedulePushToCloud();
+}
+function saveActivityLog(){ try{ localStorage.setItem("clinic_activity_log", JSON.stringify(activityLog)); }catch(e){} }
+function saveHistoryRequests(){ try{ localStorage.setItem("clinic_history_requests", JSON.stringify(historyRequests)); }catch(e){} }
+function saveHistoryResponses(){ try{ localStorage.setItem("clinic_history_responses", JSON.stringify(historyResponses)); }catch(e){} }
+function saveAdminReceivedHistory(){ try{ localStorage.setItem("clinic_admin_history", JSON.stringify(adminReceivedHistory)); }catch(e){} }
+function saveHistoryProcessedIds(){ try{ localStorage.setItem("clinic_history_processed", JSON.stringify(historyProcessedRequestIds)); }catch(e){} }
+/* ===================== PER-USER ACTIVITY HISTORY ===================== */
+// One call per real add/edit/delete a non-admin user makes. Grouped by that user's profile id
+// and by calendar day (cheap to store, cheap to purge a whole day at once once it's stale).
+// Device-local only — this data never enters buildFullStatePayload, so it never rides the
+// normal cloud sync and no other device or account can see it, ever. The admin's own actions
+// are deliberately never logged here.
+function logActivity(action, summary){
+  if(!currentProfileId || currentRole()==="admin") return;
+  const day = new Date().toISOString().slice(0,10);
+  if(!activityLog[currentProfileId]) activityLog[currentProfileId] = {};
+  if(!activityLog[currentProfileId][day]) activityLog[currentProfileId][day] = [];
+  activityLog[currentProfileId][day].push({ t:Date.now(), a:String(action), s:String(summary||"").slice(0,100) });
+  saveActivityLog();
+}
+// Drops any day older than 60 days, for every profile this device has ever logged. "YYYY-MM-DD"
+// strings sort/compare correctly as plain text, so this needs no date parsing at all.
+function purgeOldActivityLogs(){
+  const cutoffDay = new Date(Date.now() - 60*24*60*60*1000).toISOString().slice(0,10);
+  let changed = false;
+  Object.keys(activityLog).forEach(pid=>{
+    Object.keys(activityLog[pid]).forEach(day=>{
+      if(day < cutoffDay){ delete activityLog[pid][day]; changed = true; }
+    });
+    if(Object.keys(activityLog[pid]).length===0) delete activityLog[pid];
+  });
+  if(changed) saveActivityLog();
+}
+// Admin-side: ask whichever device holds a given user's activity log to send a copy for a
+// date range (leave from/to blank for "everything currently kept"). This only ever writes a
+// few bytes of metadata to the cloud — never the log itself.
+function requestUserHistory(profileId, fromDate, toDate){
+  if(!fbDb){ showToast("Cloud sync isn't set up on this device"); return; }
+  const id = uid();
+  historyRequests[id] = { profileId, from: fromDate||null, to: toDate||null, requestedAt: Date.now(), requestedBy: currentProfileId };
+  saveHistoryRequests();
+  schedulePushToCloud();
+  showToast("Requested — will appear here once that device is online");
+  render();
+}
+// Runs after every cloud merge. Two small, independent jobs — cheap since historyRequests/
+// historyResponses only ever hold a handful of entries at a time, and neither one ever reads
+// or writes any other field (inventory, bills, notes, profiles, settings are untouched here):
+// 1) If THIS device happens to hold the activity log for a profile someone is asking about,
+//    answer once (guarded by historyProcessedRequestIds so our own echoed-back write can't
+//    make us answer the same request forever).
+// 2) If THIS device is the admin who made a request and the answer has now arrived, copy it
+//    into this admin's own local-only store. The request/response pair is deliberately left on
+//    the shared cloud document at this point — the only thing this feature ever deletes from
+//    the cloud is that same pair, and only once a full 24h has passed since it was made or
+//    answered (further below), whether or not the admin has already collected it. Nothing else
+//    this app stores in the cloud is ever removed by this feature.
+function processHistorySync(){
+  let cloudChanged = false;
+  const now = Date.now();
+
+  Object.entries(historyRequests).forEach(([id, req])=>{
+    if(!req || !req.profileId) return;
+    if(historyResponses[id] || historyProcessedRequestIds[id]) return;
+    const myLog = activityLog[req.profileId];
+    if(!myLog) return; // this device has never held that profile's activity log
+    const entries = [];
+    Object.keys(myLog).forEach(day=>{
+      if((!req.from || day>=req.from) && (!req.to || day<=req.to)){
+        myLog[day].forEach(e=>entries.push({ d:day, t:e.t, a:e.a, s:e.s }));
+      }
+    });
+    historyResponses[id] = { profileId:req.profileId, entries, respondedAt:now };
+    historyProcessedRequestIds[id] = true;
+    saveHistoryResponses(); saveHistoryProcessedIds();
+    cloudChanged = true;
+  });
+
+  if(currentProfileId && currentRole()==="admin"){
+    Object.entries(historyResponses).forEach(([id, resp])=>{
+      const req = historyRequests[id];
+      if(!req || req.requestedBy !== currentProfileId) return;
+      if(!adminReceivedHistory[resp.profileId]) adminReceivedHistory[resp.profileId] = { entries:[], receivedAt:0 };
+      const bucket = adminReceivedHistory[resp.profileId];
+      const seen = new Set(bucket.entries.map(e=>e.d+"|"+e.t+"|"+e.a+"|"+e.s));
+      (resp.entries||[]).forEach(e=>{
+        const key = e.d+"|"+e.t+"|"+e.a+"|"+e.s;
+        if(!seen.has(key)){ bucket.entries.push(e); seen.add(key); }
+      });
+      bucket.receivedAt = now;
+      saveAdminReceivedHistory();
+      // Deliberately NOT deleted here. The admin has their copy now, but the shared cloud
+      // document isn't touched yet — the only thing ever removed from it is this same
+      // request/response pair, and only once a full day has actually passed (below). Nothing
+      // else this app stores in the cloud is ever deleted by this feature.
+    });
+  }
+
+  // The ONLY deletions this feature ever performs against the shared cloud document: a
+  // request/response pair, and only once a full 24h has passed since it was made/answered.
+  // Nothing else — inventory, bills, notes, profiles, settings — is ever touched here.
+  Object.entries(historyRequests).forEach(([id, req])=>{
+    if(now - (req.requestedAt||0) > 24*60*60*1000){ delete historyRequests[id]; delete historyResponses[id]; cloudChanged = true; }
+  });
+  Object.entries(historyResponses).forEach(([id, resp])=>{
+    if(now - (resp.respondedAt||0) > 24*60*60*1000){ delete historyResponses[id]; delete historyRequests[id]; cloudChanged = true; }
+  });
+
+  if(cloudChanged){ saveHistoryRequests(); saveHistoryResponses(); schedulePushToCloud(); }
+}
+function openHistoryModal(profileId){ historyUi = { open:true, profileId, fromDraft:"", toDraft:"" }; render(); }
+function closeHistoryModal(){ historyUi.open=false; render(); }
+function onHistoryFromDraft(v){ historyUi.fromDraft=v; }
+function onHistoryToDraft(v){ historyUi.toDraft=v; }
+function submitHistoryRequest(){
+  if(!historyUi.profileId) return;
+  requestUserHistory(historyUi.profileId, (historyUi.fromDraft||"").trim(), (historyUi.toDraft||"").trim());
+}
+function clearAdminHistory(profileId){
+  askConfirm("Delete the stored history for this user from this device?", ()=>{
+    delete adminReceivedHistory[profileId];
+    saveAdminReceivedHistory();
+    render();
+  }, "Delete");
+}
+const HISTORY_ACTION_LABELS = {
+  med_add:"Added medicine", med_edit:"Edited medicine", med_del:"Deleted medicine",
+  restock:"Restocked", dispose:"Disposed batch", lost:"Marked stock lost",
+  bill_add:"Completed bill", bill_edit:"Edited bill", bill_del:"Deleted bill",
+  note_add:"Added note", note_edit:"Edited note", note_del:"Deleted note",
+  cat_edit:"Edited categories", test_edit:"Edited tests/pricing",
+  fee_edit:"Edited doctor fee", name_edit:"Edited doctor name"
+};
+function renderHistoryModal(){
+  const root = document.getElementById("historyModalRoot");
+  if(!root) return;
+  if(!historyUi.open || currentRole()!=="admin"){ root.innerHTML=""; return; }
+  const p = profiles.find(x=>x.id===historyUi.profileId);
+  const pendingReq = Object.values(historyRequests).find(r=>r.profileId===historyUi.profileId && r.requestedBy===currentProfileId);
+  const stored = adminReceivedHistory[historyUi.profileId];
+  const rowsHtml = stored ? stored.entries.slice().sort((a,b)=>b.t-a.t).map(e=>`
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <div class="small faint">${esc(fmtDateTime(e.t))}</div>
+      <div><b>${esc(HISTORY_ACTION_LABELS[e.a]||e.a)}</b> — ${esc(e.s)}</div>
+    </div>`).join("") : "";
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeHistoryModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>History — ${esc(p?p.name:"")}</strong>
+          <button class="modal-x" onclick="closeHistoryModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
+          <p class="small faint" style="margin:0 0 8px;">Leave dates blank to request everything currently kept (up to 60 days).</p>
+          <div class="flex gap2 mb2">
+            <input ${NOAC} type="text" placeholder="From YYYY-MM-DD" value="${esc(historyUi.fromDraft)}" oninput="onHistoryFromDraft(this.value)" class="flex1">
+            <input ${NOAC} type="text" placeholder="To YYYY-MM-DD" value="${esc(historyUi.toDraft)}" oninput="onHistoryToDraft(this.value)" class="flex1">
+          </div>
+          <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="submitHistoryRequest()">${pendingReq?"Request again":"Request from that device"}</button>
+          ${pendingReq?'<p class="small faint" style="margin:0 0 10px;">Waiting for that device to come online…</p>':""}
+          ${stored ? `
+            <div class="row" style="align-items:center;margin-bottom:6px;">
+              <span class="small faint">Received ${esc(fmtDateTime(stored.receivedAt))}</span>
+              <button class="btn btn-outline" style="padding:4px 10px;color:var(--danger);" onclick="clearAdminHistory('${historyUi.profileId}')">Clear</button>
+            </div>
+            ${rowsHtml || '<p class="small faint">No activity in that range.</p>'}
+          ` : '<p class="small faint">No history received yet for this user.</p>'}
+        </div>
+      </div>
+    </div>`;
 }
 /* Test prices/names/catalog and the default doctor fee used to be device-local-only settings,
    which is why they could look completely different between two phones. Both are now synced
@@ -796,6 +991,7 @@ function saveAllCategoryChanges(){
   if(JSON.stringify([MED_CATEGORIES, SPECIAL_CATEGORIES]) !== categoriesBefore) touchCategories();
 
   if(invChanged) saveInventory();
+  logActivity("cat_edit", "Categories updated");
   catUi.open = false;
   render();
   showToast("✓ Categories saved");
@@ -981,6 +1177,7 @@ function disposeBatch(medId, batchId){
       const b = (m.batches||[]).find(x=>x.id===batchId);
       if(b){ b.disposed=true; b.pillsRemaining=0; b.updatedAt=Date.now(); recomputeStock(m); }
     }
+    if(m) logActivity("dispose", m.name);
     saveInventory();
     render();
   });
@@ -1264,7 +1461,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || backupUi.open || scanUi.open ||
+    printerUi.open || backupUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1282,6 +1479,7 @@ function closeTopMenu(){
   if(catUi.open){ closeCategoryEditor(); return; }
   if(manageUi.editingId){ cancelEditUser(); return; }
   if(manageUi.open){ manageUi.open=false; render(); return; }
+  if(historyUi.open){ closeHistoryModal(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
   if(rec.editingMonthBreakdown){ cancelMonthBreakdownEdit(); return; }
@@ -1387,6 +1585,7 @@ function render(){
   renderMonthBreakdownModal();
   renderCategoryModal();
   renderManageUsersModal();
+  renderHistoryModal();
   renderAdminTransferModal();
   renderPostTransferChoiceModal();
   renderPrivilegeConfirmModal();
@@ -1682,6 +1881,7 @@ function saveAllTestPrices(){
   // Only bump the ids that actually changed — so tests nobody touched in this edit keep
   // their existing (possibly newer) per-id time from wherever they were last really edited.
   new Set(touchedIds).forEach(id=>touchTestItem(id));
+  if(touchedIds.length) logActivity("test_edit", `${touchedIds.length} test(s) updated`);
   testPriceEditorOpen = false;
   render();
   showToast("✓ Tests saved");
@@ -1697,6 +1897,7 @@ function saveDefaultDoctorFee(){
   defaultDoctorFeeUpdatedAt = Date.now();
   saveDefaultDoctorFeeStorage();
   saveDefaultDoctorFeeUpdatedAt();
+  logActivity("fee_edit", money(val));
   schedulePushToCloud();
   render();
   showToast(val>0 ? "✓ Saved as permanent doctor fee" : "✓ Permanent doctor fee cleared");
@@ -1729,6 +1930,7 @@ function saveDefaultDoctorName(){
   defaultDoctorNameUpdatedAt = Date.now();
   saveDefaultDoctorNameStorage();
   saveDefaultDoctorNameUpdatedAt();
+  logActivity("name_edit", defaultDoctorName);
   schedulePushToCloud();
   remarksUi.editing = false;
   showToast("✓ Default doctor name saved");
@@ -1929,6 +2131,7 @@ function completeBill(){
     paymentMode: bill.paymentMode||"Cash", remarks: (bill.remarks||"").trim(),
     grandTotal:billGrandTotal() };
   transactions.unshift(tx);
+  logActivity("bill_add", `${tx.patientName||"Bill"} · ${money(tx.grandTotal)}`);
   saveTransactions();
   printReceipt(tx);
   bill = newBillState();
@@ -3371,6 +3574,7 @@ function addMedicine(){
     mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[], sTag:!!f.sTag,
     gtin: f.gtin||"", // captured from a barcode scan, if one was done — lets a future scan of the SAME product recognize it and offer Restock instead of a duplicate entry
     updatedAt:Date.now(), deleted:false });
+  logActivity("med_add", f.name.trim());
   saveInventory();
   inv.showForm=false;
   render();
@@ -3382,6 +3586,7 @@ function deleteMedicine(id){
     // outright would just cause it to reappear once another device's data came back in.
     const m = inventory.find(x=>x.id===id);
     if(m){ m.deleted = true; m.updatedAt = Date.now(); }
+    if(m) logActivity("med_del", m.name);
     saveInventory();
     removeInvCard(id);
     renderNav();
@@ -3404,6 +3609,7 @@ function markStockLost(id){
     askConfirm(`Are you absolutely sure? "${m.name}"'s stock will be set to 0 right now — this can't be undone.`, ()=>{
       adjustStockTo(m, 0);
       m.updatedAt = Date.now();
+      logActivity("lost", m.name);
       saveInventory();
       refreshInvCard(id);
       renderNav();
@@ -3436,6 +3642,7 @@ function doRestock(id){
     // again, instead of staying silently switched off forever.
     if(m.noWarn && m.stockPills > (m.lowStockAt??0)){ m.noWarn = false; m.updatedAt = Date.now(); }
   }
+  if(m) logActivity("restock", `${m.name} +${boxes} box(es)`);
   saveInventory();
   inv.restockId=null; inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText="";
   refreshInvCard(id);
@@ -3472,6 +3679,7 @@ function saveEdit(id){
     m.updatedAt=Date.now();
     adjustStockTo(m, Math.max(0,Number(f.stockPills)));
   }
+  if(m) logActivity("med_edit", m.name);
   saveInventory();
   inv.editId=null;
   refreshInvCard(id);
@@ -4288,6 +4496,7 @@ function deleteTx(id){
     // another device's data comes back in.
     const t = transactions.find(x=>x.id===id);
     if(t){ t.deleted = true; t.updatedAt = Date.now(); }
+    if(t) logActivity("bill_del", t.patientName||"Bill");
     saveTransactions(); render();
   });
 }
@@ -4367,6 +4576,7 @@ function saveEditTx(){
   t.feeDiscount = recEdit.feeDiscount||0;
   t.grandTotal = editTxGrandTotal();
   t.updatedAt = Date.now();
+  logActivity("bill_edit", t.patientName||"Bill");
   saveTransactions();
   rec.editingId = null;
   render();
@@ -5561,7 +5771,7 @@ function renderManageUsersModal(){
                     <p class="small faint" style="margin:2px 0 0;">${roleLabel(p.role)}${p.role==="semiadmin"&&p.privileges?` <span style="opacity:.7;">(${PRIVILEGE_ITEMS.filter(it=>p.privileges[it.key]).map(it=>it.label).join(", ")||"no extra privileges"})</span>`:""}</p>
                   </div>
                   <div class="flex gap2">
-                    ${p.role==="admin"?`<button class="btn btn-outline" style="padding:6px 12px;" onclick="manageRecoveryInfo('${p.id}')">🔑</button>`:""}
+                    ${p.role==="admin"?`<button class="btn btn-outline" style="padding:6px 12px;" onclick="manageRecoveryInfo('${p.id}')">🔑</button>`:`<button class="btn btn-outline" style="padding:6px 12px;" onclick="openHistoryModal('${p.id}')">📜</button>`}
                     <button class="btn btn-outline" style="padding:6px 12px;" onclick="startEditUser('${p.id}')">Edit</button>
                     <button class="btn btn-outline" style="padding:6px 12px;color:var(--danger);" onclick="deleteProfile('${p.id}')">🗑</button>
                   </div>
@@ -5601,9 +5811,11 @@ function saveDraftNote(){
   const title = notesUi.draftTitle.trim() || "Untitled note";
   if(notesUi.openId==="new"){
     notes.unshift({ id:uid(), title, body:notesUi.draftBody, updatedAt:Date.now() });
+    logActivity("note_add", title);
   } else {
     const n = notes.find(x=>x.id===notesUi.openId);
     if(n){ n.title=title; n.body=notesUi.draftBody; n.updatedAt=Date.now(); }
+    logActivity("note_edit", title);
   }
   saveNotes();
   notesUi.openId=null;
@@ -5613,6 +5825,7 @@ function deleteNote(id){
   askConfirm("Delete this note?", ()=>{
     const n = notes.find(x=>x.id===id);
     if(n){ n.deleted = true; n.updatedAt = Date.now(); }
+    if(n) logActivity("note_del", n.title);
     saveNotes();
     if(notesUi.openId===id) notesUi.openId=null;
     render();
@@ -5856,6 +6069,25 @@ function mergeCategories(data){
     try{ localStorage.setItem("clinic_categories_updated_at", String(categoriesUpdatedAt)); }catch(e){}
   }
 }
+// The admin-request/answer handshake for per-user history: tiny, so merged per-id, last-write-
+// wins, exactly like mergeMonthAdjustments — never the bulk activityLog, only this metadata.
+function mergeHistorySync(data){
+  const mergedReq = {...historyRequests};
+  Object.entries(data.historyRequests||{}).forEach(([id,r])=>{
+    const cur = mergedReq[id];
+    if(!cur || (r.requestedAt||0) > (cur.requestedAt||0)) mergedReq[id] = r;
+  });
+  historyRequests = mergedReq;
+
+  const mergedResp = {...historyResponses};
+  Object.entries(data.historyResponses||{}).forEach(([id,r])=>{
+    const cur = mergedResp[id];
+    if(!cur || (r.respondedAt||0) > (cur.respondedAt||0)) mergedResp[id] = r;
+  });
+  historyResponses = mergedResp;
+
+  saveHistoryRequests(); saveHistoryResponses();
+}
 function mergeDefaultDoctorName(data){
   const incomingTs = data.defaultDoctorNameUpdatedAt || 0;
   if(incomingTs > defaultDoctorNameUpdatedAt){
@@ -5986,6 +6218,7 @@ function mergeDataInto(data, inventoryMergeFn, live){
   mergeDefaultDoctorFee(data);
   mergeDefaultDoctorName(data);
   mergeCategories(data);
+  mergeHistorySync(data);
 
   saveInventory(); saveTransactions(); saveProfiles(); saveMonthAdjustments();
   if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
@@ -6090,6 +6323,7 @@ function buildFullStatePayload(){
     defaultDoctorFee, defaultDoctorFeeUpdatedAt,
     defaultDoctorName, defaultDoctorNameUpdatedAt,
     medCategories: MED_CATEGORIES, specialCategories: SPECIAL_CATEGORIES, categoriesUpdatedAt,
+    historyRequests, historyResponses,
     updatedAt: Date.now()
   };
 }
@@ -6144,6 +6378,7 @@ function applyRemoteSnapshot(data){
   suppressPush = true;
   mergeCloudSnapshotInto(data);
   suppressPush = false;
+  processHistorySync();
   // Was a direct render() — this fires whenever cloud sync receives ANYTHING (this device's own
   // writes echoing back, another device's changes, a routine reconnect), completely independent
   // of what the person is doing at that moment. A direct, unthrottled render() here could land
@@ -6226,7 +6461,7 @@ async function pushToCloud(){
   if(!wasSynced){ syncStatus = "syncing"; renderSyncBadge(); }
   try{
     const snap = await withTimeout(cloudDocRef().get(), 10000);
-    if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; }
+    if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; processHistorySync(); }
     await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload())), 10000);
     syncStatus = "synced";
     clearSyncError();
