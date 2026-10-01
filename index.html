@@ -3015,11 +3015,26 @@ function gs1DeriveProduct(out){
   const t = out.productText;
   if(!t) return;
   let name = String(t).trim(), price = null;
-  const m = name.match(/^(.*?)[\s,;:\-]*(?:MRP|M\.R\.P\.?|Rs\.?|INR|₹)\s*[:.\-]?\s*(\d+(?:\.\d+)?)\s*$/i);
-  if(m){ name = m[1].trim(); price = Number(m[2]); }
+  const NUMRE = "(\\d+(?:[.,]\\d+)?)";
+  // Case 1: the field is ONLY a price, e.g. "420.00", "420", "Rs 420.00", "MRP:420.00/-".
+  // (Many boxes put just the MRP here — it must never be mistaken for the medicine's name.)
+  let m = name.match(new RegExp("^(?:MRP|M\\.R\\.P\\.?|Rs\\.?|INR|\u20b9)?\\s*[:.\\-]?\\s*"+NUMRE+"\\s*(?:\\/-|-|only)?$","i"));
+  if(m){
+    price = Number(m[1].replace(",","."));
+    name = "";
+  } else {
+    // Case 2: name followed by (or containing) a labelled price, e.g. "Terbisil 10 lotion 20mL Rs.380.00"
+    const lab = name.match(new RegExp("(?:MRP|M\\.R\\.P\\.?|Rs\\.?|INR|\u20b9)\\s*[:.\\-]?\\s*"+NUMRE+"(?:\\s*(?:\\/-|-))?","i"));
+    if(lab){
+      price = Number(lab[1].replace(",","."));
+      name = (name.slice(0,lab.index)+" "+name.slice(lab.index+lab[0].length)).replace(/[\s,;:\-]+$/,"").replace(/^[\s,;:\-]+/,"").replace(/\s+/g," ").trim();
+    }
+  }
   // Some codes run words and numbers together ("Terbisil10lotion20mL"): if there are no spaces at
   // all, put one at every letter/number boundary so it reads "Terbisil 10 lotion 20 mL".
   if(name && !/\s/.test(name)) name = name.replace(/([A-Za-z])(\d)/g,"$1 $2").replace(/(\d)([A-Za-z])/g,"$1 $2");
+  // A "name" with no letters at all is not a name (never put numbers in the Name box).
+  if(name && !/[A-Za-z]/.test(name)) name = "";
   out.productName = name || null;
   out.price = (price>0) ? price : null;
 }
@@ -3537,9 +3552,9 @@ function applyScanToRestock(medId, parsed){
     // If the code carries an MRP that differs from what's on file, pre-fill the batch's MRP field
     // (it's still optional and editable — and left alone when the price hasn't changed).
     let priceNote = "";
-    if(parsed.price && Number(parsed.price)!==Number(m.mrpPerBox)){
+    if(parsed.price){
       inv.restockMrp = String(parsed.price);
-      priceNote = ` (new MRP ${CURRENCY}${money(parsed.price)} filled in)`;
+      priceNote = ` (MRP ${CURRENCY}${money(parsed.price)} filled in)`;
     }
     showToast("✓ Batch details filled in from the scan" + priceNote + " — check them, then tap Add");
     render();
