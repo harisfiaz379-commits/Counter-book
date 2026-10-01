@@ -207,6 +207,12 @@
      invisible and unclickable. Confirm dialogs are always meant to be the topmost thing on
      screen, so they get a dedicated higher z-index instead of relying on DOM order. */
   #confirmModalRoot .modal-overlay{z-index:60;}
+  .formula-sug{border:1px solid var(--border);border-radius:10px;background:#fff;margin:-2px 0 8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+  .formula-sug-item{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;background:#fff;border:none;border-bottom:1px solid var(--border);padding:10px 12px;font-size:14px;color:var(--text,#1B2430);cursor:pointer;}
+  .formula-sug-item:last-child{border-bottom:none;}
+  .formula-sug-item:active{background:var(--page);}
+  #copyMenuRoot .modal-overlay{z-index:55;align-items:center;padding:16px;}
+  #copyMenuRoot .copy-pop{background:#fff;border-radius:16px;width:100%;max-width:320px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,.25);}
   .modal{background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:85vh;
     display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.2);}
   .modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);}
@@ -290,7 +296,7 @@
   <header>
     <div class="header-info" style="padding-right:170px;">
       <h1>Counter Book</h1>
-      <p class="header-sub">Dispensing &amp; billing</p>
+      <p class="header-sub">Dispensing &amp; billing <span style="opacity:.55;font-size:11px;">· bill-fix-3</span></p>
       <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
         <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
         <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
@@ -315,6 +321,7 @@
 </div>
 <div id="shareModalRoot"></div>
 <div id="confirmModalRoot"></div>
+<div id="copyMenuRoot"></div>
 <div id="invFormModalRoot"></div>
 <div id="backupModalRoot"></div>
 <div id="printerModalRoot"></div>
@@ -631,7 +638,7 @@ function loadAll(){
 function saveInventory(){
   try{ localStorage.setItem("clinic_inventory", JSON.stringify(inventory)); saveError=""; }
   catch(e){ saveError="That change may not have saved. Storage might be full."; }
-  _lowStockCache = null; _expiringBatchesCache = null; // inventory changed — caches above are now stale
+  _lowStockCache = null; _expiringBatchesCache = null; _fsIndex = null; // inventory changed — caches above are now stale
   schedulePushToCloud();
 }
 function saveTransactions(){
@@ -1540,6 +1547,7 @@ function render(){
   const prevScrollTop = appEl ? appEl.scrollTop : 0;
 
   renderBanner();
+  renderCopyMenu();
   renderHeaderMenu();
   renderUserBadge();
 
@@ -1907,7 +1915,15 @@ function saveDefaultDoctorFee(){
   showToast(val>0 ? "✓ Saved as permanent doctor fee" : "✓ Permanent doctor fee cleared");
 }
 
-function onBillPatient(v){ bill.patient=v; scheduleRender(); }
+// The patient box never triggers a re-render while typing: render() rebuilds the whole tab, which
+// detaches the focused input and cancels the keyboard's key-repeat (holding Backspace then only
+// deleted one letter). The only thing that depends on the name is the Complete button, so that
+// is updated directly instead.
+function onBillPatient(v){ bill.patient=v; refreshCompleteBillBtn(); }
+function refreshCompleteBillBtn(){
+  const b = document.getElementById("completeBillBtn");
+  if(b) b.disabled = !canCompleteBill();
+}
 function onBillFee(v){ bill.fee=v; scheduleRender(); }
 function onBillQuery(v){ bill.query=v; bill.selectedMedId=null; refreshBillQueryDropdown(); }
 function onBillPills(v){ bill.pills=v; scheduleRender(); }
@@ -2554,6 +2570,7 @@ function billQueryDropdownHtml(){
           ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
           <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
         </button>
+        ${stockLostBtnHtml(m)}
         ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
       </div>`).join("")}</div>` : "") +
     (bill.query && !matches.length && !selMed ? `<p class="small faint" style="margin-top:6px;">No match. Add it in Inventory tab first.</p>` : "");
@@ -2568,13 +2585,17 @@ function billSpecialQueryDropdownHtml(){
   const specialMatches = sq ? inventory.filter(m=>!m.deleted && m.specialCategory && medicineMatchesQuery(m,sq)).sort((a,b)=>searchRankScore(b,sq)-searchRankScore(a,sq)).slice(0,6) : [];
   const selSpecialMed = inventory.find(m=>m.id===bill.selectedSpecialMedId);
   return (specialMatches.length && !selSpecialMed ? `<div class="dropdown">${specialMatches.map(m=>`
-      <button onclick="pickBillSpecialMed('${m.id}')">
+      <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
+      <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillSpecialMed('${m.id}')">
         <div style="min-width:0;">
           <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
           ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
           <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
         </div>
-      </button>`).join("")}</div>` : "") +
+      </button>
+      ${stockLostBtnHtml(m)}
+      ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillSpecialByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
+      </div>`).join("")}</div>` : "") +
     (bill.specialQuery && !specialMatches.length && !selSpecialMed ? `<p class="small faint" style="margin-top:6px;">No special-category medicine matches. Add one in Inventory tab first.</p>` : "");
 }
 function refreshBillSpecialQueryDropdown(){
@@ -2607,6 +2628,7 @@ function renderBill(){
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
             <button onclick="editBillItem(${idx})" class="btn btn-outline" style="padding:5px 12px;font-size:12px;border-radius:999px;">Edit</button>
+            ${stockLostBtnHtml(inventory.find(x=>x.id===it.medId && !x.deleted), true)}
             <button onclick="removeBillItem(${idx})" class="icon-del-btn">🗑</button>
           </div>
         </div>`).join("") + `
@@ -2882,7 +2904,7 @@ function renderBill(){
       <p id="billRemarksHint" class="small faint" style="margin:4px 0 0;${(bill.remarks && bill.remarks===defaultDoctorName)?'':'display:none;'}">This is the default — tap in and type to change it just for this bill.</p>
     </div>
 
-    <button class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
+    <button id="completeBillBtn" class="btn btn-success" style="width:100%;padding:14px;font-size:15px;" ${!canCompleteBill()?"disabled":""} onclick="completeBill()">
       Complete bill &amp; get receipt
     </button>
   `;
@@ -3410,11 +3432,6 @@ function handleScanText(raw){
     return;
   }
   window.__lastScan = { text, parsed };
-  if(!parsed.price && (target==="newmed" || (target && target.kind==="restock"))){
-    // TEMPORARY diagnostics (scan-fix-2): no MRP could be read, so show exactly what the scanner gave us.
-    const hx = Array.from(text.slice(0,80)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
-    setTimeout(()=>openShare("[scan-fix-2] No MRP found in this scan.\n\nRaw text (" + text.length + " chars):\n" + visibleScanText(text) + "\n\nParsed: " + JSON.stringify(parsed) + "\n\nHex: " + hx), 400);
-  }
   if(target==="newmed") applyScanToNewMedForm(parsed);
   else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
   else if(target && target.kind==="edit") applyScanToEditForm(target.medId, parsed);
@@ -3537,14 +3554,10 @@ function applyScanToNewMedForm(parsed){
     }
   }
   if(parsed.price && !String(inv.form.mrp||"").trim()){ inv.form.mrp = String(parsed.price); filled.push("MRP"); }
-  // A brand-new medicine has no batch yet, so a scanned batch/expiry has nowhere to land here —
-  // only the GTIN link and the name/MRP above can actually be saved from this form. Tell the user
-  // plainly instead of pretending those fields were captured.
-  const bits = [];
-  if(parsed.gtin) bits.push("barcode linked to this medicine");
-  if(filled.length) bits.push(filled.join(" & ") + " filled in — please check");
-  if(parsed.expiryDate || parsed.batch) bits.push("enter its batch/expiry on the first Restock");
-  showToast(bits.length ? "✓ "+bits.join(" — ") : "Scanned, but nothing usable was found in that code");
+  // Only complain when there was genuinely nothing to write into the boxes.
+  if(filled.length) showToast("✓ " + filled.join(" & ") + " filled in from the scan — please check");
+  else if(parsed.gtin) showToast("Barcode linked, but this code has no name or MRP to fill in — type them in");
+  else showToast("Nothing usable was found in that code");
   render();
 }
 function onRestockScanInput(v){ inv.restockScanText=v; }
@@ -3562,14 +3575,12 @@ function applyScanToRestock(medId, parsed){
     if(parsed.expiryDate) inv.restockExpiry = parsed.expiryDate;
     if(parsed.batch) inv.restockLotNo = parsed.batch;
     if(parsed.gtin && !m.gtin){ m.gtin = parsed.gtin; m.updatedAt = Date.now(); saveInventory(); }
-    // If the code carries an MRP that differs from what's on file, pre-fill the batch's MRP field
-    // (it's still optional and editable — and left alone when the price hasn't changed).
-    let priceNote = "";
-    if(parsed.price){
-      inv.restockMrp = String(parsed.price);
-      priceNote = ` (MRP ${CURRENCY}${money(parsed.price)} filled in)`;
-    }
-    showToast("✓ Batch details filled in from the scan" + priceNote + " — check them, then tap Add");
+    const got = [];
+    if(parsed.expiryDate) got.push("expiry");
+    if(parsed.batch) got.push("batch");
+    if(parsed.price){ inv.restockMrp = String(parsed.price); got.push("MRP"); }
+    if(got.length) showToast("✓ " + got.join(", ") + " filled in from the scan — check, then tap Add");
+    else showToast("Nothing to fill in — that code has no batch, expiry or MRP");
     render();
   };
   if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
@@ -3596,6 +3607,14 @@ function searchBillByFormula(formula){
   const el = document.getElementById("billQueryInput");
   if(el){ el.focus(); }
 }
+// Same as searchBillByFormula above, for the special-category search box.
+function searchBillSpecialByFormula(formula){
+  bill.specialQuery = formula || "";
+  bill.selectedSpecialMedId = null;
+  render();
+  const el = document.getElementById("billSpecialQueryInput");
+  if(el){ el.focus(); }
+}
 function onInvForm(field,v){ inv.form[field]=v; }
 // The merged picker is one <select> covering both lists (see mergedCategoryOptionsHtml), so
 // picking a value has to decide which of the two underlying fields it belongs to — a medicine
@@ -3607,9 +3626,29 @@ function onInvCategoryPicked(v){
 }
 function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } refreshInvFormOnly(); }
 function toggleInvSTag(){ inv.form.sTag = !inv.form.sTag; refreshInvFormOnly(); }
-function addMedicine(){
+// Finds an existing (not deleted) medicine whose boxes are ALL the same as the form being saved:
+// name, category, formula, strength, MRP per box and medicine per box. Text is compared ignoring
+// capitals and extra spaces. If even one box differs (e.g. another strength or price) it's a
+// different medicine and is allowed.
+function findExactDuplicateMedicine(f, excludeId){
+  const norm = v => String(v||"").trim().toLowerCase().replace(/\s+/g," ");
+  const cat = norm(f.category || f.specialCategory);
+  return inventory.find(m => !m.deleted && m.id!==excludeId &&
+    norm(m.name)===norm(f.name) &&
+    norm(m.category || m.specialCategory)===cat &&
+    norm(m.formula)===norm(f.formula) &&
+    norm(m.mg)===norm(f.mg) &&
+    Number(m.mrpPerBox)===Number(f.mrp) &&
+    Number(m.pillsPerBox)===Number(f.pillsPerBox)) || null;
+}
+function addMedicine(skipRender){
   const f = inv.form;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return false;
+  const dup = findExactDuplicateMedicine(f);
+  if(dup){
+    showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Use Restock on it, or change a box if it's a different medicine.`);
+    return false;
+  }
   inventory.push({ id:uid(), name:f.name.trim(), category:f.category||"", specialCategory:f.specialCategory||"", formula:f.formula.trim(), mg:f.mg.trim(),
     mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[], sTag:!!f.sTag,
     gtin: f.gtin||"", // captured from a barcode scan, if one was done — lets a future scan of the SAME product recognize it and offer Restock instead of a duplicate entry
@@ -3617,7 +3656,8 @@ function addMedicine(){
   logActivity("med_add", f.name.trim());
   saveInventory();
   inv.showForm=false;
-  render();
+  if(skipRender!==true) render();
+  return true;
 }
 function deleteMedicine(id){
   askConfirm("Delete this medicine from inventory?", ()=>{
@@ -3638,6 +3678,14 @@ function deleteMedicine(id){
 // stock correction, exactly like typing 0 into Edit's "Current stock" field and saving, just
 // faster for this specific case. Guarded behind the same confirm modal as deleting a medicine,
 // since it can't be undone from within the app.
+// Small "S.L" (Stock Lost) button, reused in the New Bill search results and the added-medicine
+// list. Hidden when there's no stock left to write off. Opens the same two-step confirmation as
+// the Inventory tab's S.L button.
+function stockLostBtnHtml(m, inList){
+  if(!m || !(m.stockPills>0)) return "";
+  const extra = inList ? "" : "align-self:center;margin:0 6px;";
+  return `<button onclick="event.stopPropagation();markStockLost('${m.id}')" title="Stock Lost — write off all current stock (spoiled/damaged/missing), setting it to 0" style="width:auto;background:var(--dangerSoft);color:var(--danger);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;${extra}">S.L</button>`;
+}
 function markStockLost(id){
   const m = inventory.find(x=>x.id===id);
   if(!m || m.stockPills<=0) return;
@@ -3653,6 +3701,7 @@ function markStockLost(id){
       saveInventory();
       refreshInvCard(id);
       renderNav();
+      if(tab==="bill") render(); // New Bill shows stock counts / S.L buttons — refresh them
     }, "Yes, set to 0");
   }, "Mark lost");
 }
@@ -3699,6 +3748,87 @@ function openEdit(id){
     pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag, gtin:m.gtin||"" }; }
   refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id);
 }
+/* ---- Formula suggestions: while typing in a Formula box (New medicine or inline Edit), list similar or
+   exact formulas already used by medicines in inventory, so spellings stay consistent. ---- */
+let _formulaSugCtx = null, _formulaSugList = [];
+function _fsNorm(v){ return String(v||"").toLowerCase().replace(/\s+/g," ").trim(); }
+function _fsTokens(v){ return _fsNorm(v).split(/[^a-z0-9]+/).filter(Boolean); }
+function _fsBigrams(v){ const t=_fsNorm(v).replace(/[^a-z0-9]/g,""); const out=[]; for(let i=0;i<t.length-1;i++) out.push(t.slice(i,i+2)); return out; }
+function _fsDice(a,b){
+  const A=_fsBigrams(a), B=_fsBigrams(b); if(!A.length||!B.length) return 0;
+  const cnt={}; A.forEach(x=>cnt[x]=(cnt[x]||0)+1);
+  let hit=0; B.forEach(x=>{ if(cnt[x]>0){ hit++; cnt[x]--; } });
+  return 2*hit/(A.length+B.length);
+}
+// The list of distinct formulas (with pre-computed words/bigrams) is built once and reused for
+// every keystroke; it's rebuilt only when inventory actually changes (saveInventory() clears it).
+let _fsIndex = null;
+function _fsEnsureIndex(){
+  if(_fsIndex && _fsIndex.ref===inventory && _fsIndex.len===inventory.length) return _fsIndex;
+  const map=new Map();
+  for(const m of inventory){
+    if(m.deleted) continue;
+    const t=String(m.formula||"").trim(); if(!t) continue;
+    const k=_fsNorm(t);
+    let e=map.get(k);
+    if(!e){ e={text:t,k,words:_fsTokens(k),bi:_fsBigrams(k),ids:[]}; map.set(k,e); }
+    e.ids.push(m.id);
+  }
+  _fsIndex={ref:inventory,len:inventory.length,entries:Array.from(map.values())};
+  return _fsIndex;
+}
+function _fsDiceBi(A,B){
+  if(!A.length||!B.length) return 0;
+  const cnt={}; for(let i=0;i<A.length;i++) cnt[A[i]]=(cnt[A[i]]||0)+1;
+  let hit=0; for(let i=0;i<B.length;i++){ const x=B[i]; if(cnt[x]>0){ hit++; cnt[x]--; } }
+  return 2*hit/(A.length+B.length);
+}
+function formulaSuggestions(q, excludeId){
+  const qn=_fsNorm(q); if(!qn) return [];
+  const qt=_fsTokens(q);
+  const qBi = qn.length>=4 ? _fsBigrams(qn) : null; // typo-tolerant matching only once enough is typed
+  const scored=[];
+  for(const e of _fsEnsureIndex().entries){
+    let count=e.ids.length;
+    if(excludeId){ count=0; for(const id of e.ids) if(id!==excludeId) count++; if(!count) continue; }
+    const k=e.k, ct=e.words;
+    let sc=0;
+    if(k===qn) sc=100;
+    else if(k.startsWith(qn)) sc=80;
+    else {
+      let wp=false; for(let i=0;i<ct.length;i++){ if(ct[i].startsWith(qn)){ wp=true; break; } }
+      if(wp) sc=70;
+      else if(qn.length>=3 && k.includes(qn)) sc=60;
+      else if(qn.length>=3 && qt.length>1 && qt.every(w=>ct.some(c=>c.startsWith(w)||c.includes(w)))) sc=45;
+      else if(qBi){ const d=_fsDiceBi(qBi,e.bi); if(d>=0.55) sc=20+d*20; }
+    }
+    if(sc>0) scored.push({text:e.text,count,sc});
+  }
+  scored.sort((a,b)=>b.sc-a.sc || b.count-a.count || a.text.localeCompare(b.text));
+  const top=scored.slice(0,6);
+  if(top.length===1 && _fsNorm(top[0].text)===qn) return [];
+  return top;
+}
+function _fsBox(kind,id){ return document.getElementById(kind==='new' ? 'formulaSug-new' : 'formulaSug-'+id); }
+function onFormulaTyped(kind,id,v){
+  if(kind==='new') inv.form.formula=v; else inv.editForm.formula=v;
+  const box=_fsBox(kind,id); if(!box) return;
+  const list=formulaSuggestions(v, kind==='edit'?id:null);
+  _formulaSugCtx={kind,id}; _formulaSugList=list.map(x=>x.text);
+  if(!list.length){ box.innerHTML=""; return; }
+  box.innerHTML = `<div class="formula-sug" onmousedown="event.preventDefault()">`
+    + list.map((x,i)=>`<button type="button" class="formula-sug-item" onclick="pickFormulaSug(${i})"><span>${esc(x.text)}</span><span class="faint small">${x.count} medicine${x.count===1?"":"s"}</span></button>`).join("")
+    + `</div>`;
+}
+function hideFormulaSug(kind,id){ const box=_fsBox(kind,id); if(box) box.innerHTML=""; }
+function pickFormulaSug(i){
+  const ctx=_formulaSugCtx, v=_formulaSugList[i];
+  if(!ctx || v===undefined) return;
+  if(ctx.kind==='new') inv.form.formula=v; else inv.editForm.formula=v;
+  const el=document.getElementById(ctx.kind==='new' ? 'invFormula' : 'editFormula-'+ctx.id);
+  if(el) el.value=v;
+  hideFormulaSug(ctx.kind,ctx.id);
+}
 function onEditForm(field,v){ inv.editForm[field]=v; }
 function toggleEditSTag(){ inv.editForm.sTag = !inv.editForm.sTag; refreshInvCard(inv.editId); }
 function onEditCategoryPicked(v){
@@ -3708,7 +3838,12 @@ function onEditCategoryPicked(v){
 }
 function saveEdit(id){
   const f = inv.editForm;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
+  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return false;
+  const dup = findExactDuplicateMedicine(f, id);
+  if(dup){
+    showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Change a box if it's a different medicine.`);
+    return false;
+  }
   const m = inventory.find(x=>x.id===id);
   if(m){
     m.name=f.name.trim(); m.category=f.category||""; m.specialCategory=f.specialCategory||""; m.formula=f.formula.trim(); m.mg=f.mg.trim();
@@ -3724,6 +3859,7 @@ function saveEdit(id){
   inv.editId=null;
   refreshInvCard(id);
   renderNav();
+  return true;
 }
 
 /* ===================== S.COPY: save-and-start-a-variant ===================== */
@@ -3735,8 +3871,36 @@ function saveEdit(id){
    Formula + MRP empty, keeps Strength), or in more than one strength (D.Strength — leaves
    Strength + MRP empty, keeps Formula), so the next entry only needs that one field plus MRP
    typed in instead of the whole form redone from scratch. */
-function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; refreshInvFormOnly(); }
-function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; refreshInvCard(inv.editId); }
+// The S.Copy popup: a small separate menu (D.Formula / D.Strength) shown over the form instead of
+// expanding it. Opened by either S.Copy button (New medicine form or an inline Edit form).
+function renderCopyMenu(){
+  const root = document.getElementById("copyMenuRoot");
+  if(!root) return;
+  const isEdit = !!(inv.editCopyMenuOpen && inv.editId);
+  const isNew = !!inv.copyMenuOpen && !isEdit;
+  if(!isEdit && !isNew){ root.innerHTML=""; return; }
+  const f1 = isEdit ? `copyEditVariant('${inv.editId}','formula')` : `copyNewMedicineVariant('formula')`;
+  const f2 = isEdit ? `copyEditVariant('${inv.editId}','strength')` : `copyNewMedicineVariant('strength')`;
+  const fn = v => isEdit ? `copyEditVariant('${inv.editId}','${v}')` : `copyNewMedicineVariant('${v}')`;
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeCopyMenu()">
+      <div class="copy-pop">
+        <div style="font-weight:700;margin-bottom:10px;">S.Copy</div>
+        <div class="flex gap2 mb2">
+          <button type="button" class="btn btn-primary flex1" onclick="${fn('formula')}">D.Formula</button>
+          <button type="button" class="btn btn-primary flex1" onclick="${fn('strength')}">D.Strength</button>
+        </div>
+        <div class="flex gap2 mb2">
+          <button type="button" class="btn btn-primary flex1" onclick="${fn('name')}">D.Name</button>
+          <button type="button" class="btn btn-primary flex1" onclick="${fn('full')}">F.Copy</button>
+        </div>
+        <button type="button" class="btn" style="width:100%;background:var(--danger);color:#fff;" onclick="closeCopyMenu()">Cancel</button>
+      </div>
+    </div>`;
+}
+function closeCopyMenu(){ inv.copyMenuOpen=false; inv.editCopyMenuOpen=false; renderCopyMenu(); }
+function toggleInvCopyMenu(){ inv.copyMenuOpen = !inv.copyMenuOpen; renderCopyMenu(); }
+function toggleEditCopyMenu(){ inv.editCopyMenuOpen = !inv.editCopyMenuOpen; renderCopyMenu(); }
 // Shared by both entry points below: opens the New medicine form pre-filled from `f` (either an
 // inv.form or inv.editForm snapshot — both carry the same field names this reads), with
 // `variant` deciding which one field is left blank alongside MRP.
@@ -3747,12 +3911,12 @@ function openCopyVariantForm(f, variant){
   inv.copyMenuOpen = false;
   inv.scanText = "";
   inv.form = {
-    name: f.name.trim(),
+    name: variant==='name' ? "" : f.name.trim(),
     category: f.category||"",
     specialCategory: f.specialCategory||"",
     formula: variant==='formula' ? "" : (f.formula||"").trim(),
     mg: variant==='strength' ? "" : (f.mg||"").trim(),
-    mrp: "", // a different formula/strength is almost always a different price — always left blank
+    mrp: variant==='full' ? String(f.mrp||"") : "", // a different formula/strength/name is almost always a different price — left blank, except F.Copy which keeps everything
     pillsPerBox: f.pillsPerBox||"",
     lowStockAt: f.lowStockAt||"10",
     sTag: !!f.sTag,
@@ -3760,7 +3924,10 @@ function openCopyVariantForm(f, variant){
   };
   inv.showForm = true;
   render();
-  showToast(variant==='formula' ? "✓ Saved — enter the different formula & MRP" : "✓ Saved — enter the different strength & MRP");
+  showToast(variant==='formula' ? "✓ Saved — enter the different formula & MRP"
+    : variant==='strength' ? "✓ Saved — enter the different strength & MRP"
+    : variant==='name' ? "✓ Saved — enter the different name & MRP"
+    : "✓ Saved — a full copy is ready (change whatever differs)");
 }
 // Called from the New medicine form's own S.Copy menu: saves the medicine currently being typed
 // in (same validation addMedicine() itself uses), then reopens the form for the variant.
@@ -3768,8 +3935,13 @@ function copyNewMedicineVariant(variant){
   const f = inv.form;
   if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
   const snapshot = {...f};
-  addMedicine();
-  openCopyVariantForm(snapshot, variant);
+  // Close the popup straight away so the tap feels instant, then do the save. addMedicine(true)
+  // skips its own full re-render because openCopyVariantForm() re-renders once right after.
+  inv.copyMenuOpen = false; renderCopyMenu();
+  setTimeout(()=>{
+    if(!addMedicine(true)) return; // blocked as an exact duplicate — stay on the form
+    openCopyVariantForm(snapshot, variant);
+  }, 0);
 }
 // Called from an existing medicine's inline Edit form's S.Copy menu: saves the edits to THAT
 // medicine (same validation saveEdit() itself uses), then opens the New medicine form for the
@@ -3778,8 +3950,11 @@ function copyEditVariant(id, variant){
   const f = inv.editForm;
   if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
   const snapshot = {...f};
-  saveEdit(id);
-  openCopyVariantForm(snapshot, variant);
+  inv.editCopyMenuOpen = false; renderCopyMenu();
+  setTimeout(()=>{
+    if(!saveEdit(id)) return; // blocked as an exact duplicate — stay on the edit form
+    openCopyVariantForm(snapshot, variant);
+  }, 0);
 }
 
 // Bumped on every renderInventory() call so a background chunk-loading job from a previous
@@ -3796,6 +3971,7 @@ let _invListLoadedFor = null;
 // re-filtering/re-sorting/rebuilding all ~300 cards through render() just to reflect it was
 // what made opening Edit/Restock lag once the list was fully loaded. This is O(1) instead.
 function refreshInvCard(id){
+  renderCopyMenu();
   if(!id) return;
   const el = document.getElementById("invCard-"+id);
   if(!el) return; // not on screen (filtered out / chunk not loaded yet) — nothing to patch
@@ -3863,9 +4039,10 @@ function buildInvCard(m){
       <div class="mt2 divider-top8">
         ${nameCategoryRowsHtml({ nameId:"editName-"+m.id, name:f.name, nameOnInput:"onEditForm('name',this.value)", sToggle:"toggleEditSTag()", sTag:f.sTag, sTitle:f.category||f.specialCategory, selectId:"editCategory-"+m.id, selectOnchange:"onEditCategoryPicked(this.value)", category:f.category, specialCategory:f.specialCategory })}
         <div class="flex gap2 mb2">
-          <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onEditForm('formula',this.value)" placeholder="Formula / composition">
+          <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onFormulaTyped('edit','${m.id}',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('edit','${m.id}'),200)" placeholder="Formula / composition">
           <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
         </div>
+        <div id="formulaSug-${m.id}"></div>
         <div class="flex gap2 mb2">
           <input ${NOAC} id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
           <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onEditForm('pillsPerBox',this.value)" placeholder="Medicine per box">
@@ -3881,13 +4058,6 @@ function buildInvCard(m){
           </div>
           <input ${NOAC} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
           ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
-          ${inv.editCopyMenuOpen ? `
-            <p class="small faint" style="margin:8px 0 6px;">Saves the changes above to this medicine, then opens New medicine filled in the same way for the variant — MRP is always left blank too.</p>
-            <div class="flex gap2 mb2">
-              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','formula')">D.Formula</button>
-              <button type="button" class="btn btn-outline flex1" onclick="copyEditVariant('${m.id}','strength')">D.Strength</button>
-            </div>
-          ` : ""}
         </div>
         <div class="flex gap2 mt2">
           <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
@@ -4058,6 +4228,7 @@ function renderInventory(){
 // the back-button history in step with whether it's open.
 function refreshInvFormOnly(){
   renderInvFormModal();
+  renderCopyMenu();
   const fab = document.getElementById("invFab");
   if(fab){ fab.className = (tab==="inventory" && !inv.showForm) ? "" : "hidden"; }
   syncMenuHistory();
@@ -4077,9 +4248,10 @@ function renderInvFormModal(){
         <div style="padding:14px 16px;overflow-y:auto;">
           ${nameCategoryRowsHtml({ nameId:"invName", name:inv.form.name, nameOnInput:"onInvForm('name',this.value)", sToggle:"toggleInvSTag()", sTag:inv.form.sTag, sTitle:inv.form.category||inv.form.specialCategory, selectId:"invCategory", selectOnchange:"onInvCategoryPicked(this.value)", category:inv.form.category, specialCategory:inv.form.specialCategory })}
           <div class="flex gap2 mb2">
-            <input ${NOAC} id="invFormula" value="${esc(inv.form.formula)}" oninput="onInvForm('formula',this.value)" placeholder="Formula / composition">
+            <input ${NOAC} id="invFormula" value="${esc(inv.form.formula)}" oninput="onFormulaTyped('new','',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('new',''),200)" placeholder="Formula / composition">
             <input ${NOAC} id="invMg" value="${esc(inv.form.mg)}" oninput="onInvForm('mg',this.value)" placeholder="Strength (mg)">
           </div>
+          <div id="formulaSug-new"></div>
           <div class="flex gap2 mb2">
             <input ${NOAC} id="invMrp" type="text" inputmode="decimal" value="${esc(inv.form.mrp)}" oninput="onInvForm('mrp',this.value)" placeholder="MRP per box (${CURRENCY.trim()})">
             <input ${NOAC} id="invPpb" type="text" inputmode="numeric" value="${esc(inv.form.pillsPerBox)}" oninput="onInvForm('pillsPerBox',this.value)" placeholder="Medicine per box">
@@ -4092,13 +4264,6 @@ function renderInvFormModal(){
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
             </div>
             <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-            ${inv.copyMenuOpen ? `
-              <p class="small faint" style="margin:8px 0 6px;">Saves this medicine as it is now, then reopens this form filled in the same way for the variant — MRP is always left blank too.</p>
-              <div class="flex gap2 mb2">
-                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('formula')">D.Formula</button>
-                <button type="button" class="btn btn-outline flex1" onclick="copyNewMedicineVariant('strength')">D.Strength</button>
-              </div>
-            ` : ""}
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
