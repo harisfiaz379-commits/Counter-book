@@ -3065,6 +3065,13 @@ function parseGS1Barcode(raw){
     gs1Walk(s, out);
     if(!found()){ const idx = s.search(/01\d{14}/); if(idx>0) gs1Walk(s.slice(idx), out); }
   }
+  // Camera decoders often drop the invisible GS separator, so a short field like the batch can
+  // swallow the "240" + price that follows it (e.g. batch "ABC123240420.00"). A real batch never
+  // ends in "240" + a decimal number, so split that tail back off as the product text/price.
+  ["batch","serial"].forEach(k=>{
+    const mm = out[k] && !out.productText && String(out[k]).match(/^(.+?)240(\d{1,6}[.,]\d{1,2})$/);
+    if(mm){ out[k] = mm[1]; out.productText = mm[2]; }
+  });
   gs1DeriveProduct(out);
   return out;
 }
@@ -3401,6 +3408,12 @@ function handleScanText(raw){
     const hex = Array.from(text.slice(0,24)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
     openShare("The barcode was read, but not recognised as a medicine (GS1) code.\n\nScanned text (" + text.length + " characters):\n" + visibleScanText(text) + "\n\nFirst bytes (hex): " + hex);
     return;
+  }
+  window.__lastScan = { text, parsed };
+  if(!parsed.price && (target==="newmed" || (target && target.kind==="restock"))){
+    // TEMPORARY diagnostics (scan-fix-2): no MRP could be read, so show exactly what the scanner gave us.
+    const hx = Array.from(text.slice(0,80)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
+    setTimeout(()=>openShare("[scan-fix-2] No MRP found in this scan.\n\nRaw text (" + text.length + " chars):\n" + visibleScanText(text) + "\n\nParsed: " + JSON.stringify(parsed) + "\n\nHex: " + hx), 400);
   }
   if(target==="newmed") applyScanToNewMedForm(parsed);
   else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
