@@ -296,7 +296,7 @@
   <header>
     <div class="header-info" style="padding-right:170px;">
       <h1>Counter Book</h1>
-      <p class="header-sub">Dispensing &amp; billing <span style="opacity:.55;font-size:11px;">· bill-fix-3</span></p>
+      <p class="header-sub">Dispensing &amp; billing</p>
       <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
         <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
         <button id="cloudSizeBadge" onclick="toggleBackupModal()" class="small" style="color:#fff;opacity:.7;background:none;border:none;padding:0;cursor:pointer;font:inherit;"></button>
@@ -325,6 +325,7 @@
 <div id="invFormModalRoot"></div>
 <div id="backupModalRoot"></div>
 <div id="printerModalRoot"></div>
+<div id="aiModalRoot"></div>
 <div id="monthBreakdownModalRoot"></div>
 <div id="categoryModalRoot"></div>
 <div id="manageUsersModalRoot"></div>
@@ -339,6 +340,7 @@
 <div id="datePickerModalRoot"></div>
 <div id="addUserLoginModalRoot"></div>
 <div id="scanModalRoot"></div>
+<input type="file" id="aiPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="aiHandlePhoto(this)">
 <input type="file" id="scanPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="handleScanPhotoFile(this)">
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
@@ -448,6 +450,11 @@ let backupUi = { open:false };
 // or "batch"; targetArgs carries whatever identifiers confirmDatePicker/clearDatePicker need
 // to write the result back to the right place.
 let datePickerUi = { open:false, viewYear:0, viewMonth:0, selected:"", targetKind:null, targetArgs:null };
+// Quick add (typed / handwritten text -> bill medicines). See the QUICK ADD section below.
+let aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false };
+const AI_URL_KEY = "clinic_ai_url", AI_SECRET_KEY = "clinic_ai_secret";
+const AI_GEMINI_KEY = "clinic_gemini_key", AI_MODEL_KEY = "clinic_gemini_model", AI_DEFAULT_MODEL = "gemini-2.5-flash";
+const aiGeminiKey = ()=>(localStorage.getItem(AI_GEMINI_KEY)||"").trim();
 let printerUi = { open:false, transport:null, wifiIp:"", wifiPort:"9100" };
 let rec = { expandedId:null, searchQuery:"", editingId:null, expandedMonth:null, expandedYear:null, breakdownMonthKey:null, editingMonthBreakdown:false, breakdownDraft:{doctorFee:"",medTotal:"",testsTotal:"",othersTotal:""}, expandedDayBreakdown:null, expandedTxSection:null, expandedBreakdownSection:null };
 let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:null };
@@ -1472,7 +1479,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || backupUi.open || scanUi.open || historyUi.open ||
+    printerUi.open || aiUi.open || backupUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1491,6 +1498,7 @@ function closeTopMenu(){
   if(manageUi.editingId){ cancelEditUser(); return; }
   if(manageUi.open){ manageUi.open=false; render(); return; }
   if(historyUi.open){ closeHistoryModal(); return; }
+  if(aiUi.open){ closeQuickAdd(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
   if(rec.editingMonthBreakdown){ cancelMonthBreakdownEdit(); return; }
@@ -1594,6 +1602,7 @@ function render(){
   renderInvFormModal();
   renderBackupModal();
   renderPrinterModal();
+  renderAiModal();
   renderMonthBreakdownModal();
   renderCategoryModal();
   renderManageUsersModal();
@@ -2153,7 +2162,7 @@ function completeBill(){
   transactions.unshift(tx);
   logActivity("bill_add", `${tx.patientName||"Bill"} · ${money(tx.grandTotal)}`);
   saveTransactions();
-  printReceipt(tx);
+  autoPrintAfterBill(tx);
   bill = newBillState();
   render();
   showToast("✓ Bill saved — find it anytime in Records");
@@ -2372,6 +2381,23 @@ function buildEscPosReceipt(tx){
 // Hands the raw ESC/POS bytes to the native app over the bridge, prefixed "PRINT:" so
 // App Inventor's WebViewStringChange handler can route it to whichever printer transport
 // is configured (Bluetooth first; WiFi/USB/BLE can be added later using this same message).
+// Called right after a bill is completed. The native side shows "Not connected to a Bluetooth
+// device." whenever it is sent a print job with no printer connected, and the page can't see the
+// connection state — so the automatic print only fires if a printer has been chosen in Printer
+// Settings and "Print automatically" hasn't been switched off. The 🖨 Print button on a saved
+// bill always tries to print, whatever these settings say.
+function autoPrintEnabled(){
+  const transport = localStorage.getItem("clinic_printer_transport") || "";
+  if(!transport) return false;                        // no printer ever set up
+  return localStorage.getItem("clinic_auto_print") !== "off";
+}
+function autoPrintAfterBill(tx){
+  if(autoPrintEnabled()) printReceipt(tx);
+}
+function toggleAutoPrint(on){
+  localStorage.setItem("clinic_auto_print", on ? "on" : "off");
+  showToast(on ? "Receipts will print automatically" : "Automatic printing is off — use 🖨 Print on a saved bill");
+}
 function printReceipt(tx){
   const escpos = buildEscPosReceipt(tx);
   if(!window.AppInventor || typeof window.AppInventor.setWebViewString !== "function"){
@@ -2749,6 +2775,10 @@ function renderBill(){
 
     <div class="card">
       <h3 class="mb2" style="font-size:14px;font-weight:700;">Add medicine</h3>
+      <div class="flex" style="gap:8px;margin-bottom:10px;">
+        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(false)">✨ Quick add (type)</button>
+        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(true)">📷 Handwriting</button>
+      </div>
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="billQueryInput" value="${esc(selMed?selMed.name:bill.query)}" oninput="onBillQuery(this.value)" placeholder="Search medicine…">
@@ -3523,6 +3553,36 @@ function splitScannedProductName(raw){
   const ordered = measures.filter(m=>m.vol).concat(measures.filter(m=>!m.vol));
   return { name, category, strength: ordered.map(m=>m.text).join(" ") };
 }
+// ---- Inventory: fill the New medicine form from a photo of the box (offline OCR) ----
+// Pulls the printed GTIN / M.R.P. and the product-name line out of the text, then hands it to
+// the same filler the barcode scan uses, so only EMPTY boxes are filled (name, category,
+// strength, MRP). Works for normal and special medicines alike (the form's S switch decides).
+function parseBoxText(text){
+  const t = String(text||"");
+  const out = {};
+  const g = t.match(/GTIN\D{0,4}(\d{12,14})/i); if(g) out.gtin = g[1];
+  const m = t.match(/M\.?\s*R\.?\s*P\.?\s*(?:Rs\.?|₹|INR)?\s*(\d+(?:\.\d{1,2})?)/i); if(m) out.price = String(Number(m[1]));
+  const skip = /gtin|mfg|mfd|exp|b\.?\s*no|sr\.?\s*no|m\.?\s*r\.?\s*p|batch|\brs\b|licen|\d{9,}/i;
+  const line = t.split("\n").map(l=>l.replace(/\s+/g," ").trim()).find(l=>l.length>=3 && /[A-Za-z]{3}/.test(l) && !skip.test(l));
+  if(line) out.productName = line;
+  return out;
+}
+function readBoxIntoNewMed(){
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = "image/*"; input.setAttribute("capture","environment");
+  input.onchange = async ()=>{
+    const file = input.files && input.files[0]; if(!file) return;
+    showToast("🖨 Reading the box…");
+    try{
+      await aiLoadTesseract();
+      const r = await window.Tesseract.recognize(file,"eng");
+      const parsed = parseBoxText(r && r.data && r.data.text);
+      if(!parsed.productName && !parsed.price && !parsed.gtin){ showToast("⚠ No usable text found — try a clearer, closer photo"); return; }
+      applyScanToNewMedForm(parsed);
+    }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
+  };
+  input.click();
+}
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
@@ -4262,6 +4322,7 @@ function renderInvFormModal(){
             <div class="flex gap2">
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
+              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="readBoxIntoNewMed()">🖨 Read box text</button>
             </div>
             <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
@@ -5280,6 +5341,41 @@ function submitLogin(){
   loginUi = { pickedId:"", pin:"", error:"" };
   render();
 }
+/* ---- Optional Gmail login (PIN login still works exactly as before) ----
+   Native side (App Inventor Blocks) contract:
+     page -> native : setWebViewString("GOOGLE_SIGNIN")
+     native -> page : WebViewString = "GOOGLE_EMAIL:someone@gmail.com"  (or "GOOGLE_CANCELLED"),
+                      then evaluatejavascript("onNativeBridgeMessage()")
+   The email is stored on the person's profile (p.email). It is a convenience login, like the PIN. */
+// Gmail login is PAUSED: the native Google sign-in isn't set up in the app yet. Set to true to show the buttons again.
+const GMAIL_LOGIN_ENABLED = false;
+let googleMode = "", _googleTimer = null;
+function requestGoogleSignIn(mode){
+  if(!window.AppInventor || typeof window.AppInventor.setWebViewString!=="function"){ showToast("Google sign-in only works inside the app"); return; }
+  googleMode = mode;
+  window.AppInventor.setWebViewString("GOOGLE_SIGNIN");
+  clearTimeout(_googleTimer);
+  _googleTimer = setTimeout(()=>{ if(googleMode){ googleMode=""; showToast("⚠ No answer from the app — Google sign-in isn't set up in the app yet"); } }, 20000);
+}
+function startGoogleLogin(){ requestGoogleSignIn("login"); }
+function startLinkGmail(){ if(!sessionAuthed || !currentProfileId) return; requestGoogleSignIn("link"); }
+function handleGoogleEmail(raw){
+  clearTimeout(_googleTimer);
+  const mode = googleMode; googleMode = "";
+  const email = String(raw||"").trim().toLowerCase();
+  if(!mode || !email) return;
+  if(mode==="login"){
+    const p = visibleProfiles().find(x=>(x.email||"").toLowerCase()===email);
+    if(!p){ loginUi.error="No one is linked to "+email+". Log in with your PIN, then link it from the menu."; render(); return; }
+    activateProfile(p.id); loginUi = { pickedId:"", pin:"", error:"" }; render();
+  } else {
+    const me = profiles.find(x=>x.id===currentProfileId);
+    if(!me) return;
+    if(profiles.some(x=>x.id!==me.id && !x.deleted && (x.email||"").toLowerCase()===email)){ showToast("⚠ That Gmail is already linked to someone else"); return; }
+    me.email = email; me.updatedAt = Date.now(); saveProfiles(); renderNav();
+    showToast("✓ "+email+" linked — you can now sign in with Google");
+  }
+}
 function logoutUser(){
   sessionAuthed = false;
   try{ localStorage.setItem("clinic_session_authed", "0"); }catch(e){}
@@ -5328,6 +5424,7 @@ function renderLogin(){
         <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Add new person</button>
         ${list.map(p=>`<button class="btn ${p.id===loginUi.pickedId?'btn-primary':'btn-outline'}" style="padding:8px 14px;" onclick="pickLoginProfile('${p.id}')">${esc(p.name)}</button>`).join("")}
       </div>
+      ${GMAIL_LOGIN_ENABLED && window.AppInventor ? `<button class="btn btn-outline" style="width:100%;margin-top:12px;" onclick="startGoogleLogin()">🔵 Sign in with Google</button>` : ""}
       ${picked ? `
         <label class="field-label mt3" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
         <input ${NOAC} id="loginPinInput" type="password" inputmode="numeric" value="${esc(loginUi.pin)}" oninput="onLoginPin(this.value)" placeholder="••••" class="mb2">
@@ -6466,6 +6563,8 @@ function renderHeaderMenu(){
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
+  { const me = profiles.find(x=>x.id===currentProfileId);
+    if(GMAIL_LOGIN_ENABLED && window.AppInventor) items.push({label: me && me.email ? "🔗 Gmail: "+me.email+" (change)" : "🔗 Link my Gmail", action:"startLinkGmail()"}); }
   items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
   el.innerHTML = items.map((it,i)=>`
     <button onclick="closeHeaderMenu();syncMenuHistory();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
@@ -6595,8 +6694,64 @@ function applyRemoteSnapshot(data){
   // typing to actually pause first, same guarantee a search box's own input already gets.
   scheduleSearchRender();
 }
+// ── Background auto-upload of offline changes ───────────────────────────────
+// Every genuine local edit sets a persistent "changes waiting to upload" flag (survives closing
+// the app / restarting the phone). The flag is cleared only after a push that started after the
+// LAST edit succeeds. Anything that hints connectivity may be back — the browser's online event,
+// the connection changing, the app coming back to the foreground, a 15s timer, or app start —
+// calls trySyncNow(), which uploads if the flag is set (or the last sync wasn't "synced").
+// A web page can't run while the app is fully closed; this covers everything short of that.
+const PENDING_SYNC_KEY = "clinic_pending_sync";
+let pendingSeq = 0;
+function markPendingSync(){
+  pendingSeq++;
+  try{ localStorage.setItem(PENDING_SYNC_KEY, String(Date.now())); }catch(e){}
+}
+function hasPendingSync(){
+  try{ return !!localStorage.getItem(PENDING_SYNC_KEY); }catch(e){ return pendingSeq>0; }
+}
+function clearPendingSyncIf(seqAtStart){
+  if(seqAtStart!==pendingSeq) return; // a newer edit arrived mid-push — keep the flag
+  try{ localStorage.removeItem(PENDING_SYNC_KEY); }catch(e){}
+}
+// If the app was opened with no internet, the Firebase scripts (loaded from the web) may not
+// have loaded and fbDb stays null. This loads/initialises them as soon as we're online again.
+let _fbLoading = false;
+function ensureFirebase(){
+  if(fbDb || _fbLoading) return;
+  if(navigator.onLine===false) return;
+  const init = function(){
+    try{
+      if(typeof firebase==="undefined") return false;
+      if(!firebase.apps || !firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      fbDb = firebase.firestore();
+      startCloudSync();
+      setTimeout(trySyncNow, 2000);
+      return true;
+    }catch(e){ console.error("Firebase late init failed", e); return false; }
+  };
+  if(typeof firebase!=="undefined"){ init(); return; }
+  _fbLoading = true;
+  const load = function(src, cb){
+    const el = document.createElement("script");
+    el.src = src; el.onload = cb; el.onerror = function(){ _fbLoading=false; };
+    document.head.appendChild(el);
+  };
+  load("https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js", function(){
+    load("https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js", function(){
+      _fbLoading = false; init();
+    });
+  });
+}
+function trySyncNow(){
+  if(!fbDb){ ensureFirebase(); return; }
+  if(pushInFlight) return;
+  if(hasPendingSync() || (syncStatus!=="synced" && syncStatus!=="syncing")) pushToCloud();
+}
 function schedulePushToCloud(){
-  if(!fbDb || suppressPush) return;
+  if(suppressPush) return;
+  markPendingSync();
+  if(!fbDb){ ensureFirebase(); return; }
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(pushToCloud, 1200);
 }
@@ -6657,6 +6812,7 @@ async function pushToCloud(){
     return;
   }
   pushInFlight = true;
+  const seqAtStart = pendingSeq;
   // If we were already showing "Synced" before this push (e.g. right after completing a
   // bill), keep showing "Synced" through the push instead of flashing "Syncing…" — the
   // badge should only visibly change if something actually goes wrong (see catch below).
@@ -6669,6 +6825,7 @@ async function pushToCloud(){
     if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; processHistorySync(); }
     await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload())), 10000);
     syncStatus = "synced";
+    clearPendingSyncIf(seqAtStart);
     clearSyncError();
   }catch(e){ syncStatus = "offline"; setSyncError(e); }
   pushInFlight = false;
@@ -6757,8 +6914,16 @@ function startCloudSync(){
 // sooner — nothing is lost either way, this only closes the "offline changes sit unsynced until
 // something else happens to trigger a push" gap.
 window.addEventListener("online", function(){
-  if(fbDb) pushToCloud();
+  trySyncNow();
+  setTimeout(trySyncNow, 3000); // the WebView's connection is often not ready yet at the instant 'online' fires
 });
+window.addEventListener("focus", function(){ trySyncNow(); });
+window.addEventListener("pageshow", function(){ trySyncNow(); });
+try{
+  if(navigator.connection && navigator.connection.addEventListener){
+    navigator.connection.addEventListener("change", function(){ setTimeout(trySyncNow, 1500); });
+  }
+}catch(e){}
 // The 'online' event above is the ideal signal, but it's unreliable inside the actual
 // App-Inventor-wrapped Android WebView this app runs in: WebViews depend on the OS's network-
 // change broadcast reaching the page's JS engine, and on many devices that broadcast either
@@ -6775,13 +6940,9 @@ window.addEventListener("online", function(){
 // 2) visibilitychange — covers the very common case of the phone being locked/backgrounded
 //    while offline, then unlocked once back in range: the tab becoming visible again is a
 //    strong hint it's worth trying right now instead of waiting out the rest of the interval.
-setInterval(function(){
-  if(fbDb && syncStatus !== "synced" && syncStatus !== "syncing") pushToCloud();
-}, 20000);
+setInterval(trySyncNow, 15000);
 document.addEventListener("visibilitychange", function(){
-  if(document.visibilityState === "visible" && fbDb && syncStatus !== "synced" && syncStatus !== "syncing"){
-    pushToCloud();
-  }
+  if(document.visibilityState === "visible") trySyncNow();
   // expiringBatches() is cached (see its definition) for render speed — its "days until
   // expiry" numbers are relative to "now", so if the app is left open across a midnight
   // rollover, the cache would keep showing yesterday's day-count until something else
@@ -6869,6 +7030,8 @@ window.onNativeBridgeMessage = function(){
   const msg = window.AppInventor.getWebViewString();
   if(typeof msg !== "string") return;
   if(msg.indexOf("IMPORT:") === 0) handleImportedBackupText(msg.slice(7));
+  else if(msg.indexOf("GOOGLE_EMAIL:") === 0) handleGoogleEmail(msg.slice(13));
+  else if(msg === "GOOGLE_CANCELLED"){ clearTimeout(_googleTimer); googleMode=""; }
   else if(msg === "CAMERA_PERMISSION_GRANTED"){
     const t = _pendingCameraTarget; _pendingCameraTarget = null;
     if(t) openCameraScan(t);
@@ -6919,6 +7082,10 @@ function renderPrinterModal(){
         </div>
         <div style="padding:14px 16px;">
           ${savedTransport ? `<p class="small" style="margin:0 0 12px;color:var(--primary);">Currently using: <strong>${savedTransport==="wifi"?`WiFi (${esc(savedIp)}:${esc(savedPort)})`:savedTransport==="ble"?"BLE":savedTransport==="usb"?"USB":savedTransport==="cloud"?`Cloud (${esc(savedCloudUrl)})`:"Bluetooth"}</strong></p>` : `<p class="small faint" style="margin:0 0 12px;">No printer configured yet.</p>`}
+          <label style="display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:10px 12px;background:var(--primarySoft);border-radius:10px;font-size:13px;cursor:pointer;">
+            <input type="checkbox" style="width:auto;margin:0;" ${localStorage.getItem("clinic_auto_print")!=="off"?"checked":""} onchange="toggleAutoPrint(this.checked)">
+            <span><strong>Print automatically</strong> when a bill is completed<br><span class="small faint">Turn off if the printer isn't always connected — you can still tap 🖨 Print on any saved bill.</span></span>
+          </label>
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="pickBluetoothPrinter()">📶 Bluetooth printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <label class="field-label">WiFi printer IP address</label>
@@ -6938,6 +7105,314 @@ function renderPrinterModal(){
       </div>
     </div>`;
 }
+/* ===================== QUICK ADD (typed / handwritten text -> bill medicines) =====================
+   Two ways in, one pipeline:
+     • type or paste text, e.g. "Paracetamol 500 1-0-1 5 days"
+     • photo of handwriting -> sent to YOUR small AI endpoint (see ai-proxy-worker.js) which returns
+       typed text in that same format
+   The text is parsed on the phone (no AI needed for this part, works offline), matched against the
+   inventory, and shown in a preview. NOTHING is added to the bill until the person checks the
+   preview and taps "Add to bill" — handwriting reads can be wrong, and a wrong medicine is worse
+   than a slow one. */
+function aiLev(a,b){
+  const m=a.length, n=b.length; if(!m) return n; if(!n) return m;
+  let prev=[]; for(let j=0;j<=n;j++) prev[j]=j;
+  for(let i=1;i<=m;i++){
+    const cur=[i];
+    for(let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    prev=cur;
+  }
+  return prev[n];
+}
+function aiSim(a,b){ a=String(a||"").toLowerCase(); b=String(b||"").toLowerCase(); if(!a||!b) return 0; return 1 - aiLev(a,b)/Math.max(a.length,b.length); }
+const AI_FORM_WORDS = /^(tab|tabs|tablet|tablets|cap|caps|capsule|capsules|syp|syrup|inj|injection|drop|drops|oint|ointment|cream|gel|lotion|susp|suspension|rx|pcs|pc|nos|no|for|and|with|x|take|sig|daily|day|days)\.?$/;
+// One line of text -> { raw, perDay, days, qty, dose, assumed, tokens }. Understands: 1-0-1 style
+// patterns, OD/BD/TDS/QID/HS, "2 tab", "5 days / 1 week", "x10", "qty 10", "10 tabs".
+function aiParseLine(line){
+  let s = " " + String(line).toLowerCase().replace(/[×✕]/g," x ").replace(/\s+/g," ").trim() + " ";
+  s = s.replace(/^\s*(\d+\s*[.)]|[-•*])\s+/," ");           // list numbering / bullets
+  let days=0, perDay=0, qty=0, dose=0, freq=0, assumed="", m;
+  if((m=s.match(/(?:\bfor\s+|\bx\s*)?(\d+)\s*(?:days?|din|d)\b/))){ days=+m[1]; s=s.replace(m[0]," "); }
+  else if((m=s.match(/(?:\bfor\s+)?(\d+)\s*(?:weeks?|wks?)\b/))){ days=+m[1]*7; s=s.replace(m[0]," "); }
+  else if((m=s.match(/(?:\bfor\s+)?(\d+)\s*months?\b/))){ days=+m[1]*30; s=s.replace(m[0]," "); }
+  const N = "(\\d+(?:\\.\\d+)?|½)";
+  if((m=s.match(new RegExp(N+"\\s*[-–+]\\s*"+N+"\\s*[-–+]\\s*"+N+"(?:\\s*[-–+]\\s*"+N+")?")))){
+    perDay = m.slice(1).filter(Boolean).map(x=>x==="½"?0.5:+x).reduce((a,b)=>a+b,0);
+    s=s.replace(m[0]," ");
+  }
+  const FW=[[/\b(?:qid|four times|4 times)\b/,4],[/\b(?:tds|tid|thrice|three times|3 times)\b/,3],[/\b(?:bd|bid|bds|twice|two times|2 times)\b/,2],[/\b(?:od|qd|once|one time|1 time|hs|nightly|at night|bedtime)\b/,1]];
+  if(!perDay) for(const [re,f] of FW){ if((m=s.match(re))){ freq=f; s=s.replace(m[0]," "); break; } }
+  s = s.replace(/\b(?:daily|a day|per day|every day)\b/g," ");
+  if((m=s.match(/(\d+(?:\.\d+)?|½|1\/2)\s*(?:tabs?|tablets?|caps?|capsules?|pcs?|nos)\b\.?/))){ dose=(m[1]==="½"||m[1]==="1/2")?0.5:+m[1]; s=s.replace(m[0]," "); }
+  if((m=s.match(/\b(?:qty|quantity|total)\s*[:=]?\s*(\d+)/))){ qty=+m[1]; s=s.replace(m[0]," "); }
+  else if((m=s.match(/\bx\s*(\d+)\b/))){ qty=+m[1]; s=s.replace(m[0]," "); }
+  if(!perDay && freq) perDay=(dose||1)*freq;
+  if(!perDay && dose && days){ perDay=dose; assumed="Assumed once a day — check"; }
+  if(!perDay && !days && !qty && dose) qty=dose;
+  s = s.replace(/(\d)\s*(?:mg|mcg|ml|gm|g|iu)\b/g,"$1 ");  // strengths: keep the number, drop the unit
+  const tokens = s.replace(/[,;:()]/g," ").split(/\s+/).map(t=>t.replace(/^\.+|\.+$/g,"")).filter(t=>t && !AI_FORM_WORDS.test(t) && (t.length>1 || /\d/.test(t)));
+  return { raw:String(line).trim(), perDay, days, qty, dose, assumed, tokens };
+}
+function aiFindMeds(tokens){
+  if(!tokens.length) return [];
+  const q = tokens.join(" ");
+  const nums = tokens.filter(t=>/^\d+(\.\d+)?$/.test(t));
+  const words = tokens.filter(t=>!/^\d+(\.\d+)?$/.test(t));
+  const out = [];
+  inventory.filter(m=>!m.deleted).forEach(m=>{
+    let score = 0;
+    if(medicineMatchesQuery(m,q)) score = 1;
+    else if(words.length){
+      const first = (m.name||"").toLowerCase().replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean)[0];
+      const sim = aiSim(words[0], first);       // forgiving of handwriting misreads ("paracetmol")
+      if(sim>=0.72) score = 0.6 + sim*0.3;
+    }
+    if(!score) return;
+    if(nums.length && extractNumbers(m.mg).some(n=>nums.includes(n))) score += 0.05;
+    if(words.length && (m.name||"").toLowerCase().startsWith(words[0])) score += 0.05;
+    out.push({m, score});
+  });
+  out.sort((a,b)=>b.score-a.score || (b.m.stockPills||0)-(a.m.stockPills||0));
+  return out.slice(0,6).map(x=>x.m);
+}
+function aiParseText(text){
+  return String(text||"").split(/\n|;/).map(l=>l.trim()).filter(l=>l.length>1).map(l=>{
+    const r = aiParseLine(l);
+    const cands = aiFindMeds(r.tokens);
+    r.cands = cands.map(m=>({id:m.id, name:m.name, mg:m.mg||"", category:m.category||m.specialCategory||"", stock:m.stockPills||0}));
+    r.medId = cands.length ? cands[0].id : "";
+    return r;
+  });
+}
+function aiRowPills(r){
+  if(r.perDay>0 && r.days>0) return r.perDay*r.days;
+  return r.qty>0 ? r.qty : 0;
+}
+function openQuickAdd(photo){
+  aiProcessQueue();
+  aiUi.open=true; aiUi.rows=null; aiUi.error=""; aiUi.busy=false;
+  render();
+  if(photo) aiPickPhoto("hand");
+}
+function closeQuickAdd(){ aiUi.open=false; aiUi.rows=null; aiUi.busy=false; aiUi.error=""; render(); }
+function aiReadText(){
+  const rows = aiParseText(aiUi.text);
+  if(!rows.length){ aiUi.error="Type or paste at least one medicine first."; render(); return; }
+  aiUi.error=""; aiUi.rows=rows; render();
+}
+function aiRowMed(i,id){ aiUi.rows[i].medId=id; aiRowInfo(i); }
+function aiRowSet(i,field,v){ aiUi.rows[i][field]=Number(v)||0; aiRowInfo(i); }
+function aiRowInfo(i){
+  const r=aiUi.rows[i], el=document.getElementById("aiInfo"+i);
+  if(el){
+    const med=inventory.find(x=>x.id===r.medId), pills=aiRowPills(r);
+    let t = !r.medId ? "Skipped" : pills>0 ? `= ${pills} to bill` : "Fill per day + days, or total";
+    if(med && pills>(med.stockPills||0)) t += ` · ⚠ only ${med.stockPills||0} in stock`;
+    if(r.assumed && r.medId) t += ` · ${r.assumed}`;
+    el.textContent=t;
+    el.style.color = (!r.medId || pills<=0) ? "var(--faint)" : "var(--primary)";
+  }
+  const btn=document.getElementById("aiAddBtn");
+  if(btn){ const n=aiUi.rows.filter(x=>x.medId && aiRowPills(x)>0).length; btn.textContent = n?`Add ${n} to bill`:"Nothing to add yet"; btn.disabled=!n; }
+}
+function aiConfirmAdd(){
+  let added=0;
+  (aiUi.rows||[]).forEach(r=>{
+    const med=inventory.find(x=>x.id===r.medId && !x.deleted), pills=aiRowPills(r);
+    if(!med || !(pills>0)) return;
+    const pricePerPill=nextBatchUnitPrice(med), byDose=r.perDay>0 && r.days>0;
+    if(med.specialCategory){
+      const base=pricePerPill*pills;
+      bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:base, note:"", perDay:null, linkedToGlobalDays:false,
+        special:true, specialCategory:med.specialCategory||"", baseSubtotal:base, baseNote:"", appliedFee:0, feeMode:null});
+    } else {
+      bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills,
+        note: byDose?`${r.perDay}/day × ${r.days}d`:"", perDay: byDose?r.perDay:null, linkedToGlobalDays:false});
+    }
+    added++;
+  });
+  if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee();
+  aiUi.open=false; aiUi.rows=null; aiUi.text="";
+  render();
+  showToast(added ? `✓ ${added} medicine${added>1?"s":""} added — check them below` : "Nothing was added");
+}
+// ---- handwriting: photo -> your AI endpoint -> typed text ----
+function aiPickPhoto(mode){
+  aiUi.mode = (mode==="print"||mode==="box") ? mode : "hand";
+  if(aiUi.mode==="hand" && !aiGeminiKey()){ aiUi.error="Handwriting needs a one-time setup — open “Handwriting setup” below and paste your free Gemini key."; aiUi.setupOpen=true; render(); return; }
+  const input=document.getElementById("aiPhotoInput");
+  if(input) input.click();
+}
+function aiResizeImage(file, maxSide){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(), u=URL.createObjectURL(file);
+    img.onload=()=>{
+      URL.revokeObjectURL(u);
+      const k=Math.min(1, maxSide/Math.max(img.width,img.height)), c=document.createElement("canvas");
+      c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      resolve(c.toDataURL("image/jpeg",0.85).split(",")[1]);
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(u); reject(new Error("Couldn't read that photo")); };
+    img.src=u;
+  });
+}
+// ---- offline-friendly handwriting: photos taken without internet wait in a queue ----
+const AI_QUEUE_KEY="clinic_ai_queue", AI_READY_KEY="clinic_ai_ready";
+let aiQueueBusy=false;
+function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(k)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
+function aiSetList(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } }
+async function aiReadImage(image){
+  const model=(localStorage.getItem(AI_MODEL_KEY)||"").trim()||AI_DEFAULT_MODEL;
+  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),60000);
+  const prompt="Transcribe the handwritten medicine list/prescription in this photo. Output ONLY the medicines, one per line, exactly as written: name, strength, dose pattern (e.g. 1-0-1, OD, BD) and days or quantity if shown. No headings, no commentary. If a word is unclear, give your best guess.";
+  let res;
+  try{
+    res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
+      {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
+       body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
+  } finally{ clearTimeout(timer); }
+  if(res.status===429) throw new Error("Free limit reached for now — try again a little later, or type the medicines");
+  if(res.status===400||res.status===403) throw new Error("Google didn't accept the key or model — check “Handwriting setup”");
+  if(!res.ok) throw new Error("The reader answered with an error ("+res.status+")");
+  const data=await res.json();
+  const parts=(data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
+  const text=parts.map(x=>x.text||"").join("\n").trim();
+  if(!text) throw new Error("Nothing readable came back — try a clearer, closer photo");
+  return text;
+}
+function aiQueuePhoto(image){
+  const q=aiList(AI_QUEUE_KEY);
+  if(q.length>=5){ aiUi.error="5 photos are already waiting — connect to the internet first."; return; }
+  q.push(image);
+  if(!aiSetList(AI_QUEUE_KEY,q)){ aiUi.error="Not enough space to save the photo — try again with internet."; return; }
+  aiUi.error="";
+  showToast("📥 Photo saved — it will be read when internet returns");
+}
+async function aiProcessQueue(){
+  if(aiQueueBusy || !navigator.onLine || !aiGeminiKey()) return;
+  let q=aiList(AI_QUEUE_KEY); if(!q.length) return;
+  aiQueueBusy=true; let done=0;
+  try{
+    while(q.length){
+      const text=await aiReadImage(q[0]);
+      const ready=aiList(AI_READY_KEY); ready.push(text); aiSetList(AI_READY_KEY,ready);
+      q.shift(); aiSetList(AI_QUEUE_KEY,q); done++;
+    }
+  }catch(e){ /* stays queued; retried on the next connection */ }
+  aiQueueBusy=false;
+  if(done){ showToast("📖 "+done+" saved photo"+(done>1?"s":"")+" read — open ✨ Quick add"); if(aiUi.open && !aiUi.rows) render(); }
+}
+function aiLoadReady(){
+  const ready=aiList(AI_READY_KEY); if(!ready.length) return;
+  aiUi.text=(aiUi.text?aiUi.text+"\n":"")+ready.join("\n");
+  aiSetList(AI_READY_KEY,[]);
+  aiUi.rows=aiParseText(aiUi.text); if(!aiUi.rows.length) aiUi.rows=null;
+  render();
+}
+window.addEventListener("online",()=>{ aiProcessQueue(); });
+setTimeout(aiProcessQueue,6000);
+// ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
+function aiLoadTesseract(){
+  return new Promise((resolve,reject)=>{
+    if(window.Tesseract) return resolve();
+    const sc=document.createElement("script");
+    sc.src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    sc.onload=()=>resolve(); sc.onerror=()=>reject(new Error("The printed-text reader isn't downloaded yet — use this once with internet, then it works offline"));
+    document.head.appendChild(sc);
+  });
+}
+async function aiHandlePhoto(input){
+  const file=input.files && input.files[0];
+  input.value="";
+  if(!file) return;
+  aiUi.busy=true; aiUi.error=""; aiUi.busyMsg = (aiUi.mode==="print"||aiUi.mode==="box") ? "Reading printed text…" : ""; render();
+  try{
+    let text;
+    if(aiUi.mode==="print"||aiUi.mode==="box"){
+      await aiLoadTesseract();
+      const r=await window.Tesseract.recognize(file,"eng");
+      let lines=String((r&&r.data&&r.data.text)||"").split("\n").map(l=>l.trim()).filter(l=>l.length>2);
+      // Medicine boxes also carry batch/date/price/barcode lines — those are never part of the name.
+      if(aiUi.mode==="box") lines=lines.filter(l=>!/gtin|mfg|mfd|exp|b\.?\s*no|sr\.?\s*no|m\.?\s*r\.?\s*p|batch|\brs\b|licen|\bmrp\b|\d{9,}/i.test(l)).slice(0,6);
+      text=lines.join("\n");
+      if(!text) throw new Error("No printed text found — try a clearer, closer photo");
+    } else {
+      const image=await aiResizeImage(file,1600);
+      if(!navigator.onLine){ aiQueuePhoto(image); aiUi.busy=false; render(); return; }
+      try{ text=await aiReadImage(image); }
+      catch(e){ if(e instanceof TypeError){ aiQueuePhoto(image); aiUi.busy=false; render(); return; } throw e; }
+    }
+    aiUi.text=text; aiUi.busy=false;
+    aiUi.rows=aiParseText(text); if(!aiUi.rows.length) aiUi.rows=null;
+    // A scanned box carries no dose or days: default to 1 unit — the person can change it in the preview.
+    if(aiUi.mode==="box" && aiUi.rows) aiUi.rows.forEach(r=>{ if(!aiRowPills(r)) r.qty=1; });
+    render();
+  }catch(e){
+    aiUi.busy=false;
+    aiUi.error=(e&&e.name==="AbortError") ? "That took too long — check your internet and try again." : ("⚠ "+(e&&e.message?e.message:"Couldn't read the photo"));
+    render();
+  }
+}
+function renderAiModal(){
+  const root=document.getElementById("aiModalRoot");
+  if(!root) return;
+  if(!aiUi.open){ root.innerHTML=""; return; }
+  const err = aiUi.error ? `<p class="small" style="margin:0 0 10px;color:var(--danger);">${esc(aiUi.error)}</p>` : "";
+  let body;
+  if(aiUi.busy){
+    body = `<p class="small" style="margin:18px 0;text-align:center;color:var(--primary);">📖 ${aiUi.busyMsg||"Reading the handwriting…"}<br><span class="faint">this can take up to a minute</span></p>`;
+  } else if(!aiUi.rows){
+    const nQ=aiList(AI_QUEUE_KEY).length, nR=aiList(AI_READY_KEY).length;
+    const qInfo = (nR?`<button class="btn btn-success" style="width:100%;margin-bottom:8px;" onclick="aiLoadReady()">📄 Load ${nR} read photo${nR>1?"s":""}</button>`:"")
+      + (nQ?`<p class="small" style="margin:0 0 8px;color:var(--primary);">📥 ${nQ} photo${nQ>1?"s":""} waiting for internet</p>`:"");
+    body = `${err}${qInfo}
+      <p class="small faint" style="margin:0 0 6px;">One medicine per line. Understands things like:<br>
+      <em>Paracetamol 500 1-0-1 5 days</em><br><em>Azithromycin 500 1 tab OD x3 days</em><br><em>Cetirizine 10 tabs</em></p>
+      <textarea ${NOAC} rows="6" oninput="aiUi.text=this.value" placeholder="Type or paste here…" style="width:100%;margin-bottom:10px;">${esc(aiUi.text)}</textarea>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="aiReadText()">🔍 Read &amp; match</button>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('hand')">📷 Read handwriting from a photo</button>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('box')">📦 Scan a medicine box (normal + special, works offline)</button>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:12px;" onclick="aiPickPhoto('print')">🖨 Read printed text (works offline)</button>
+      <details ${aiUi.setupOpen?"open":""} ontoggle="aiUi.setupOpen=this.open">
+        <summary class="small" style="cursor:pointer;color:var(--primary);">⚙ Handwriting setup (free Gemini key)</summary>
+        <p class="small faint" style="margin:8px 0 6px;">Get a free key at aistudio.google.com → “Get API key”, then paste it here. It is saved on this phone only. Photos you read are sent to Google, and the free plan may use them to improve Google's models.</p>
+        <input ${NOAC} type="text" value="${esc(aiGeminiKey())}" oninput="localStorage.setItem(AI_GEMINI_KEY,this.value.trim())" placeholder="Gemini API key" style="margin-bottom:6px;">
+        <input ${NOAC} type="text" value="${esc(localStorage.getItem(AI_MODEL_KEY)||"")}" oninput="localStorage.setItem(AI_MODEL_KEY,this.value.trim())" placeholder="Model (leave empty for ${AI_DEFAULT_MODEL})">
+      </details>`;
+  } else {
+    const rows = aiUi.rows.map((r,i)=>{
+      const opts = r.cands.length
+        ? `<option value="">— skip this line —</option>` + r.cands.map(c=>`<option value="${esc(c.id)}" ${c.id===r.medId?"selected":""}>${esc(c.name)}${c.mg?" · "+esc(c.mg):""}${c.category?" · "+esc(c.category):""} (${c.stock} left)</option>`).join("")
+        : `<option value="">No match in inventory</option>`;
+      return `<div class="card" style="padding:10px;margin-bottom:8px;">
+        <div class="small faint" style="margin-bottom:6px;word-break:break-word;">“${esc(r.raw)}”</div>
+        <select onchange="aiRowMed(${i},this.value)" style="width:100%;margin-bottom:8px;">${opts}</select>
+        <div class="flex" style="gap:6px;">
+          <input ${NOAC} type="text" inputmode="decimal" value="${r.perDay||""}" oninput="aiRowSet(${i},'perDay',this.value)" placeholder="Per day">
+          <input ${NOAC} type="text" inputmode="numeric" value="${r.days||""}" oninput="aiRowSet(${i},'days',this.value)" placeholder="Days">
+          <input ${NOAC} type="text" inputmode="numeric" value="${r.qty||""}" oninput="aiRowSet(${i},'qty',this.value)" placeholder="Total">
+        </div>
+        <p id="aiInfo${i}" class="small" style="margin:6px 0 0;"></p>
+      </div>`;
+    }).join("");
+    body = `${err}<p class="small faint" style="margin:0 0 8px;">Check each line — fix the medicine or numbers if needed. “Total” is used only when Per day × Days is empty.</p>
+      ${rows}
+      <div class="flex" style="gap:8px;margin-top:4px;">
+        <button class="btn btn-outline flex1" onclick="aiUi.rows=null;render()">← Back</button>
+        <button id="aiAddBtn" class="btn btn-success flex1" onclick="aiConfirmAdd()">Add to bill</button>
+      </div>`;
+  }
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeQuickAdd()">
+      <div class="modal" style="max-height:88vh;overflow-y:auto;">
+        <div class="modal-head"><strong>✨ Quick add</strong><button class="modal-x" onclick="closeQuickAdd()">✕</button></div>
+        <div style="padding:14px 16px;">${body}</div>
+      </div>
+    </div>`;
+  if(aiUi.rows && !aiUi.busy) aiUi.rows.forEach((_,i)=>aiRowInfo(i));
+}
+
 function renderBackupModal(){
   const root = document.getElementById("backupModalRoot");
   if(!root) return;
@@ -6986,6 +7461,7 @@ Promise.resolve(window.__localStorageReady).then(function(){
   bill = newBillState();
   render();
   startCloudSync();
+  setTimeout(trySyncNow, 2500); // upload anything left unsynced from a previous session
   checkForAppUpdate();
 });
 
@@ -7052,13 +7528,31 @@ function showAppUpdateBanner(apkUrl){
     "padding:10px 14px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;"+
     "box-shadow:0 2px 6px rgba(0,0,0,.2);";
   b.innerHTML = '<span>A new app version is available.</span>'+
-    '<button type="button" onclick="downloadAppUpdate(\''+esc(apkUrl).replace(/'/g,"\\'")+'\')" '+
-    'style="background:#fff;color:#B4650A;font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Download update</button>'+
+    '<button type="button" onclick="uploadThenDownloadAppUpdate(\''+esc(apkUrl).replace(/'/g,"\\'")+'\', this)" '+
+    'style="background:#fff;color:#B4650A;font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Upload offline data then download new app</button>'+
     '<button type="button" aria-label="Dismiss" style="background:none;border:none;color:#fff;opacity:.8;font-size:16px;'+
     'cursor:pointer;padding:0 4px;line-height:1;" onclick="this.parentElement.remove()">✕</button>';
   document.body.appendChild(b);
 }
 
+// Installing a new APK is a real reinstall from Android's point of view, and someone could be
+// tapping this while offline work (a bill, a restock) hasn't reached the server yet — so this
+// always uploads first (reusing the exact same "Upload offline data" flow as the sync menu,
+// progress bar and toast included) and the download link only opens once that upload has
+// actually confirmed everything reached the server. If it couldn't (no connection, etc.),
+// manualPushToCloud()'s own toast already says so — the banner is left in place so they can
+// just tap the same button again once they're back online, rather than risking a reinstall
+// before today's bills/stock changes are actually saved anywhere but this device.
+async function uploadThenDownloadAppUpdate(apkUrl, btn){
+  const label = btn ? btn.textContent : null;
+  if(btn){ btn.disabled = true; btn.textContent = "Uploading…"; }
+  try{
+    await manualPushToCloud();
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+  }
+  if(syncStatus === "synced") downloadAppUpdate(apkUrl);
+}
 function downloadAppUpdate(apkUrl){
   try{
     if(typeof AppInventor !== "undefined" && typeof AppInventor.setWebViewString === "function"){
