@@ -294,7 +294,7 @@
 <body>
 <div id="app">
   <header>
-    <div class="header-info" style="padding-right:170px;">
+    <div class="header-info" style="padding-right:150px;">
       <h1>Counter Book</h1>
       <p class="header-sub">Dispensing &amp; billing</p>
       <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
@@ -304,14 +304,14 @@
       <div id="currentUserBadge" style="color:#fff;font-size:13px;margin-top:5px;line-height:1.5;"></div>
     </div>
     <div class="header-actions" style="position:absolute;right:16px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
-     <div style="display:flex;gap:8px;align-items:center;">
-      <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
-      <div style="position:relative;">
-        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
+     <div style="display:flex;gap:5px;align-items:flex-start;">
+      <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
+      <div style="position:relative;display:flex;">
+        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
         <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;"></div>
       </div>
      </div>
-     <button id="aiReadingBtn" onclick="openQuickAdd(false)" style="width:100%;background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">✨ AI reading</button>
+     <button id="aiReadingBtn" onclick="openQuickAdd(false)" style="width:100%;background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">✨ AI reading</button>
     </div>
     <div id="uploadProgressBar" class="hidden" style="width:100%;height:3px;background:rgba(255,255,255,.18);overflow:hidden;border-radius:2px;position:relative;">
       <div style="position:absolute;top:0;left:-30%;height:100%;width:30%;background:#fff;border-radius:2px;animation:uploadSlide 1.1s ease-in-out infinite;"></div>
