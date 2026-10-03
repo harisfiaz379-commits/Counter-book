@@ -340,7 +340,7 @@
 <div id="datePickerModalRoot"></div>
 <div id="addUserLoginModalRoot"></div>
 <div id="scanModalRoot"></div>
-<input type="file" id="aiPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="aiHandlePhoto(this)">
+
 <input type="file" id="scanPhotoInput" accept="image/*" capture="environment" style="display:none;" onchange="handleScanPhotoFile(this)">
 <div id="toast" class="hidden"></div>
 <input type="file" id="backupFileInput" accept="application/json" class="hidden" onchange="onBackupFileSelected(event)">
@@ -2776,7 +2776,7 @@ function renderBill(){
     <div class="card">
       <h3 class="mb2" style="font-size:14px;font-weight:700;">Add medicine</h3>
       <div class="flex" style="gap:8px;margin-bottom:10px;">
-        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(false)">✨ Quick add (type)</button>
+        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(false)">✨ Quick add</button>
         <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(true)">📷 Handwriting</button>
       </div>
       <div class="search-wrap">
@@ -3568,10 +3568,7 @@ function parseBoxText(text){
   return out;
 }
 function readBoxIntoNewMed(){
-  const input = document.createElement("input");
-  input.type = "file"; input.accept = "image/*"; input.setAttribute("capture","environment");
-  input.onchange = async ()=>{
-    const file = input.files && input.files[0]; if(!file) return;
+  takePhoto(async file=>{
     showToast("🖨 Reading the box…");
     try{
       await aiLoadTesseract();
@@ -3580,8 +3577,7 @@ function readBoxIntoNewMed(){
       if(!parsed.productName && !parsed.price && !parsed.gtin){ showToast("⚠ No usable text found — try a clearer, closer photo"); return; }
       applyScanToNewMedForm(parsed);
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
-  };
-  input.click();
+  });
 }
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
@@ -7240,8 +7236,7 @@ function aiConfirmAdd(){
 function aiPickPhoto(mode){
   aiUi.mode = (mode==="print"||mode==="box") ? mode : "hand";
   if(aiUi.mode==="hand" && !aiGeminiKey()){ aiUi.error="Handwriting needs a one-time setup — open “Handwriting setup” below and paste your free Gemini key."; aiUi.setupOpen=true; render(); return; }
-  const input=document.getElementById("aiPhotoInput");
-  if(input) input.click();
+  takePhoto(file=>aiHandleFile(file));
 }
 function aiResizeImage(file, maxSide){
   return new Promise((resolve,reject)=>{
@@ -7322,9 +7317,35 @@ function aiLoadTesseract(){
     document.head.appendChild(sc);
   });
 }
-async function aiHandlePhoto(input){
-  const file=input.files && input.files[0];
-  input.value="";
+// Camera capture inside the page (same getUserMedia route as the barcode scanner). The app's
+// WebView doesn't open the phone's file chooser, so <input type="file"> buttons did nothing.
+async function takePhoto(cb){
+  let stream;
+  showToast("📷 Opening camera…"); // if you never see this, the old index.html is still live on GitHub
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error("This app's web view has no camera support"),{name:"NoCameraApi"});
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}});
+  }catch(e){
+    if(window.AppInventor && typeof window.AppInventor.setWebViewString==="function") window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
+    showToast("📷 Camera error ("+(e&&e.name?e.name:"unknown")+") — allow the camera, then tap again"); return;
+  }
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column;";
+  ov.innerHTML='<video id="tpVideo" autoplay playsinline muted style="flex:1;min-height:0;width:100%;object-fit:contain;"></video>'
+    +'<div style="display:flex;gap:10px;padding:14px;background:#111;"><button id="tpCancel" style="flex:1;padding:14px;border:none;border-radius:10px;background:#333;color:#fff;font-size:15px;">Cancel</button>'
+    +'<button id="tpShot" style="flex:2;padding:14px;border:none;border-radius:10px;background:#0f766e;color:#fff;font-size:15px;font-weight:700;">📸 Capture</button></div>';
+  document.body.appendChild(ov);
+  const v=ov.querySelector("#tpVideo"); v.srcObject=stream; v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}),300);
+  const close=()=>{ stream.getTracks().forEach(t=>t.stop()); ov.remove(); };
+  ov.querySelector("#tpCancel").onclick=close;
+  ov.querySelector("#tpShot").onclick=()=>{
+    if(!v.videoWidth){ showToast("Camera not ready yet — wait a second"); return; }
+    const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight;
+    c.getContext("2d").drawImage(v,0,0);
+    c.toBlob(b=>{ close(); if(b) cb(new File([b],"photo.jpg",{type:"image/jpeg"})); },"image/jpeg",0.92);
+  };
+}
+async function aiHandleFile(file){
   if(!file) return;
   aiUi.busy=true; aiUi.error=""; aiUi.busyMsg = (aiUi.mode==="print"||aiUi.mode==="box") ? "Reading printed text…" : ""; render();
   try{
@@ -7367,10 +7388,6 @@ function renderAiModal(){
     const qInfo = (nR?`<button class="btn btn-success" style="width:100%;margin-bottom:8px;" onclick="aiLoadReady()">📄 Load ${nR} read photo${nR>1?"s":""}</button>`:"")
       + (nQ?`<p class="small" style="margin:0 0 8px;color:var(--primary);">📥 ${nQ} photo${nQ>1?"s":""} waiting for internet</p>`:"");
     body = `${err}${qInfo}
-      <p class="small faint" style="margin:0 0 6px;">One medicine per line. Understands things like:<br>
-      <em>Paracetamol 500 1-0-1 5 days</em><br><em>Azithromycin 500 1 tab OD x3 days</em><br><em>Cetirizine 10 tabs</em></p>
-      <textarea ${NOAC} rows="6" oninput="aiUi.text=this.value" placeholder="Type or paste here…" style="width:100%;margin-bottom:10px;">${esc(aiUi.text)}</textarea>
-      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="aiReadText()">🔍 Read &amp; match</button>
       <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('hand')">📷 Read handwriting from a photo</button>
       <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('box')">📦 Scan a medicine box (normal + special, works offline)</button>
       <button class="btn btn-outline" style="width:100%;margin-bottom:12px;" onclick="aiPickPhoto('print')">🖨 Read printed text (works offline)</button>
