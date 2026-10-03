@@ -303,12 +303,15 @@
       </div>
       <div id="currentUserBadge" style="color:#fff;font-size:13px;margin-top:5px;line-height:1.5;"></div>
     </div>
-    <div class="header-actions" style="position:absolute;right:16px;display:flex;gap:8px;align-items:center;">
+    <div class="header-actions" style="position:absolute;right:16px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+     <div style="display:flex;gap:8px;align-items:center;">
       <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
       <div style="position:relative;">
         <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
         <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;"></div>
       </div>
+     </div>
+     <button id="aiReadingBtn" onclick="openQuickAdd(false)" style="width:100%;background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;">✨ AI reading</button>
     </div>
     <div id="uploadProgressBar" class="hidden" style="width:100%;height:3px;background:rgba(255,255,255,.18);overflow:hidden;border-radius:2px;position:relative;">
       <div style="position:absolute;top:0;left:-30%;height:100%;width:30%;background:#fff;border-radius:2px;animation:uploadSlide 1.1s ease-in-out infinite;"></div>
@@ -2775,10 +2778,6 @@ function renderBill(){
 
     <div class="card">
       <h3 class="mb2" style="font-size:14px;font-weight:700;">Add medicine</h3>
-      <div class="flex" style="gap:8px;margin-bottom:10px;">
-        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(false)">✨ Quick add</button>
-        <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openQuickAdd(true)">📷 Handwriting</button>
-      </div>
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
         <input ${NOAC} id="billQueryInput" value="${esc(selMed?selMed.name:bill.query)}" oninput="onBillQuery(this.value)" placeholder="Search medicine…">
@@ -3567,6 +3566,14 @@ function parseBoxText(text){
   if(line) out.productName = line;
   return out;
 }
+// "Add M.Picture" (in the AI reading menu): opens a blank New medicine form on the Inventory tab
+// and fills it from a photo of the box. Works offline once the printed-text reader is downloaded.
+function aiAddMedPicture(){
+  aiUi.open=false;
+  if(tab!=="inventory") setTab("inventory"); else render();
+  if(!inv.showForm) toggleInvForm();
+  setTimeout(readBoxIntoNewMed, 350);
+}
 function readBoxIntoNewMed(){
   takePhoto(async file=>{
     showToast("🖨 Reading the box…");
@@ -4318,7 +4325,6 @@ function renderInvFormModal(){
             <div class="flex gap2">
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
-              <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="readBoxIntoNewMed()">🖨 Read box text</button>
             </div>
             <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
@@ -7205,8 +7211,10 @@ function aiParseText(text){
   const pm = text.match(/^\s*patient\s*:\s*(.+)$/im);
   if(pm && pm[1].trim() && !String(bill.patient||"").trim()) bill.patient = pm[1].trim().replace(/\s+/g," ").slice(0,60);
   const dm = text.match(/^\s*days\s*:\s*(\d+)/im);
+  const dt = text.match(/^\s*days_text\s*:\s*(.+)$/im);
+  aiUi.daysNote = dm ? (dm[1]+" days"+(dt?" (read as “"+dt[1].trim()+"”)":"")) : "";
   const defaultDays = dm ? +dm[1] : 0;
-  return text.split(/\n|;/).map(l=>l.trim()).filter(l=>l.length>1 && !/^(patient|days)\s*:/i.test(l)).map(l=>{
+  return text.split(/\n|;/).map(l=>l.trim()).filter(l=>l.length>1 && !/^(patient|days|days_text)\s*:/i.test(l)).map(l=>{
     const r = aiParseLine(l);
     if(defaultDays && !r.days && !r.qty) r.days = defaultDays; // total days written once for the whole prescription
     const cands = aiFindMeds(r.tokens);
@@ -7230,6 +7238,13 @@ function aiReadText(){
   const rows = aiParseText(aiUi.text);
   if(!rows.length){ aiUi.error="Type or paste at least one medicine first."; render(); return; }
   aiUi.error=""; aiUi.rows=rows; render();
+}
+function aiSetAllDays(){
+  const el=document.getElementById("aiAllDays"), d=Math.max(0,Math.floor(Number(el&&el.value)||0));
+  if(!d || !aiUi.rows) return;
+  aiUi.rows.forEach(r=>{ r.days=d; });
+  aiUi.daysNote=d+" days (set by you)";
+  render();
 }
 function aiRowMed(i,id){ aiUi.rows[i].medId=id; aiRowInfo(i); }
 function aiRowSet(i,field,v){ aiUi.rows[i][field]=Number(v)||0; aiRowInfo(i); }
@@ -7265,7 +7280,7 @@ function aiConfirmAdd(){
   });
   if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee();
   aiUi.open=false; aiUi.rows=null; aiUi.text="";
-  render();
+  if(added && typeof tab!=="undefined" && tab!=="bill") setTab("bill"); else render();
   showToast(added ? `✓ ${added} medicine${added>1?"s":""} added — check them below` : "Nothing was added");
 }
 // ---- handwriting: photo -> your AI endpoint -> typed text ----
@@ -7300,27 +7315,38 @@ async function aiReadImage(image){
   const custom=(localStorage.getItem(AI_MODEL_KEY)||"").trim();
   const candidates=[custom,remembered,AI_DEFAULT_MODEL,"gemini-flash-latest","gemini-3-flash-preview","gemini-3.1-flash-lite-preview"]
     .filter((m,i,arr)=>m && arr.indexOf(m)===i);
-  const prompt="You are reading a handwritten medical prescription photo (it may mix English and Urdu). Output plain text only, in this exact layout:\nPATIENT: <patient name if written, else leave this line out>\nDAYS: <total number of days if a duration is written anywhere on the page, including the margins (Urdu like ایک ہفتہ=1 week=7, دو ہفتے=14, پندرہ دن=15, ایک مہینہ=30); convert to days; leave out if none>\nthen ONE line per medicine: the name exactly as written, strength if written, then the dose pattern as digits like 1-0-1 (morning-noon-night). Convert Urdu/Arabic digits ۰۱۲۳۴۵۶۷۸۹ to 0-9, and write patterns written with + , or . as 1-0-1. If a medicine has its own number of days, add it as 5 days after the pattern. Do not include timing words (before/after meals), headings, doctor details or commentary. If a word is unclear, give your best guess."+aiPromptExtras();
+  const prompt="You are reading a handwritten medical prescription photo (it may mix English and Urdu). Output plain text only, in this exact layout:\nPATIENT: <patient name if written, else leave this line out>\nDAYS: <total number of days if a duration is written anywhere on the page, usually in the left margin and often circled; a digit next to دن means that many days (e.g. 7دن = 7); weeks: ایک ہفتہ=7, دو ہفتے=14; only use 30 if a month is clearly written; leave this line out if unsure>\nDAYS_TEXT: <copy exactly what the duration note looks like, e.g. 7دن>\nthen ONE line per medicine: the name exactly as written, strength if written, then the dose pattern as digits like 1-0-1 (morning-noon-night). Convert Urdu/Arabic digits ۰۱۲۳۴۵۶۷۸۹ to 0-9, and write patterns written with + , or . as 1-0-1. If a medicine has its own number of days, add it as 5 days after the pattern. Do not include timing words (before/after meals), headings, doctor details or commentary. If a word is unclear, give your best guess."+aiPromptExtras();
   const statuses=[];
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  let tries=0;
   for(const model of candidates){
-    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),60000);
-    let res;
-    try{
-      res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
-        {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
-         body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
-    } finally{ clearTimeout(timer); }
-    if(res.ok){
-      const data=await res.json();
-      const parts=(data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
-      const text=parts.map(x=>x.text||"").join("\n").trim();
-      if(!text) throw new Error("Nothing readable came back — try a clearer, closer photo");
-      try{ localStorage.setItem("clinic_gemini_ok_model",model); }catch(e){}
-      return text;
+    for(let attempt=0; attempt<2; attempt++){
+      if(++tries>6) break;
+      const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),45000);
+      let res=null;
+      try{
+        res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
+          {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
+           body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
+      }catch(e){
+        if(e && e.name==="AbortError"){ statuses.push("slow"); continue; }   // too slow: try again / next model
+        throw e;                                                             // real network failure -> photo gets queued
+      } finally{ clearTimeout(timer); }
+      if(res.ok){
+        const data=await res.json();
+        const parts=(data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
+        const text=parts.map(x=>x.text||"").join("\n").trim();
+        if(!text) throw new Error("Nothing readable came back — try a clearer, closer photo");
+        try{ localStorage.setItem("clinic_gemini_ok_model",model); }catch(e){}
+        return text;
+      }
+      statuses.push(res.status);
+      if([500,502,503,504].includes(res.status)){ await wait(1500*(attempt+1)); continue; } // Google busy: retry, then next model
+      if(![400,403,404,429].includes(res.status)) throw new Error("The reader answered with an error ("+res.status+")");
+      break; // this model isn't usable for the key — next model
     }
-    statuses.push(res.status);
-    if(![400,403,404,429].includes(res.status)) throw new Error("The reader answered with an error ("+res.status+")");
   }
+  if(statuses.some(x=>[500,502,503,504].includes(x)||x==="slow")) throw new Error("Google's reader is busy or slow right now — wait a minute and try again (the app already retried)");
   if(statuses.includes(429)) throw new Error("Free limit reached for now — try again a little later");
   if(statuses.every(x=>x===400)) throw new Error("Google didn't accept the key — check “Handwriting setup”");
   throw new Error("None of the Gemini models I tried is available to your free key right now ("+statuses.join(", ")+")");
@@ -7439,6 +7465,7 @@ function renderAiModal(){
     body = `${err}${qInfo}
       <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('hand')">📷 Read handwriting from a photo</button>
       <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('box')">📦 Scan a medicine box (normal + special, works offline)</button>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiAddMedPicture()">🖼 Add M.Picture (new medicine from a box photo)</button>
       <button class="btn btn-outline" style="width:100%;margin-bottom:12px;" onclick="aiPickPhoto('print')">🖨 Read printed text (works offline)</button>
       <details ${aiUi.setupOpen?"open":""} ontoggle="aiUi.setupOpen=this.open">
         <summary class="small" style="cursor:pointer;color:var(--primary);">⚙ Handwriting setup (free Gemini key)</summary>
@@ -7466,6 +7493,10 @@ function renderAiModal(){
       </div>`;
     }).join("");
     body = `${err}<p class="small faint" style="margin:0 0 8px;">Check each line — fix the medicine or numbers if needed. “Total” is used only when Per day × Days is empty.</p>
+      <div class="card" style="padding:10px;margin-bottom:8px;">
+        <div class="small faint" style="margin-bottom:6px;">${aiUi.daysNote?"Days found on the page: <strong>"+esc(aiUi.daysNote)+"</strong>":"No total days found on the page."} Wrong? Set it for all lines:</div>
+        <div class="flex" style="gap:8px;"><input id="aiAllDays" ${NOAC} type="number" inputmode="numeric" placeholder="Days for all lines" style="flex:1;"><button class="btn btn-outline" style="width:auto;padding:8px 14px;" onclick="aiSetAllDays()">Apply</button></div>
+      </div>
       ${rows}
       <div class="flex" style="gap:8px;margin-top:4px;">
         <button class="btn btn-outline flex1" onclick="aiUi.rows=null;render()">← Back</button>
