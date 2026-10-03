@@ -7149,31 +7149,66 @@ function aiParseLine(line){
   const tokens = s.replace(/[,;:()]/g," ").split(/\s+/).map(t=>t.replace(/^\.+|\.+$/g,"")).filter(t=>t && !AI_FORM_WORDS.test(t) && (t.length>1 || /\d/.test(t)));
   return { raw:String(line).trim(), perDay, days, qty, dose, assumed, tokens };
 }
+const AI_LEARN_KEY="clinic_ai_learned";
+const aiNz = x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+function aiLearned(){
+  try{ const v=JSON.parse(localStorage.getItem(AI_LEARN_KEY)||"{}"); return {map:v.map||{}, examples:Array.isArray(v.examples)?v.examples:[]}; }
+  catch(e){ return {map:{},examples:[]}; }
+}
+// Gemini itself can't be re-trained from here, so the app keeps its own memory: every time you pick a
+// different medicine than the one suggested, "what was read" -> "real medicine" is saved and used
+// (1) to pre-select that medicine next time and (2) as examples inside the prompt sent to Gemini.
+function aiLearn(r, med){
+  const words=(r.tokens||[]).filter(t=>!/^\d+(\.\d+)?$/.test(t)), key=aiNz(words[0]);
+  if(!key || !med) return;
+  const L=aiLearned(); L.map[key]=med.id;
+  L.examples=[{k:key,read:words[0],name:med.name}].concat(L.examples.filter(e=>e.k!==key)).slice(0,30);
+  try{ localStorage.setItem(AI_LEARN_KEY,JSON.stringify(L)); }catch(e){}
+}
+function aiPromptExtras(){
+  const names=[...new Set(inventory.filter(m=>!m.deleted).map(m=>String(m.name||"").trim()).filter(Boolean))].slice(0,400).map(n=>n.slice(0,40)).join("; ");
+  const ex=aiLearned().examples.slice(0,20).map(e=>'"'+e.read+'" = '+e.name).join("; ");
+  return (names?"\nThe clinic stocks these medicines: "+names+". If a handwritten name looks like one of them, write the stocked name exactly; otherwise write it as seen.":"")
+       + (ex?"\nCorrections made earlier by the pharmacist (what the handwriting looked like = the real medicine): "+ex+".":"");
+}
 function aiFindMeds(tokens){
   if(!tokens.length) return [];
   const q = tokens.join(" ");
   const nums = tokens.filter(t=>/^\d+(\.\d+)?$/.test(t));
   const words = tokens.filter(t=>!/^\d+(\.\d+)?$/.test(t));
-  const out = [];
+  const out = [], loose = [];
   inventory.filter(m=>!m.deleted).forEach(m=>{
     let score = 0;
     if(medicineMatchesQuery(m,q)) score = 1;
     else if(words.length){
-      const first = (m.name||"").toLowerCase().replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean)[0];
-      const sim = aiSim(words[0], first);       // forgiving of handwriting misreads ("paracetmol")
-      if(sim>=0.72) score = 0.6 + sim*0.3;
+      const nz = x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+      const nm = nz(m.name), first = nz((m.name||"").split(/[\s-]+/)[0]);
+      const w1 = nz(words[0]), w2 = nz(words.slice(0,2).join(""));
+      const sim = Math.max(aiSim(w1,nm), aiSim(w1,first), aiSim(w2,nm)); // ignores hyphens/spaces; forgives handwriting misreads
+      if(sim>=0.72) score = 0.6 + sim*0.3; else if(sim>0) loose.push({m, score:sim*0.5});
     }
     if(!score) return;
     if(nums.length && extractNumbers(m.mg).some(n=>nums.includes(n))) score += 0.05;
     if(words.length && (m.name||"").toLowerCase().startsWith(words[0])) score += 0.05;
     out.push({m, score});
   });
+  // never "no match": top up with the closest-looking medicines even when they're weak matches
+  if(out.length<3) loose.sort((a,b)=>b.score-a.score).slice(0,5).forEach(x=>{ if(!out.some(o=>o.m.id===x.m.id)) out.push(x); });
   out.sort((a,b)=>b.score-a.score || (b.m.stockPills||0)-(a.m.stockPills||0));
-  return out.slice(0,6).map(x=>x.m);
+  const list = out.slice(0,8).map(x=>x.m);
+  const lid = aiLearned().map[aiNz(words[0])], lm = lid && inventory.find(x=>x.id===lid && !x.deleted);
+  if(lm) return [lm].concat(list.filter(x=>x.id!==lm.id)).slice(0,8);
+  return list;
 }
 function aiParseText(text){
-  return String(text||"").split(/\n|;/).map(l=>l.trim()).filter(l=>l.length>1).map(l=>{
+  text = String(text||"");
+  const pm = text.match(/^\s*patient\s*:\s*(.+)$/im);
+  if(pm && pm[1].trim() && !String(bill.patient||"").trim()) bill.patient = pm[1].trim().replace(/\s+/g," ").slice(0,60);
+  const dm = text.match(/^\s*days\s*:\s*(\d+)/im);
+  const defaultDays = dm ? +dm[1] : 0;
+  return text.split(/\n|;/).map(l=>l.trim()).filter(l=>l.length>1 && !/^(patient|days)\s*:/i.test(l)).map(l=>{
     const r = aiParseLine(l);
+    if(defaultDays && !r.days && !r.qty) r.days = defaultDays; // total days written once for the whole prescription
     const cands = aiFindMeds(r.tokens);
     r.cands = cands.map(m=>({id:m.id, name:m.name, mg:m.mg||"", category:m.category||m.specialCategory||"", stock:m.stockPills||0}));
     r.medId = cands.length ? cands[0].id : "";
@@ -7215,6 +7250,7 @@ function aiConfirmAdd(){
   let added=0;
   (aiUi.rows||[]).forEach(r=>{
     const med=inventory.find(x=>x.id===r.medId && !x.deleted), pills=aiRowPills(r);
+    if(med && r.medId!==((r.cands&&r.cands[0])?r.cands[0].id:"")) aiLearn(r, med);
     if(!med || !(pills>0)) return;
     const pricePerPill=nextBatchUnitPrice(med), byDose=r.perDay>0 && r.days>0;
     if(med.specialCategory){
@@ -7264,7 +7300,7 @@ async function aiReadImage(image){
   const custom=(localStorage.getItem(AI_MODEL_KEY)||"").trim();
   const candidates=[custom,remembered,AI_DEFAULT_MODEL,"gemini-flash-latest","gemini-3-flash-preview","gemini-3.1-flash-lite-preview"]
     .filter((m,i,arr)=>m && arr.indexOf(m)===i);
-  const prompt="Transcribe the handwritten medicine list/prescription in this photo. Output ONLY the medicines, one per line, exactly as written: name, strength, dose pattern (e.g. 1-0-1, OD, BD) and days or quantity if shown. No headings, no commentary. If a word is unclear, give your best guess.";
+  const prompt="You are reading a handwritten medical prescription photo (it may mix English and Urdu). Output plain text only, in this exact layout:\nPATIENT: <patient name if written, else leave this line out>\nDAYS: <total number of days if a duration is written anywhere on the page, including the margins (Urdu like ایک ہفتہ=1 week=7, دو ہفتے=14, پندرہ دن=15, ایک مہینہ=30); convert to days; leave out if none>\nthen ONE line per medicine: the name exactly as written, strength if written, then the dose pattern as digits like 1-0-1 (morning-noon-night). Convert Urdu/Arabic digits ۰۱۲۳۴۵۶۷۸۹ to 0-9, and write patterns written with + , or . as 1-0-1. If a medicine has its own number of days, add it as 5 days after the pattern. Do not include timing words (before/after meals), headings, doctor details or commentary. If a word is unclear, give your best guess."+aiPromptExtras();
   const statuses=[];
   for(const model of candidates){
     const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),60000);
@@ -7412,9 +7448,12 @@ function renderAiModal(){
       </details>`;
   } else {
     const rows = aiUi.rows.map((r,i)=>{
-      const opts = r.cands.length
-        ? `<option value="">— skip this line —</option>` + r.cands.map(c=>`<option value="${esc(c.id)}" ${c.id===r.medId?"selected":""}>${esc(c.name)}${c.mg?" · "+esc(c.mg):""}${c.category?" · "+esc(c.category):""} (${c.stock} left)</option>`).join("")
-        : `<option value="">No match in inventory</option>`;
+      const ids=new Set(r.cands.map(c=>c.id));
+      const opt=(id,name,mg,cat,stock)=>`<option value="${esc(id)}" ${id===r.medId?"selected":""}>${esc(name)}${mg?" · "+esc(mg):""}${cat?" · "+esc(cat):""} (${stock} left)</option>`;
+      const rest=inventory.filter(m=>!m.deleted && !ids.has(m.id)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
+      const opts = `<option value="">— skip this line —</option>`
+        + (r.cands.length?`<optgroup label="Closest matches">`+r.cands.map(c=>opt(c.id,c.name,c.mg,c.category,c.stock)).join("")+`</optgroup>`:"")
+        + (rest.length?`<optgroup label="Wrong? Pick the right one — the app remembers">`+rest.map(m=>opt(m.id,m.name,m.mg,m.category||m.specialCategory||"",m.stockPills||0)).join("")+`</optgroup>`:"");
       return `<div class="card" style="padding:10px;margin-bottom:8px;">
         <div class="small faint" style="margin-bottom:6px;word-break:break-word;">“${esc(r.raw)}”</div>
         <select onchange="aiRowMed(${i},this.value)" style="width:100%;margin-bottom:8px;">${opts}</select>
