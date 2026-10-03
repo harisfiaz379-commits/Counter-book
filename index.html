@@ -287,6 +287,14 @@
      at all, unconditionally, regardless of the device's own auto-rotate toggle). That requires
      rebuilding and reinstalling the app — a Designer change alone doesn't retroactively fix an
      already-installed APK. */
+  @keyframes aispin{to{transform:rotate(360deg);}}
+  .ai-spin{width:38px;height:38px;border:4px solid #cfe3df;border-top-color:var(--primary);border-radius:50%;animation:aispin .8s linear infinite;margin:0 auto 12px;}
+  .ai-pickbtn,.ai-pitem{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:#fff;color:inherit;cursor:pointer;margin-bottom:8px;}
+  .ai-pitem{border:none;border-bottom:1px solid var(--border);border-radius:0;margin:0;padding:11px 4px;}
+  .ai-pickbtn .ai-pn,.ai-pitem b{font-size:14px;font-weight:700;}
+  .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
+  .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
+  .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -3574,14 +3582,49 @@ function aiAddMedPicture(){
   if(!inv.showForm) toggleInvForm();
   setTimeout(readBoxIntoNewMed, 350);
 }
+const AI_BOX_PROMPT='This is a photo of a medicine box or strip (it may be blurry or angled). Read the printed text and reply with ONLY one JSON object: {"name":"brand name only, e.g. Provate-S","form":"dosage form in English, e.g. Tablet, Syrup, Ointment, Cream, Lotion, Injection","formula":"active ingredients if printed","strength":"pack size and/or strength as printed, e.g. 15 gram or 500 mg","mrp":number or null,"perBox":"units per box if printed, number or null","gtin":"digits or null"}. Use null for anything not clearly visible. No other text.';
+function aiApplyBoxInfo(info){
+  const f=inv.form, filled=[], blank=k=>!String(f[k]||"").trim();
+  if(info.name && blank("name")){ f.name=String(info.name).trim(); filled.push("name"); }
+  if(info.form && !f.category && !f.specialCategory){
+    let cat=MED_CATEGORIES.find(c=>c.toLowerCase()===String(info.form).trim().toLowerCase());
+    if(!cat && can("manageCategories")){ cat=String(info.form).trim(); MED_CATEGORIES.push(cat); saveMedCategoriesStorage(); touchCategories(); }
+    if(cat){ f.category=cat; filled.push("category"); }
+  }
+  if(info.formula && blank("formula")){ f.formula=String(info.formula).trim(); filled.push("formula"); }
+  if(info.strength && blank("mg")){ f.mg=String(info.strength).trim().replace(/\b(\d+(?:\.\d+)?)\s*(?:g|gm)\b/i,"$1 gram"); filled.push("strength"); }
+  if(info.mrp && blank("mrp") && Number(info.mrp)>0){ f.mrp=String(Number(info.mrp)); filled.push("MRP"); }
+  if(info.perBox && blank("pillsPerBox") && Number(info.perBox)>0){ f.pillsPerBox=String(Number(info.perBox)); filled.push("per box"); }
+  showToast(filled.length?("✓ "+filled.join(", ")+" filled — check, then tap 🖼 Add M.Picture again for the other side if something is missing"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
+  render();
+}
+async function aiOcrCanvas(file){ // bigger + grayscale + more contrast helps Tesseract on phone photos
+  const bmp=await createImageBitmap(file), sc=Math.min(2200/bmp.width,2);
+  const c=document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
+  const x=c.getContext("2d"); x.drawImage(bmp,0,0,c.width,c.height);
+  const d=x.getImageData(0,0,c.width,c.height), a=d.data;
+  for(let i=0;i<a.length;i+=4){ let v=0.3*a[i]+0.59*a[i+1]+0.11*a[i+2]; v=Math.max(0,Math.min(255,(v-128)*1.5+128)); a[i]=a[i+1]=a[i+2]=v; }
+  x.putImageData(d,0,0); return c;
+}
 function readBoxIntoNewMed(){
   takePhoto(async file=>{
-    showToast("🖨 Reading the box…");
+    showToast("🖼 Reading the box…");
     try{
+      if(aiGeminiKey() && navigator.onLine){
+        try{
+          const txt=await aiReadImage(await aiResizeImage(file,1600), AI_BOX_PROMPT);
+          const m=txt.match(/\{[\s\S]*\}/); if(!m) throw new Error("no json");
+          aiApplyBoxInfo(JSON.parse(m[0])); return;
+        }catch(e){ showToast("Online reader failed — using the offline reader"); }
+      }
       await aiLoadTesseract();
-      const r = await window.Tesseract.recognize(file,"eng");
-      const parsed = parseBoxText(r && r.data && r.data.text);
-      if(!parsed.productName && !parsed.price && !parsed.gtin){ showToast("⚠ No usable text found — try a clearer, closer photo"); return; }
+      const r=await window.Tesseract.recognize(await aiOcrCanvas(file),"eng");
+      const parsed=parseBoxText(r&&r.data&&r.data.text);
+      // the brand name is the biggest clearly-read text on the box
+      const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>55 && /[A-Za-z]{3}/.test(l.text) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
+        .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
+      if(big) parsed.productName=big.text.replace(/\s+/g," ").trim();
+      if(!parsed.productName && !parsed.price && !parsed.gtin){ showToast("⚠ Too blurry to read — hold steady, closer, box flat and well lit"); return; }
       applyScanToNewMedForm(parsed);
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
   });
@@ -7229,6 +7272,7 @@ function aiRowPills(r){
 }
 function openQuickAdd(photo){
   aiProcessQueue();
+  aiUi.pick=null;
   aiUi.open=true; aiUi.rows=null; aiUi.error=""; aiUi.busy=false;
   render();
   if(photo) aiPickPhoto("hand");
@@ -7239,6 +7283,30 @@ function aiReadText(){
   if(!rows.length){ aiUi.error="Type or paste at least one medicine first."; render(); return; }
   aiUi.error=""; aiUi.rows=rows; render();
 }
+function aiMedDetail(m){ return [m.mg,m.category||m.specialCategory].filter(Boolean).join(" · "); }
+function aiPickItemHtml(i,m){
+  const n=m.stockPills||0;
+  return `<button type="button" class="ai-pitem" onclick="aiChoose(${i},'${m.id}')"><span style="flex:1;min-width:0;"><b>${esc(m.name)}</b><br><span class="small faint">${esc(aiMedDetail(m))}</span></span><span class="ai-badge ${n>0?"":"zero"}">${n} left</span></button>`;
+}
+function aiPickListHtml(i,q){
+  const r=aiUi.rows[i], live=inventory.filter(m=>!m.deleted);
+  let h=`<button type="button" class="ai-pitem" onclick="aiChoose(${i},'')"><span style="flex:1;color:var(--faint);">— Skip this line —</span></button>`;
+  const nq=aiNz(q);
+  if(nq){
+    const hits=live.filter(m=>aiNz(m.name+" "+(m.formula||"")).includes(nq)).sort((a,b)=>String(a.name).localeCompare(String(b.name))).slice(0,50);
+    return h+(hits.length?hits.map(m=>aiPickItemHtml(i,m)).join(""):`<p class="small faint" style="padding:12px 4px;">Nothing matches “${esc(q)}”.</p>`);
+  }
+  const ids=new Set(), close=(r.cands||[]).map(c=>live.find(m=>m.id===c.id)).filter(Boolean);
+  close.forEach(m=>ids.add(m.id));
+  if(close.length) h+=`<div class="ai-sec">Closest matches</div>`+close.map(m=>aiPickItemHtml(i,m)).join("");
+  const rest=live.filter(m=>!ids.has(m.id)).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  h+=`<div class="ai-sec">All medicines — type above to search</div>`+rest.slice(0,40).map(m=>aiPickItemHtml(i,m)).join("");
+  if(rest.length>40) h+=`<p class="small faint" style="padding:8px 4px;">+${rest.length-40} more — use the search box.</p>`;
+  return h;
+}
+function aiOpenPick(i){ aiUi.pick={i}; render(); }
+function aiPickSearch(v){ const el=document.getElementById("aiPickList"); if(el && aiUi.pick) el.innerHTML=aiPickListHtml(aiUi.pick.i,v); }
+function aiChoose(i,id){ aiRowMed(i,id); aiUi.pick=null; render(); }
 function aiSetAllDays(){
   const el=document.getElementById("aiAllDays"), d=Math.max(0,Math.floor(Number(el&&el.value)||0));
   if(!d || !aiUi.rows) return;
@@ -7308,14 +7376,14 @@ const AI_QUEUE_KEY="clinic_ai_queue", AI_READY_KEY="clinic_ai_ready";
 let aiQueueBusy=false;
 function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(k)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
 function aiSetList(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } }
-async function aiReadImage(image){
+async function aiReadImage(image, customPrompt){
   // Google retires Gemini models often (gemini-2.5-flash now answers 404), so try a short list of
   // current Flash models in turn and remember the one that works. A model typed in the setup box goes first.
   const remembered=(localStorage.getItem("clinic_gemini_ok_model")||"").trim();
   const custom=(localStorage.getItem(AI_MODEL_KEY)||"").trim();
   const candidates=[custom,remembered,AI_DEFAULT_MODEL,"gemini-flash-latest","gemini-3-flash-preview","gemini-3.1-flash-lite-preview"]
     .filter((m,i,arr)=>m && arr.indexOf(m)===i);
-  const prompt="You are reading a handwritten medical prescription photo (it may mix English and Urdu). Output plain text only, in this exact layout:\nPATIENT: <patient name if written, else leave this line out>\nDAYS: <total number of days if a duration is written anywhere on the page, usually in the left margin and often circled; a digit next to دن means that many days (e.g. 7دن = 7); weeks: ایک ہفتہ=7, دو ہفتے=14; only use 30 if a month is clearly written; leave this line out if unsure>\nDAYS_TEXT: <copy exactly what the duration note looks like, e.g. 7دن>\nthen ONE line per medicine: the name exactly as written, strength if written, then the dose pattern as digits like 1-0-1 (morning-noon-night). Convert Urdu/Arabic digits ۰۱۲۳۴۵۶۷۸۹ to 0-9, and write patterns written with + , or . as 1-0-1. If a medicine has its own number of days, add it as 5 days after the pattern. Do not include timing words (before/after meals), headings, doctor details or commentary. If a word is unclear, give your best guess."+aiPromptExtras();
+  const prompt=customPrompt||"You are reading a handwritten medical prescription photo (it may mix English and Urdu). Output plain text only, in this exact layout:\nPATIENT: <patient name if written, else leave this line out>\nDAYS: <total number of days if a duration is written anywhere on the page, usually in the left margin and often circled; a digit next to دن means that many days (e.g. 7دن = 7); weeks: ایک ہفتہ=7, دو ہفتے=14; only use 30 if a month is clearly written; leave this line out if unsure>\nDAYS_TEXT: <copy exactly what the duration note looks like, e.g. 7دن>\nthen ONE line per medicine: the name exactly as written, strength if written, then the dose pattern as digits like 1-0-1 (morning-noon-night). Convert Urdu/Arabic digits ۰۱۲۳۴۵۶۷۸۹ to 0-9, and write patterns written with + , or . as 1-0-1. If a medicine has its own number of days, add it as 5 days after the pattern. Do not include timing words (before/after meals), headings, doctor details or commentary. If a word is unclear, give your best guess."+aiPromptExtras();
   const statuses=[];
   const wait=ms=>new Promise(r=>setTimeout(r,ms));
   let tries=0;
@@ -7383,6 +7451,17 @@ function aiLoadReady(){
 window.addEventListener("online",()=>{ aiProcessQueue(); });
 setTimeout(aiProcessQueue,6000);
 // ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
+(function(){
+  function fixFab(){
+    const f=document.getElementById("invFab"); if(!f) return;
+    const ae=document.activeElement, typing=ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
+    const vv=window.visualViewport, kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
+    f.style.bottom = typing ? (kb+16)+"px" : "";
+  }
+  document.addEventListener("focusin",()=>setTimeout(fixFab,60));
+  document.addEventListener("focusout",()=>setTimeout(fixFab,160));
+  if(window.visualViewport) window.visualViewport.addEventListener("resize",fixFab);
+})();
 function aiLoadTesseract(){
   return new Promise((resolve,reject)=>{
     if(window.Tesseract) return resolve();
@@ -7457,7 +7536,10 @@ function renderAiModal(){
   const err = aiUi.error ? `<p class="small" style="margin:0 0 10px;color:var(--danger);">${esc(aiUi.error)}</p>` : "";
   let body;
   if(aiUi.busy){
-    body = `<p class="small" style="margin:18px 0;text-align:center;color:var(--primary);">📖 ${aiUi.busyMsg||"Reading the handwriting…"}<br><span class="faint">this can take up to a minute</span></p>`;
+    body = `<div style="margin:28px 0;text-align:center;"><div class="ai-spin"></div><p class="small" style="margin:0;color:var(--primary);">${aiUi.busyMsg||"Reading the handwriting…"}<br><span class="faint">this can take up to a minute</span></p></div>`;
+  } else if(aiUi.pick){
+    const pi=aiUi.pick.i;
+    body = `<div class="flex" style="gap:8px;margin-bottom:6px;"><button class="btn btn-outline" style="width:auto;padding:8px 14px;" onclick="aiUi.pick=null;render()">←</button><input id="aiPickQ" ${NOAC} type="text" placeholder="Search all medicines…" oninput="aiPickSearch(this.value)" style="flex:1;"></div><div id="aiPickList">${aiPickListHtml(pi,"")}</div>`;
   } else if(!aiUi.rows){
     const nQ=aiList(AI_QUEUE_KEY).length, nR=aiList(AI_READY_KEY).length;
     const qInfo = (nR?`<button class="btn btn-success" style="width:100%;margin-bottom:8px;" onclick="aiLoadReady()">📄 Load ${nR} read photo${nR>1?"s":""}</button>`:"")
@@ -7475,15 +7557,13 @@ function renderAiModal(){
       </details>`;
   } else {
     const rows = aiUi.rows.map((r,i)=>{
-      const ids=new Set(r.cands.map(c=>c.id));
-      const opt=(id,name,mg,cat,stock)=>`<option value="${esc(id)}" ${id===r.medId?"selected":""}>${esc(name)}${mg?" · "+esc(mg):""}${cat?" · "+esc(cat):""} (${stock} left)</option>`;
-      const rest=inventory.filter(m=>!m.deleted && !ids.has(m.id)).sort((x,y)=>String(x.name||"").localeCompare(String(y.name||"")));
-      const opts = `<option value="">— skip this line —</option>`
-        + (r.cands.length?`<optgroup label="Closest matches">`+r.cands.map(c=>opt(c.id,c.name,c.mg,c.category,c.stock)).join("")+`</optgroup>`:"")
-        + (rest.length?`<optgroup label="Wrong? Pick the right one — the app remembers">`+rest.map(m=>opt(m.id,m.name,m.mg,m.category||m.specialCategory||"",m.stockPills||0)).join("")+`</optgroup>`:"");
+      const cur=inventory.find(x=>x.id===r.medId && !x.deleted);
+      const pickBtn = cur
+        ? `<button type="button" class="ai-pickbtn" onclick="aiOpenPick(${i})"><span style="flex:1;min-width:0;"><span class="ai-pn">${esc(cur.name)}</span><br><span class="small faint">${esc([cur.mg,cur.category||cur.specialCategory].filter(Boolean).join(" · "))}</span></span><span class="ai-badge ${(cur.stockPills||0)>0?"":"zero"}">${cur.stockPills||0} left</span><span class="faint">▾</span></button>`
+        : `<button type="button" class="ai-pickbtn" onclick="aiOpenPick(${i})"><span class="ai-pn faint" style="flex:1;">Skipped — tap to choose a medicine</span><span class="faint">▾</span></button>`;
       return `<div class="card" style="padding:10px;margin-bottom:8px;">
         <div class="small faint" style="margin-bottom:6px;word-break:break-word;">“${esc(r.raw)}”</div>
-        <select onchange="aiRowMed(${i},this.value)" style="width:100%;margin-bottom:8px;">${opts}</select>
+        ${pickBtn}
         <div class="flex" style="gap:6px;">
           <input ${NOAC} type="text" inputmode="decimal" value="${r.perDay||""}" oninput="aiRowSet(${i},'perDay',this.value)" placeholder="Per day">
           <input ${NOAC} type="text" inputmode="numeric" value="${r.days||""}" oninput="aiRowSet(${i},'days',this.value)" placeholder="Days">
@@ -7510,7 +7590,8 @@ function renderAiModal(){
         <div style="padding:14px 16px;">${body}</div>
       </div>
     </div>`;
-  if(aiUi.rows && !aiUi.busy) aiUi.rows.forEach((_,i)=>aiRowInfo(i));
+  if(aiUi.rows && !aiUi.busy && !aiUi.pick) aiUi.rows.forEach((_,i)=>aiRowInfo(i));
+  if(aiUi.pick){ const el=document.getElementById("aiPickQ"); if(el) el.focus(); }
 }
 
 function renderBackupModal(){
