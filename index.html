@@ -453,7 +453,7 @@ let datePickerUi = { open:false, viewYear:0, viewMonth:0, selected:"", targetKin
 // Quick add (typed / handwritten text -> bill medicines). See the QUICK ADD section below.
 let aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false };
 const AI_URL_KEY = "clinic_ai_url", AI_SECRET_KEY = "clinic_ai_secret";
-const AI_GEMINI_KEY = "clinic_gemini_key", AI_MODEL_KEY = "clinic_gemini_model", AI_DEFAULT_MODEL = "gemini-2.5-flash";
+const AI_GEMINI_KEY = "clinic_gemini_key", AI_MODEL_KEY = "clinic_gemini_model", AI_DEFAULT_MODEL = "gemini-3.5-flash";
 const aiGeminiKey = ()=>(localStorage.getItem(AI_GEMINI_KEY)||"").trim();
 let printerUi = { open:false, transport:null, wifiIp:"", wifiPort:"9100" };
 let rec = { expandedId:null, searchQuery:"", editingId:null, expandedMonth:null, expandedYear:null, breakdownMonthKey:null, editingMonthBreakdown:false, breakdownDraft:{doctorFee:"",medTotal:"",testsTotal:"",othersTotal:""}, expandedDayBreakdown:null, expandedTxSection:null, expandedBreakdownSection:null };
@@ -7258,23 +7258,36 @@ let aiQueueBusy=false;
 function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(k)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
 function aiSetList(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } }
 async function aiReadImage(image){
-  const model=(localStorage.getItem(AI_MODEL_KEY)||"").trim()||AI_DEFAULT_MODEL;
-  const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),60000);
+  // Google retires Gemini models often (gemini-2.5-flash now answers 404), so try a short list of
+  // current Flash models in turn and remember the one that works. A model typed in the setup box goes first.
+  const remembered=(localStorage.getItem("clinic_gemini_ok_model")||"").trim();
+  const custom=(localStorage.getItem(AI_MODEL_KEY)||"").trim();
+  const candidates=[custom,remembered,AI_DEFAULT_MODEL,"gemini-flash-latest","gemini-3-flash-preview","gemini-3.1-flash-lite-preview"]
+    .filter((m,i,arr)=>m && arr.indexOf(m)===i);
   const prompt="Transcribe the handwritten medicine list/prescription in this photo. Output ONLY the medicines, one per line, exactly as written: name, strength, dose pattern (e.g. 1-0-1, OD, BD) and days or quantity if shown. No headings, no commentary. If a word is unclear, give your best guess.";
-  let res;
-  try{
-    res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
-      {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
-       body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
-  } finally{ clearTimeout(timer); }
-  if(res.status===429) throw new Error("Free limit reached for now — try again a little later, or type the medicines");
-  if(res.status===400||res.status===403) throw new Error("Google didn't accept the key or model — check “Handwriting setup”");
-  if(!res.ok) throw new Error("The reader answered with an error ("+res.status+")");
-  const data=await res.json();
-  const parts=(data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
-  const text=parts.map(x=>x.text||"").join("\n").trim();
-  if(!text) throw new Error("Nothing readable came back — try a clearer, closer photo");
-  return text;
+  const statuses=[];
+  for(const model of candidates){
+    const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),60000);
+    let res;
+    try{
+      res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
+        {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
+         body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
+    } finally{ clearTimeout(timer); }
+    if(res.ok){
+      const data=await res.json();
+      const parts=(data&&data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts)||[];
+      const text=parts.map(x=>x.text||"").join("\n").trim();
+      if(!text) throw new Error("Nothing readable came back — try a clearer, closer photo");
+      try{ localStorage.setItem("clinic_gemini_ok_model",model); }catch(e){}
+      return text;
+    }
+    statuses.push(res.status);
+    if(![400,403,404,429].includes(res.status)) throw new Error("The reader answered with an error ("+res.status+")");
+  }
+  if(statuses.includes(429)) throw new Error("Free limit reached for now — try again a little later");
+  if(statuses.every(x=>x===400)) throw new Error("Google didn't accept the key — check “Handwriting setup”");
+  throw new Error("None of the Gemini models I tried is available to your free key right now ("+statuses.join(", ")+")");
 }
 function aiQueuePhoto(image){
   const q=aiList(AI_QUEUE_KEY);
