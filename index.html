@@ -1467,6 +1467,7 @@ function pushNav(resolver){
   history.pushState({ appNav:true }, "", location.href);
 }
 window.addEventListener("popstate", function(){
+  if(window.__boxBusy){ history.pushState({ appNav:true }, "", location.href); return; } // form is being filled — ignore back
   if(navStack.length){
     const resolver = navStack.pop();
     wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
@@ -3443,12 +3444,37 @@ function renderScanModal(){
 function visibleScanText(s){
   return String(s).replace(/[\x00-\x1f\x7f]/g, c => c==="\x1D" ? "<GS>" : "<0x"+c.charCodeAt(0).toString(16).padStart(2,"0")+">");
 }
+function parseDigitalLink(text){
+  const g = String(text).match(/\/01\/(\d{8,14})(?=[\/?#]|$)/);
+  if(!g) return null;
+  const out = parseGS1Barcode("");
+  gs1SetField(out, "01", g[1].padStart(14,"0"));
+  const pick = (ai)=>{ const a = String(text).match(new RegExp("\\/"+ai+"\\/([^\\/?#]+)")) || String(text).match(new RegExp("[?&]"+ai+"=([^&#]+)")); return a ? decodeURIComponent(a[1]) : ""; };
+  const b = pick("10"), x = pick("17"), m = pick("11"), sr = pick("21");
+  if(b) gs1SetField(out, "10", b);
+  if(/^\d{6}$/.test(x)) gs1SetField(out, "17", x);
+  if(/^\d{6}$/.test(m)) gs1SetField(out, "11", m);
+  if(sr) gs1SetField(out, "21", sr);
+  gs1DeriveProduct(out);
+  return out;
+}
 function handleScanText(raw){
   const target = scanUi.pending;
   scanUi.pending = null;
   const text = (raw||"").trim();
   if(!text) return;
-  const parsed = parseGS1Barcode(text);
+  let parsed = parseGS1Barcode(text);
+  if(!parsed.gtin && !parsed.batch && !parsed.expiryDate){
+    // Not a GS1 medicine code. Two more kinds are accepted: a GS1 QR "Digital Link" (a web address that
+    // carries the GTIN/batch/expiry) and any ordinary barcode or QR (Code 128, plain number or text),
+    // which is stored as the medicine's linked barcode so the same code is recognised next time.
+    const dl = parseDigitalLink(text);
+    if(dl) parsed = dl;
+    else {
+      const plain = text.replace(/[\x00-\x1f\x7f]/g,"").trim();
+      if(plain && plain.length<=128) parsed = Object.assign(parseGS1Barcode(""), { gtin: plain });
+    }
+  }
   if(!parsed.gtin && !parsed.batch && !parsed.expiryDate){
     // The barcode WAS read successfully — it just isn't in a shape the GS1 parser recognises.
     // Show exactly what it contained (rather than a toast that vanishes) so it can be copied/shared.
@@ -3600,7 +3626,30 @@ async function aiOcrCanvas(file){ // bigger + grayscale + more contrast helps Te
   for(let i=0;i<a.length;i+=4){ let v=0.3*a[i]+0.59*a[i+1]+0.11*a[i+2]; v=Math.max(0,Math.min(255,(v-128)*1.5+128)); a[i]=a[i+1]=a[i+2]=v; }
   x.putImageData(d,0,0); return c;
 }
+function boxBusyOn(n){
+  window.__boxBusy=true;
+  boxBusyOff(true);
+  const o=document.createElement("div"); o.id="boxBusyOverlay";
+  o.style.cssText="position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:24px;";
+  o.innerHTML='<div style="background:#fff;border-radius:16px;padding:24px 22px;max-width:320px;text-align:center;"><div class="ai-spin"></div>'
+    +'<div style="font-weight:700;font-size:15px;margin-bottom:6px;">Reading '+n+' photo'+(n>1?'s':'')+'…</div>'
+    +'<div class="small faint">Filling in the new medicine. Please wait — this can take up to a minute.</div>'
+    +'<button id="boxBusyStop" style="display:none;margin-top:14px;padding:8px 16px;border:1px solid #d1d5db;border-radius:10px;background:#fff;font-size:13px;">Stop waiting</button></div>';
+  document.body.appendChild(o);
+  o.querySelector("#boxBusyStop").onclick=()=>boxBusyOff();
+  window.__boxBusyTimer=setTimeout(()=>{ const b=document.getElementById("boxBusyStop"); if(b) b.style.display="inline-block"; },45000);
+}
+function boxBusyOff(keepFlag){
+  clearTimeout(window.__boxBusyTimer);
+  const o=document.getElementById("boxBusyOverlay"); if(o) o.remove();
+  if(!keepFlag) window.__boxBusy=false;
+}
 async function processBoxPhotos(files){
+  boxBusyOn(files.length);
+  try{ await processBoxPhotosInner(files); }
+  finally{ boxBusyOff(); }
+}
+async function processBoxPhotosInner(files){
   {
     showToast("🖼 Reading "+files.length+" photo"+(files.length>1?"s":"")+"…");
     try{
@@ -7490,25 +7539,35 @@ async function takePhoto(cb, max){
   document.body.appendChild(ov);
   const v=ov.querySelector("#tpVideo"); v.srcObject=stream; v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}),300);
   const close=()=>{ stream.getTracks().forEach(t=>t.stop()); ov.remove(); };
-  const finish=()=>{ close(); cb(shots); };
-  ov.querySelector("#tpCancel").onclick=close;
-  if(multi) ov.querySelector("#tpDone").onclick=()=>{ if(shots.length) finish(); };
+  const pending=[]; let taken=0, finishing=false;
+  const finish=async ()=>{
+    if(finishing) return; finishing=true;
+    const d=ov.querySelector("#tpDone"); if(d){ d.disabled=true; d.textContent="Saving…"; }
+    await Promise.all(pending);
+    close(); cb(shots);
+  };
+  ov.querySelector("#tpCancel").onclick=()=>{ finishing=true; close(); };
+  if(multi) ov.querySelector("#tpDone").onclick=()=>{ if(taken) finish(); };
   ov.querySelector("#tpShot").onclick=()=>{
+    if(finishing) return;
     if(!v.videoWidth){ showToast("Camera not ready yet — wait a second"); return; }
     const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight;
     c.getContext("2d").drawImage(v,0,0);
-    c.toBlob(b=>{
-      if(!b) return;
-      const file=new File([b],"photo.jpg",{type:"image/jpeg"});
-      if(!multi){ close(); cb(file); return; }
-      shots.push(file);
-      const th=ov.querySelector("#tpThumbs");
-      if(shots.length===1) th.innerHTML="";
-      th.insertAdjacentHTML("beforeend",'<img src="'+URL.createObjectURL(b)+'" style="height:44px;width:44px;object-fit:cover;border-radius:8px;border:2px solid #0f766e;">');
-      ov.querySelector("#tpShot").textContent="📸 Capture ("+shots.length+"/"+max+")";
-      const d=ov.querySelector("#tpDone"); d.disabled=false; d.style.opacity="1";
-      if(shots.length>=max) finish();
-    },"image/jpeg",0.92);
+    if(!multi){
+      finishing=true;
+      c.toBlob(b=>{ close(); if(b) cb(new File([b],"photo.jpg",{type:"image/jpeg"})); },"image/jpeg",0.9);
+      return;
+    }
+    taken++;
+    // thumbnail + counter appear instantly (tiny canvas); the big JPEG is encoded in the background
+    const tc=document.createElement("canvas"); tc.width=88; tc.height=Math.max(1,Math.round(88*c.height/c.width));
+    tc.getContext("2d").drawImage(v,0,0,tc.width,tc.height);
+    const th=ov.querySelector("#tpThumbs"); if(taken===1) th.innerHTML="";
+    th.insertAdjacentHTML("beforeend",'<img src="'+tc.toDataURL("image/jpeg",0.6)+'" style="height:44px;width:auto;border-radius:8px;border:2px solid #0f766e;">');
+    ov.querySelector("#tpShot").textContent="📸 Capture ("+taken+"/"+max+")";
+    const d=ov.querySelector("#tpDone"); d.disabled=false; d.style.opacity="1";
+    pending.push(new Promise(res=>c.toBlob(b=>{ if(b) shots.push(new File([b],"photo.jpg",{type:"image/jpeg"})); res(); },"image/jpeg",0.85)));
+    if(taken>=max) finish();
   };
 }
 async function aiHandleFile(file){
