@@ -295,6 +295,7 @@
   .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
+  body.kb-open #invFab{bottom:16px !important;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -3214,25 +3215,12 @@ let _pendingPhotoScanTarget = null;
 // photo. Often far more reliable for a small, dense code than the live-feed approach.
 let _scanPhotoOpenTimer = null;
 function scanFromPhoto(target){
-  _pendingPhotoScanTarget = target;
-  const input = document.getElementById("scanPhotoInput");
-  if(!input){ showToast("⚠ Internal error: photo input missing"); return; }
-  showToast("Opening camera…");
-  try{
-    input.click();
-    // Some WebView setups silently fail to open the file chooser at all (a known bug in certain
-    // versions of the CustomWebView extension) — rather than leaving the person staring at
-    // nothing with no explanation, tell them plainly and point at the alternative that works.
-    clearTimeout(_scanPhotoOpenTimer);
-    const target2 = target;
-    _scanPhotoOpenTimer = setTimeout(()=>{
-      if(_pendingPhotoScanTarget === target2){
-        showToast("⚠ Photo capture isn't opening in this app build — try \"Live camera\" instead");
-      }
-    }, 4000);
-  }catch(e){
-    showToast("⚠ Couldn't open the file chooser: " + (e && e.message ? e.message : "unknown error"));
-  }
+  // The phone's file chooser doesn't open in this app's web view, so the still photo is taken with
+  // the same in-page camera used by 🖼 Add M.Picture, then decoded exactly as before.
+  takePhoto(file=>{
+    _pendingPhotoScanTarget = target;
+    handleScanPhotoFile({ files:[file], value:"" });
+  });
 }
 async function handleScanPhotoFile(input){
   clearTimeout(_scanPhotoOpenTimer);
@@ -3577,12 +3565,15 @@ function parseBoxText(text){
 // "Add M.Picture" (in the AI reading menu): opens a blank New medicine form on the Inventory tab
 // and fills it from a photo of the box. Works offline once the printed-text reader is downloaded.
 function aiAddMedPicture(){
-  aiUi.open=false;
-  if(tab!=="inventory") setTab("inventory"); else render();
-  if(!inv.showForm) toggleInvForm();
-  setTimeout(readBoxIntoNewMed, 350);
+  // Camera first, instantly; the New medicine form only opens after the photos are taken.
+  aiUi.open=false; renderAiModal();
+  takePhoto(files=>{
+    if(tab!=="inventory") setTab("inventory"); else render();
+    if(!inv.showForm) toggleInvForm();
+    processBoxPhotos(files);
+  }, 3);
 }
-const AI_BOX_PROMPT='This is a photo of a medicine box or strip (it may be blurry or angled). Read the printed text and reply with ONLY one JSON object: {"name":"brand name only, e.g. Provate-S","form":"dosage form in English, e.g. Tablet, Syrup, Ointment, Cream, Lotion, Injection","formula":"active ingredients if printed","strength":"pack size and/or strength as printed, e.g. 15 gram or 500 mg","mrp":number or null,"perBox":"units per box if printed, number or null","gtin":"digits or null"}. Use null for anything not clearly visible. No other text.';
+const AI_BOX_PROMPT='These are 1 to 3 photos of different sides of the SAME medicine box or strip (they may be blurry or angled). Combine everything printed on all of them and reply with ONLY one JSON object: {"name":"brand name only, e.g. Provate-S","form":"dosage form in English, e.g. Tablet, Syrup, Ointment, Cream, Lotion, Injection","formula":"active ingredients (generic names) as printed","strength":"the strength/amount of the active ingredient(s) per unit exactly as printed, e.g. 500 mg or 5 mg + 10 mg or 250 IU; for syrups, creams, ointments and drops also add the pack volume/weight, e.g. 15 gram or 100 ml. NEVER put pack counts like 2x10 tablets here","mrp":number or null,"perBox":"total units per box, number or null (2x10 tablets = 20)","gtin":"digits or null"}. Use null for anything not clearly visible. No other text.';
 function aiApplyBoxInfo(info){
   const f=inv.form, filled=[], blank=k=>!String(f[k]||"").trim();
   if(info.name && blank("name")){ f.name=String(info.name).trim(); filled.push("name"); }
@@ -3592,10 +3583,13 @@ function aiApplyBoxInfo(info){
     if(cat){ f.category=cat; filled.push("category"); }
   }
   if(info.formula && blank("formula")){ f.formula=String(info.formula).trim(); filled.push("formula"); }
-  if(info.strength && blank("mg")){ f.mg=String(info.strength).trim().replace(/\b(\d+(?:\.\d+)?)\s*(?:g|gm)\b/i,"$1 gram"); filled.push("strength"); }
+  let st=String(info.strength||"").trim();
+  const pk=st.match(/^(\d+)\s*[x×]\s*(\d+)/i);
+  if(pk){ if(!info.perBox) info.perBox=Number(pk[1])*Number(pk[2]); st=""; }   // "2x10 Tablets" is a pack size, not a strength
+  if(st && blank("mg")){ f.mg=st.replace(/\b(\d+(?:\.\d+)?)\s*(?:g|gm)\b/i,"$1 gram"); filled.push("strength"); }
   if(info.mrp && blank("mrp") && Number(info.mrp)>0){ f.mrp=String(Number(info.mrp)); filled.push("MRP"); }
   if(info.perBox && blank("pillsPerBox") && Number(info.perBox)>0){ f.pillsPerBox=String(Number(info.perBox)); filled.push("per box"); }
-  showToast(filled.length?("✓ "+filled.join(", ")+" filled — check, then tap 🖼 Add M.Picture again for the other side if something is missing"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
+  showToast(filled.length?("✓ "+filled.join(", ")+" filled"+(filled.includes("MRP")?"":" — no MRP found, include the price side next time")+" — please check"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
   render();
 }
 async function aiOcrCanvas(file){ // bigger + grayscale + more contrast helps Tesseract on phone photos
@@ -3606,29 +3600,32 @@ async function aiOcrCanvas(file){ // bigger + grayscale + more contrast helps Te
   for(let i=0;i<a.length;i+=4){ let v=0.3*a[i]+0.59*a[i+1]+0.11*a[i+2]; v=Math.max(0,Math.min(255,(v-128)*1.5+128)); a[i]=a[i+1]=a[i+2]=v; }
   x.putImageData(d,0,0); return c;
 }
-function readBoxIntoNewMed(){
-  takePhoto(async file=>{
-    showToast("🖼 Reading the box…");
+async function processBoxPhotos(files){
+  {
+    showToast("🖼 Reading "+files.length+" photo"+(files.length>1?"s":"")+"…");
     try{
       if(aiGeminiKey() && navigator.onLine){
         try{
-          const txt=await aiReadImage(await aiResizeImage(file,1600), AI_BOX_PROMPT);
+          const imgs=await Promise.all(files.map(f=>aiResizeImage(f,1400)));
+          const txt=await aiReadImage(imgs, AI_BOX_PROMPT);
           const m=txt.match(/\{[\s\S]*\}/); if(!m) throw new Error("no json");
           aiApplyBoxInfo(JSON.parse(m[0])); return;
         }catch(e){ showToast("Online reader failed — using the offline reader"); }
       }
       await aiLoadTesseract();
-      const r=await window.Tesseract.recognize(await aiOcrCanvas(file),"eng");
-      const parsed=parseBoxText(r&&r.data&&r.data.text);
-      // the brand name is the biggest clearly-read text on the box
-      const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>55 && /[A-Za-z]{3}/.test(l.text) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
-        .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
-      if(big) parsed.productName=big.text.replace(/\s+/g," ").trim();
-      if(!parsed.productName && !parsed.price && !parsed.gtin){ showToast("⚠ Too blurry to read — hold steady, closer, box flat and well lit"); return; }
-      applyScanToNewMedForm(parsed);
+      for(const file of files){   // offline: read each photo; every one only fills the boxes still empty
+        const r=await window.Tesseract.recognize(await aiOcrCanvas(file),"eng");
+        const parsed=parseBoxText(r&&r.data&&r.data.text);
+        const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>55 && /[A-Za-z]{3}/.test(l.text) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
+          .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
+        if(big) parsed.productName=big.text.replace(/\s+/g," ").trim();
+        if(parsed.productName || parsed.price || parsed.gtin) applyScanToNewMedForm(parsed);
+        else showToast("⚠ One photo was too blurry to read");
+      }
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
-  });
+  }
 }
+function readBoxIntoNewMed(){ takePhoto(processBoxPhotos, 3); }
 function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
@@ -7377,6 +7374,7 @@ let aiQueueBusy=false;
 function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(k)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
 function aiSetList(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } }
 async function aiReadImage(image, customPrompt){
+  const imgs=Array.isArray(image)?image:[image];
   // Google retires Gemini models often (gemini-2.5-flash now answers 404), so try a short list of
   // current Flash models in turn and remember the one that works. A model typed in the setup box goes first.
   const remembered=(localStorage.getItem("clinic_gemini_ok_model")||"").trim();
@@ -7395,7 +7393,7 @@ async function aiReadImage(image, customPrompt){
       try{
         res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(aiGeminiKey()),
           {method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
-           body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:"image/jpeg",data:image}}]}]})});
+           body:JSON.stringify({contents:[{parts:[{text:prompt}].concat(imgs.map(d=>({inline_data:{mime_type:"image/jpeg",data:d}})))}]})});
       }catch(e){
         if(e && e.name==="AbortError"){ statuses.push("slow"); continue; }   // too slow: try again / next model
         throw e;                                                             // real network failure -> photo gets queued
@@ -7452,15 +7450,12 @@ window.addEventListener("online",()=>{ aiProcessQueue(); });
 setTimeout(aiProcessQueue,6000);
 // ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
 (function(){
-  function fixFab(){
-    const f=document.getElementById("invFab"); if(!f) return;
-    const ae=document.activeElement, typing=ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
-    const vv=window.visualViewport, kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
-    f.style.bottom = typing ? (kb+16)+"px" : "";
-  }
-  document.addEventListener("focusin",()=>setTimeout(fixFab,60));
-  document.addEventListener("focusout",()=>setTimeout(fixFab,160));
-  if(window.visualViewport) window.visualViewport.addEventListener("resize",fixFab);
+  // Keyboard open = the page got much shorter. Then the "+" sits just above the keyboard; otherwise normal spot above the tab bar.
+  let base=window.innerHeight;
+  function chk(){ const h=window.innerHeight; if(h>base) base=h; document.body.classList.toggle("kb-open", h < base*0.8); }
+  window.addEventListener("resize",chk);
+  if(window.visualViewport) window.visualViewport.addEventListener("resize",chk);
+  window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=window.innerHeight; chk(); },500));
 })();
 function aiLoadTesseract(){
   return new Promise((resolve,reject)=>{
@@ -7473,7 +7468,8 @@ function aiLoadTesseract(){
 }
 // Camera capture inside the page (same getUserMedia route as the barcode scanner). The app's
 // WebView doesn't open the phone's file chooser, so <input type="file"> buttons did nothing.
-async function takePhoto(cb){
+async function takePhoto(cb, max){
+  max = max||1;
   let stream;
   showToast("📷 Opening camera…"); // if you never see this, the old index.html is still live on GitHub
   try{
@@ -7483,20 +7479,36 @@ async function takePhoto(cb){
     if(window.AppInventor && typeof window.AppInventor.setWebViewString==="function") window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
     showToast("📷 Camera error ("+(e&&e.name?e.name:"unknown")+") — allow the camera, then tap again"); return;
   }
+  const multi = max>1, shots=[];
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column;";
   ov.innerHTML='<video id="tpVideo" autoplay playsinline muted style="flex:1;min-height:0;width:100%;object-fit:contain;"></video>'
+    +(multi?'<div id="tpThumbs" style="display:flex;gap:8px;align-items:center;padding:8px 14px;background:#111;min-height:60px;color:#9ca3af;font-size:12px;">Take up to '+max+' photos — e.g. front, back, price side</div>':'')
     +'<div style="display:flex;gap:10px;padding:14px;background:#111;"><button id="tpCancel" style="flex:1;padding:14px;border:none;border-radius:10px;background:#333;color:#fff;font-size:15px;">Cancel</button>'
-    +'<button id="tpShot" style="flex:2;padding:14px;border:none;border-radius:10px;background:#0f766e;color:#fff;font-size:15px;font-weight:700;">📸 Capture</button></div>';
+    +'<button id="tpShot" style="flex:2;padding:14px;border:none;border-radius:10px;background:#0f766e;color:#fff;font-size:15px;font-weight:700;">📸 Capture'+(multi?' (0/'+max+')':'')+'</button>'
+    +(multi?'<button id="tpDone" disabled style="flex:1.2;padding:14px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-size:15px;font-weight:700;opacity:.4;">✓ Done</button>':'')+'</div>';
   document.body.appendChild(ov);
   const v=ov.querySelector("#tpVideo"); v.srcObject=stream; v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}),300);
   const close=()=>{ stream.getTracks().forEach(t=>t.stop()); ov.remove(); };
+  const finish=()=>{ close(); cb(shots); };
   ov.querySelector("#tpCancel").onclick=close;
+  if(multi) ov.querySelector("#tpDone").onclick=()=>{ if(shots.length) finish(); };
   ov.querySelector("#tpShot").onclick=()=>{
     if(!v.videoWidth){ showToast("Camera not ready yet — wait a second"); return; }
     const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight;
     c.getContext("2d").drawImage(v,0,0);
-    c.toBlob(b=>{ close(); if(b) cb(new File([b],"photo.jpg",{type:"image/jpeg"})); },"image/jpeg",0.92);
+    c.toBlob(b=>{
+      if(!b) return;
+      const file=new File([b],"photo.jpg",{type:"image/jpeg"});
+      if(!multi){ close(); cb(file); return; }
+      shots.push(file);
+      const th=ov.querySelector("#tpThumbs");
+      if(shots.length===1) th.innerHTML="";
+      th.insertAdjacentHTML("beforeend",'<img src="'+URL.createObjectURL(b)+'" style="height:44px;width:44px;object-fit:cover;border-radius:8px;border:2px solid #0f766e;">');
+      ov.querySelector("#tpShot").textContent="📸 Capture ("+shots.length+"/"+max+")";
+      const d=ov.querySelector("#tpDone"); d.disabled=false; d.style.opacity="1";
+      if(shots.length>=max) finish();
+    },"image/jpeg",0.92);
   };
 }
 async function aiHandleFile(file){
