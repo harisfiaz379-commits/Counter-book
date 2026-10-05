@@ -336,6 +336,7 @@
 <div id="copyMenuRoot"></div>
 <div id="invFormModalRoot"></div>
 <div id="backupModalRoot"></div>
+<div id="diagModalRoot"></div>
 <div id="printerModalRoot"></div>
 <div id="aiModalRoot"></div>
 <div id="monthBreakdownModalRoot"></div>
@@ -474,9 +475,9 @@ let notesUi = { openId:null, draftTitle:"", draftBody:"", searchQuery:"" };
 let sessionAuthed = false; // whether someone has entered a correct PIN this session; persists until "Switch User" is tapped
 let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock screen
 let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
-let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false}, editingId:null, editRole:"", editPin:"", editPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} }; // admin-only "Manage Users" screen
+let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false}, editingId:null, editRole:"", editPin:"", editPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} }; // admin-only "Manage Users" screen
 let forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" }; // Admin-only "Forgot PIN" recovery flow on the login screen
-let addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} }; // "+ Add new user" flow reachable from the login screen — gated behind a live Admin PIN check (NOT can(), which reflects whoever last logged in, not who's actually present right now)
+let addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} }; // "+ Add new user" flow reachable from the login screen — gated behind a live Admin PIN check (NOT can(), which reflects whoever last logged in, not who's actually present right now)
 
 /* ===================== HELPERS ===================== */
 let MED_CATEGORIES = ["Tablet","Capsule","Injection","Sachet","Syrup","Drip","Drops"]; // user-editable via the category manager (add/rename/delete) — see catUi below
@@ -1492,7 +1493,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || aiUi.open || backupUi.open || scanUi.open || historyUi.open ||
+    printerUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1513,6 +1514,7 @@ function closeTopMenu(){
   if(historyUi.open){ closeHistoryModal(); return; }
   if(aiUi.open){ closeQuickAdd(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
+  if(diagUi.open){ diagUi.open=false; renderOverlays(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
   if(rec.editingMonthBreakdown){ cancelMonthBreakdownEdit(); return; }
   if(rec.expandedBreakdownSection){ rec.expandedBreakdownSection=null; render(); return; }
@@ -1549,6 +1551,15 @@ function syncMenuHistory(){
 }
 
 
+// Opening or closing a pop-up only needs the pop-up layers redrawn. render() also rebuilds the whole
+// current tab (e.g. all 300+ medicines on Inventory), which made every menu take about a second to open.
+function renderOverlays(){
+  renderShareModal(); renderConfirmModal(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderPrinterModal();
+  renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderHistoryModal();
+  renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
+  renderScanMethodModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
+  syncMenuHistory(); syncHeaderOffset();
+}
 function render(){
   const active = document.activeElement;
   const id = active && active.id;
@@ -1613,7 +1624,7 @@ function render(){
   renderShareModal();
   renderConfirmModal();
   renderInvFormModal();
-  renderBackupModal();
+  renderBackupModal(); renderDiagModal();
   renderPrinterModal();
   renderAiModal();
   renderMonthBreakdownModal();
@@ -2244,10 +2255,10 @@ function saveScanMethod(v){ try{ localStorage.setItem("clinic_scan_method", v); 
 let scanMethodUi = { open:false, method:"scanner" };
 function editScanMethodSettings(){
   scanMethodUi = { open:true, method:getScanMethod() };
-  render();
+  renderOverlays();
 }
-function closeScanMethodModal(){ scanMethodUi.open=false; render(); }
-function setScanMethodChoice(v){ scanMethodUi.method=v; render(); }
+function closeScanMethodModal(){ scanMethodUi.open=false; renderOverlays(); }
+function setScanMethodChoice(v){ scanMethodUi.method=v; renderOverlays(); }
 function submitScanMethodSettings(){
   saveScanMethod(scanMethodUi.method);
   scanMethodUi.open = false;
@@ -2300,9 +2311,9 @@ function editReceiptSettings(){
   if(!can("receiptSetup")){ showToast("Only Admin can change receipt settings"); return; }
   const cur = getReceiptSettings();
   receiptUi = { open:true, shopName:cur.shopName, address:cur.address, phone:cur.phone };
-  render();
+  renderOverlays();
 }
-function closeReceiptModal(){ receiptUi.open=false; render(); }
+function closeReceiptModal(){ receiptUi.open=false; renderOverlays(); }
 function onReceiptField(field,v){ receiptUi[field]=v; }
 function submitReceiptSettings(){
   saveReceiptSettings({ shopName: receiptUi.shopName.trim()||"Counter Book", address: receiptUi.address.trim(), phone: receiptUi.phone.trim() });
@@ -2434,7 +2445,7 @@ function printReceipt(tx){
 // Opens the in-page "Printer Settings" modal (Bluetooth device picker or WiFi IP/port entry).
 function selectPrinter(){
   if(!can("printer")){ showToast("Only Admin can change printer settings"); return; }
-  printerUi.open = !printerUi.open; render();
+  printerUi.open = !printerUi.open; renderOverlays();
 }
 function choosePrinterTransport(t){
   printerUi.transport = t;
@@ -3079,7 +3090,7 @@ function gs1DeriveProduct(out){
   const NUMRE = "(\\d+(?:[.,]\\d+)?)";
   // Case 1: the field is ONLY a price, e.g. "420.00", "420", "Rs 420.00", "MRP:420.00/-".
   // (Many boxes put just the MRP here — it must never be mistaken for the medicine's name.)
-  let m = name.match(new RegExp("^(?:MRP|M\\.R\\.P\\.?|Rs\\.?|INR|\u20b9)?\\s*[:.\\-]?\\s*"+NUMRE+"\\s*(?:\\/-|-|only)?$","i"));
+  let m = name.match(new RegExp("^(?:(?:MRP|M\\.R\\.P\\.?|Price|Rs\\.?|INR|\u20b9)\\s*[:.\\-]?\\s*)*"+NUMRE+"\\s*(?:\\/-|-|only)?$","i"));
   if(m){
     price = Number(m[1].replace(",","."));
     name = "";
@@ -3089,6 +3100,8 @@ function gs1DeriveProduct(out){
     if(lab){
       price = Number(lab[1].replace(",","."));
       name = (name.slice(0,lab.index)+" "+name.slice(lab.index+lab[0].length)).replace(/[\s,;:\-]+$/,"").replace(/^[\s,;:\-]+/,"").replace(/\s+/g," ").trim();
+      name = name.replace(/(?:^|\s)(?:MRP|M\.R\.P\.?|Price|Rs\.?|INR|\u20b9)\s*[:.\-]*\s*$/i,"").trim();   // a leftover "MRP" label is not a name
+      if(/^(?:MRP|M\.R\.P\.?|Price|Rs\.?|INR|\u20b9)$/i.test(name)) name = "";
     }
   }
   // Some codes run words and numbers together ("Terbisil10lotion20mL"): if there are no spaces at
@@ -3534,7 +3547,7 @@ const DOSAGE_FORM_WORDS = {
   cream:"Cream", ointment:"Ointment", gel:"Gel", drops:"Drops", drop:"Drops", sachet:"Sachet",
   drip:"Drip", powder:"Powder", spray:"Spray", shampoo:"Shampoo", solution:"Solution",
   // Common abbreviations printed on Indian medicine boxes
-  oint:"Ointment", ointments:"Ointment", crm:"Cream", susp:"Suspension", syp:"Syrup", soln:"Solution"
+  tabs:"Tablet", caps:"Capsule", oint:"Ointment", ointments:"Ointment", crm:"Cream", susp:"Suspension", syp:"Syrup", soln:"Solution"
 };
 function splitScannedProductName(raw){
   const original = String(raw||"").replace(/\s+/g," ").trim();
@@ -3545,11 +3558,27 @@ function splitScannedProductName(raw){
   const unitOnly = new RegExp("^("+UNIT+")$","i");
   const isNum = t=>new RegExp("^"+NUM+"$").test(t);
   // "g"/"gm" are written out as "gram" in the Strength box; other units stay as scanned.
-  const niceUnit = u=>/^(g|gm)$/i.test(u) ? "gram" : u;
+  const niceUnit = u=>/^(g|gm)$/i.test(u) ? "gram" : /^mg$/i.test(u) ? "mg" : /^mcg$/i.test(u) ? "mcg" : /^ml$/i.test(u) ? "mL" : /^iu$/i.test(u) ? "IU" : u;
   // Pack size units (volume/weight of the whole tube/bottle) are listed first in Strength.
   const isPackUnit = u=>/^(ml|l|g|gm)$/i.test(u);
   const measures = [];
   let tokens = original.split(" ").filter(Boolean);
+  // "20 mgtab", "50 MGTAB", "500mgtab": unit and dosage-form word stuck together -> split them apart
+  const FORMW = "tabs?|tablets?|caps?|capsules?|syp|syrup|inj|injection|drops?|cream|oint|ointment|gel|lotion|susp|suspension|sachet|powder";
+  tokens = tokens.flatMap(t=>{
+    const g3 = t.match(new RegExp("^("+NUM+")(mg|mcg|gm|g|ml|iu)("+FORMW+")$","i"));
+    if(g3) return [g3[1]+g3[2], g3[3]];
+    const g2 = t.match(new RegExp("^(mg|mcg|gm|g|ml|iu)("+FORMW+")$","i"));
+    return g2 ? [g2[1], g2[2]] : [t];
+  });
+  // pack counts such as "10's", "10s", "10 s": units per box, not part of the name
+  let perBox = 0;
+  { const t2=[]; for(let i=0;i<tokens.length;i++){
+      const t=tokens[i], m=t.match(/^(\d+)['\u2019]?s$/i);
+      if(m){ perBox=Number(m[1]); continue; }
+      if(/^\d+$/.test(t) && i+1<tokens.length && /^['\u2019]?s$/i.test(tokens[i+1])){ perBox=Number(t); i++; continue; }
+      t2.push(t);
+    } tokens=t2; }
   // 1) quantities that already carry a unit ("20 mL", "20mL", "15 g")
   const rest = [];
   for(let i=0;i<tokens.length;i++){
@@ -3569,10 +3598,11 @@ function splitScannedProductName(raw){
     rest.splice(fi,1);
     if(fi-1>=0 && isNum(rest[fi-1])){ measures.push({text:rest[fi-1]+" mg", vol:false}); rest.splice(fi-1,1); }
   }
-  const name = rest.join(" ").trim();
-  if(!name || (!category && !measures.length)) return { name: original, category:"", strength:"" };
+  let name = rest.join(" ").trim();
+  if(!name || (!category && !measures.length && !perBox)) return { name: original, category:"", strength:"", perBox:0 };
+  if(name===name.toUpperCase() && /[A-Z]{3}/.test(name)) name = name.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase()); // DYNETIC -> Dynetic
   const ordered = measures.filter(m=>m.vol).concat(measures.filter(m=>!m.vol));
-  return { name, category, strength: ordered.map(m=>m.text).join(" ") };
+  return { name, category, strength: ordered.map(m=>m.text).join(" "), perBox };
 }
 // ---- Inventory: fill the New medicine form from a photo of the box (offline OCR) ----
 // Pulls the printed GTIN / M.R.P. and the product-name line out of the text, then hands it to
@@ -3599,7 +3629,7 @@ function aiAddMedPicture(){
     processBoxPhotos(files);
   }, 3);
 }
-const AI_BOX_PROMPT='These are 1 to 3 photos of different sides of the SAME medicine box or strip (they may be blurry or angled). Combine everything printed on all of them and reply with ONLY one JSON object: {"name":"brand name only, e.g. Provate-S","form":"dosage form in English, e.g. Tablet, Syrup, Ointment, Cream, Lotion, Injection","formula":"active ingredients (generic names) as printed","strength":"the strength/amount of the active ingredient(s) per unit exactly as printed, e.g. 500 mg or 5 mg + 10 mg or 250 IU; for syrups, creams, ointments and drops also add the pack volume/weight, e.g. 15 gram or 100 ml. NEVER put pack counts like 2x10 tablets here","mrp":number or null,"perBox":"total units per box, number or null (2x10 tablets = 20)","gtin":"digits or null"}. Use null for anything not clearly visible. No other text.';
+const AI_BOX_PROMPT='These are 1 to 3 photos of different sides of the SAME medicine box or strip (they may be blurry or angled). Combine everything printed on all of them and reply with ONLY one JSON object: {"name":"brand name only, e.g. Provate-S","form":"dosage form in English, e.g. Tablet, Syrup, Ointment, Cream, Lotion, Injection","formula":"active ingredients (generic names) as printed","strength":"the strength/amount of the active ingredient(s) per unit exactly as printed, e.g. 500 mg or 5 mg + 10 mg or 250 IU; for syrups, creams, ointments and drops also add the pack volume/weight, e.g. 15 gram or 100 ml. NEVER put pack counts like 2x10 tablets here","mrp":"the maximum retail price as a number, from text like M.R.P. Rs.150.00 or MRP ₹226 (look on every side, flap and bottom), else null","mrpText":"the exact price text as printed, e.g. M.R.P. Rs.150.00, else null","perBox":"total units per box, number or null (2x10 tablets = 20)","gtin":"digits or null"}. Use null for anything not clearly visible. No other text.';
 function aiApplyBoxInfo(info){
   const f=inv.form, filled=[], blank=k=>!String(f[k]||"").trim();
   if(info.name && blank("name")){ f.name=String(info.name).trim(); filled.push("name"); }
@@ -3613,8 +3643,11 @@ function aiApplyBoxInfo(info){
   const pk=st.match(/^(\d+)\s*[x×]\s*(\d+)/i);
   if(pk){ if(!info.perBox) info.perBox=Number(pk[1])*Number(pk[2]); st=""; }   // "2x10 Tablets" is a pack size, not a strength
   if(st && blank("mg")){ f.mg=st.replace(/\b(\d+(?:\.\d+)?)\s*(?:g|gm)\b/i,"$1 gram"); filled.push("strength"); }
-  if(info.mrp && blank("mrp") && Number(info.mrp)>0){ f.mrp=String(Number(info.mrp)); filled.push("MRP"); }
-  if(info.perBox && blank("pillsPerBox") && Number(info.perBox)>0){ f.pillsPerBox=String(Number(info.perBox)); filled.push("per box"); }
+  // Gemini may send the price as 150, "150.00" or "Rs. 150.00/-" — pull the number out of whichever it is
+  const num=v=>{ const m=String(v==null?"":v).replace(/,/g,"").match(/\d+(?:\.\d+)?/); return m?Number(m[0]):0; };
+  const mrpVal = num(info.mrp) || num(info.mrpText);
+  if(mrpVal>0 && blank("mrp")){ f.mrp=String(mrpVal); filled.push("MRP"); }
+  if(num(info.perBox)>0 && blank("pillsPerBox")){ f.pillsPerBox=String(num(info.perBox)); filled.push("per box"); }
   showToast(filled.length?("✓ "+filled.join(", ")+" filled"+(filled.includes("MRP")?"":" — no MRP found, include the price side next time")+" — please check"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
   render();
 }
@@ -3695,6 +3728,7 @@ function applyScanToNewMedForm(parsed){
     inv.form.name = split.name; filled.push("name");
     // Strength/category only ever go into boxes that are still empty, same as everything here.
     if(split.strength && !String(inv.form.mg||"").trim()){ inv.form.mg = split.strength; filled.push("strength"); }
+    if(split.perBox && !String(inv.form.pillsPerBox||"").trim()){ inv.form.pillsPerBox = String(split.perBox); filled.push("per box"); }
     if(split.category && !inv.form.category && !inv.form.specialCategory){
       // Use the existing category if there is one (any capitalisation); otherwise add it to
       // the shared list so it's selectable here and synced to the other devices.
@@ -5368,12 +5402,14 @@ function can(action){
     if(action==="printer") return !!priv.printer;
     if(action==="receiptSetup") return !!priv.receiptSetup;
     if(action==="monthlyTotal") return !!priv.monthlyTotal;
+    if(action==="diagnostics") return !!priv.diagnostics;
     return true;
   }
   if(action==="manageCategories") return false;
   if(action==="printer") return false;
   if(action==="receiptSetup") return false;
   if(action==="monthlyTotal") return role==="doctor";
+  if(action==="diagnostics") return false;
   return true;
 }
 function activateProfile(id){
@@ -5638,7 +5674,7 @@ function renderForgotPinModal(){
 function openAddUserFromLogin(){
   const admins = visibleProfiles().filter(p=>p.role==="admin");
   if(!admins.length){ showToast("No Admin account exists yet"); return; }
-  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} };
+  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
   render();
 }
 function closeAddUserFromLogin(){ addUserLoginUi.open=false; render(); }
@@ -5672,7 +5708,7 @@ function submitAddUserFromLogin(){
   profiles.push(p);
   saveProfiles();
   showToast(`✓ ${name} added — they can log in now`);
-  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false} };
+  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
   render();
 }
 function renderAddUserLoginModal(){
@@ -5689,7 +5725,8 @@ function renderAddUserLoginModal(){
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
     {key:"monthlyTotal", label:"Monthly Total Sales"},
-    {key:"editCategories", label:"Edit medicine categories"}
+    {key:"editCategories", label:"Edit medicine categories"},
+    {key:"diagnostics", label:"Diagnostics"}
   ];
   let body = "";
   if(addUserLoginUi.step==="verify"){
@@ -5740,7 +5777,7 @@ function renderAddUserLoginModal(){
 function toggleAddUser(){
   manageUi.addingUser = !manageUi.addingUser;
   manageUi.newName=""; manageUi.newRole="receptionist"; manageUi.newPin="";
-  manageUi.newPrivileges = {printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false};
+  manageUi.newPrivileges = {printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false, diagnostics:false};
   render();
 }
 function onNewUserName(v){ manageUi.newName=v; }
@@ -5775,7 +5812,7 @@ function startEditUser(id){
   manageUi.editingId = id;
   manageUi.editRole = p.role;
   manageUi.editPin = p.pin || "";
-  manageUi.editPrivileges = Object.assign({printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false}, p.privileges||{});
+  manageUi.editPrivileges = Object.assign({printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false, diagnostics:false}, p.privileges||{});
   render();
 }
 function cancelEditUser(){ manageUi.editingId=null; render(); }
@@ -5862,7 +5899,8 @@ function renderPrivilegeConfirmModal(){
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
     {key:"monthlyTotal", label:"Monthly Total Sales"},
-    {key:"editCategories", label:"Edit medicine categories"}
+    {key:"editCategories", label:"Edit medicine categories"},
+    {key:"diagnostics", label:"Diagnostics"}
   ];
   const chosen = items.filter(it=>d.privileges && d.privileges[it.key]).map(it=>it.label);
   root.innerHTML = `
@@ -6108,7 +6146,7 @@ function toggleManageUsersModal(){
   if(!can("manageUsers")) return;
   manageUi.open = !manageUi.open;
   if(!manageUi.open){ manageUi.addingUser=false; manageUi.editingId=null; }
-  render();
+  renderOverlays();
 }
 function renderManageUsersModal(){
   const root = document.getElementById("manageUsersModalRoot");
@@ -6125,7 +6163,8 @@ function renderManageUsersModal(){
     {key:"printer", label:"Printer settings"},
     {key:"receiptSetup", label:"Receipt setup"},
     {key:"monthlyTotal", label:"Monthly Total Sales"},
-    {key:"editCategories", label:"Edit medicine categories"}
+    {key:"editCategories", label:"Edit medicine categories"},
+    {key:"diagnostics", label:"Diagnostics"}
   ];
   const privilegeCheckboxesHtml = (privileges, toggleFn) => `
     <label class="field-label" style="text-align:left;">Privileges (Manage Users is never included)</label>
@@ -6631,7 +6670,7 @@ function mergeBackupInto(data){ mergeDataInto(data, mergeInventory, false); }
 // restock, sale, warning toggle, or DELETE made on one phone correctly propagates to the other
 // instead of being silently ignored (or the deleted item quietly reappearing a second later).
 function mergeCloudSnapshotInto(data){ mergeDataInto(data, reconcileInventoryForSync, true); }
-function toggleBackupModal(){ backupUi.open = !backupUi.open; render(); }
+function toggleBackupModal(){ backupUi.open = !backupUi.open; renderOverlays(); }
 function toggleHeaderMenu(){
   headerMenuOpen = !headerMenuOpen;
   const d = document.getElementById("headerMenuDropdown");
@@ -6654,6 +6693,7 @@ function renderHeaderMenu(){
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
+  if(can("diagnostics")) items.push({label:"🩺 Diagnostics", action:"openDiag()"}); // Admin always; Semi-Admin only if ticked
   { const me = profiles.find(x=>x.id===currentProfileId);
     if(GMAIL_LOGIN_ENABLED && window.AppInventor) items.push({label: me && me.email ? "🔗 Gmail: "+me.email+" (change)" : "🔗 Link my Gmail", action:"startLinkGmail()"}); }
   items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
@@ -6742,7 +6782,13 @@ function formatSyncError(e){
   return code + msg;
 }
 function setSyncError(e){
-  lastSyncError = formatSyncError(e);
+  const msg = formatSyncError(e);
+  if(typeof diagLog==="function") diagLog("sync", msg);
+  // "unavailable" / "client is offline" just means the phone can't reach the server right now. The
+  // header badge already says "Offline" and everything is kept on the phone and uploaded later, so
+  // no warning banner for that. Real problems (permissions, quota, bad data...) still show.
+  if((e && e.code==="unavailable") || /client is offline|failed to get document because|network error|timed out/i.test(msg) || navigator.onLine===false) return;
+  lastSyncError = msg;
   renderSyncBanner();
 }
 function clearSyncError(){
@@ -7320,10 +7366,10 @@ function openQuickAdd(photo){
   aiProcessQueue();
   aiUi.pick=null;
   aiUi.open=true; aiUi.rows=null; aiUi.error=""; aiUi.busy=false;
-  render();
+  renderOverlays();
   if(photo) aiPickPhoto("hand");
 }
-function closeQuickAdd(){ aiUi.open=false; aiUi.rows=null; aiUi.busy=false; aiUi.error=""; render(); }
+function closeQuickAdd(){ aiUi.open=false; aiUi.rows=null; aiUi.busy=false; aiUi.error=""; renderOverlays(); }
 function aiReadText(){
   const rows = aiParseText(aiUi.text);
   if(!rows.length){ aiUi.error="Type or paste at least one medicine first."; render(); return; }
@@ -7350,15 +7396,15 @@ function aiPickListHtml(i,q){
   if(rest.length>40) h+=`<p class="small faint" style="padding:8px 4px;">+${rest.length-40} more — use the search box.</p>`;
   return h;
 }
-function aiOpenPick(i){ aiUi.pick={i}; render(); }
+function aiOpenPick(i){ aiUi.pick={i}; renderOverlays(); }
 function aiPickSearch(v){ const el=document.getElementById("aiPickList"); if(el && aiUi.pick) el.innerHTML=aiPickListHtml(aiUi.pick.i,v); }
-function aiChoose(i,id){ aiRowMed(i,id); aiUi.pick=null; render(); }
+function aiChoose(i,id){ aiRowMed(i,id); aiUi.pick=null; renderOverlays(); }
 function aiSetAllDays(){
   const el=document.getElementById("aiAllDays"), d=Math.max(0,Math.floor(Number(el&&el.value)||0));
   if(!d || !aiUi.rows) return;
   aiUi.rows.forEach(r=>{ r.days=d; });
   aiUi.daysNote=d+" days (set by you)";
-  render();
+  renderOverlays();
 }
 function aiRowMed(i,id){ aiUi.rows[i].medId=id; aiRowInfo(i); }
 function aiRowSet(i,field,v){ aiUi.rows[i][field]=Number(v)||0; aiRowInfo(i); }
@@ -7400,7 +7446,7 @@ function aiConfirmAdd(){
 // ---- handwriting: photo -> your AI endpoint -> typed text ----
 function aiPickPhoto(mode){
   aiUi.mode = (mode==="print"||mode==="box") ? mode : "hand";
-  if(aiUi.mode==="hand" && !aiGeminiKey()){ aiUi.error="Handwriting needs a one-time setup — open “Handwriting setup” below and paste your free Gemini key."; aiUi.setupOpen=true; render(); return; }
+  if(aiUi.mode==="hand" && !aiGeminiKey()){ aiUi.error="Handwriting needs a one-time setup — open “Handwriting setup” below and paste your free Gemini key."; aiUi.setupOpen=true; renderOverlays(); return; }
   takePhoto(file=>aiHandleFile(file));
 }
 function aiResizeImage(file, maxSide){
@@ -7493,7 +7539,7 @@ function aiLoadReady(){
   aiUi.text=(aiUi.text?aiUi.text+"\n":"")+ready.join("\n");
   aiSetList(AI_READY_KEY,[]);
   aiUi.rows=aiParseText(aiUi.text); if(!aiUi.rows.length) aiUi.rows=null;
-  render();
+  renderOverlays();
 }
 window.addEventListener("online",()=>{ aiProcessQueue(); });
 setTimeout(aiProcessQueue,6000);
@@ -7572,7 +7618,7 @@ async function takePhoto(cb, max){
 }
 async function aiHandleFile(file){
   if(!file) return;
-  aiUi.busy=true; aiUi.error=""; aiUi.busyMsg = (aiUi.mode==="print"||aiUi.mode==="box") ? "Reading printed text…" : ""; render();
+  aiUi.busy=true; aiUi.error=""; aiUi.busyMsg = (aiUi.mode==="print"||aiUi.mode==="box") ? "Reading printed text…" : ""; renderOverlays();
   try{
     let text;
     if(aiUi.mode==="print"||aiUi.mode==="box"){
@@ -7585,19 +7631,19 @@ async function aiHandleFile(file){
       if(!text) throw new Error("No printed text found — try a clearer, closer photo");
     } else {
       const image=await aiResizeImage(file,1600);
-      if(!navigator.onLine){ aiQueuePhoto(image); aiUi.busy=false; render(); return; }
+      if(!navigator.onLine){ aiQueuePhoto(image); aiUi.busy=false; renderOverlays(); return; }
       try{ text=await aiReadImage(image); }
-      catch(e){ if(e instanceof TypeError){ aiQueuePhoto(image); aiUi.busy=false; render(); return; } throw e; }
+      catch(e){ if(e instanceof TypeError){ aiQueuePhoto(image); aiUi.busy=false; renderOverlays(); return; } throw e; }
     }
     aiUi.text=text; aiUi.busy=false;
     aiUi.rows=aiParseText(text); if(!aiUi.rows.length) aiUi.rows=null;
     // A scanned box carries no dose or days: default to 1 unit — the person can change it in the preview.
     if(aiUi.mode==="box" && aiUi.rows) aiUi.rows.forEach(r=>{ if(!aiRowPills(r)) r.qty=1; });
-    render();
+    renderOverlays();
   }catch(e){
     aiUi.busy=false;
     aiUi.error=(e&&e.name==="AbortError") ? "That took too long — check your internet and try again." : ("⚠ "+(e&&e.message?e.message:"Couldn't read the photo"));
-    render();
+    renderOverlays();
   }
 }
 function renderAiModal(){
@@ -7691,6 +7737,137 @@ function renderBackupModal(){
           <p class="small" style="margin:0 0 12px;color:var(--primary);">To sync two phones with no internet: export on Phone A → send the file over Bluetooth/Nearby Share → import on Phone B. It merges automatically — bills, stock and notes from both phones are combined, nothing is lost or double-counted — and B will then download a combined file for you to send back to A the same way.</p>
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="exportBackup()">⬇ Download backup file</button>
           <button class="btn btn-outline" style="width:100%;" onclick="triggerImportPicker()">⬆ Import &amp; merge backup file</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ===================== DIAGNOSTICS (Admin only) ===================== */
+// One master switch (Settings > Diagnostics). OFF = nothing is recorded and nothing runs in the
+// background. ON = errors, sync events, network calls (no keys/addresses with secrets), slow screens
+// and app-bridge commands are kept in a log, and the panel can run live health checks.
+const DIAG_KEY="clinic_diag_on", DIAG_LOG_KEY="clinic_diag_log";
+let diagUi={open:false,snap:null,checks:null,busy:false};
+let diagLogBuf=[], diagLastRender=0;
+const diagOn=()=>localStorage.getItem(DIAG_KEY)==="1";
+function diagLog(type,msg){
+  if(!diagOn()) return;
+  diagLogBuf.push({t:Date.now(),type,msg:String(msg).slice(0,300)});
+  if(diagLogBuf.length>150) diagLogBuf.shift();
+  clearTimeout(diagLog._t);
+  diagLog._t=setTimeout(()=>{ try{ localStorage.setItem(DIAG_LOG_KEY,JSON.stringify(diagLogBuf.slice(-100))); }catch(e){} },1500);
+}
+(function(){
+  try{ const v=JSON.parse(localStorage.getItem(DIAG_LOG_KEY)||"[]"); diagLogBuf=Array.isArray(v)?v:[]; }catch(e){}
+  window.addEventListener("error",e=>diagLog("error",(e.message||"error")+" @"+String(e.filename||"").split("/").pop()+":"+e.lineno));
+  window.addEventListener("unhandledrejection",e=>diagLog("error","promise: "+((e.reason&&e.reason.message)||e.reason)));
+  window.addEventListener("online",()=>diagLog("net","back online"));
+  window.addEventListener("offline",()=>diagLog("net","went offline"));
+  const _render=window.render;
+  if(typeof _render==="function") window.render=function(){ const t0=performance.now(); const r=_render.apply(this,arguments); const dt=performance.now()-t0; diagLastRender=Math.round(dt); if(dt>200) diagLog("slow","render() took "+Math.round(dt)+" ms on "+tab); return r; };
+  const _fetch=window.fetch.bind(window);
+  window.fetch=function(u,o){
+    if(!diagOn()) return _fetch(u,o);
+    const t0=performance.now(), name=String((u&&u.url)||u).replace(/[?#].*$/,"").replace(/^https?:\/\//,"").slice(0,60); // query (keys) is never logged
+    return _fetch(u,o).then(r=>{ diagLog(r.ok?"net":"error","fetch "+name+" -> "+r.status+" ("+Math.round(performance.now()-t0)+" ms)"); return r; },
+                            e=>{ diagLog("error","fetch "+name+" failed: "+(e&&e.message)); throw e; });
+  };
+})();
+function diagWrapBridge(){
+  try{
+    const A=window.AppInventor;
+    if(A && !A.__diagWrapped && typeof A.setWebViewString==="function"){
+      const f=A.setWebViewString.bind(A);
+      A.setWebViewString=function(m){ diagLog("bridge","to app: "+String(m).slice(0,24).replace(/[\r\n]/g," ")); return f(m); };
+      A.__diagWrapped=true;
+    }
+  }catch(e){}
+}
+setTimeout(diagWrapBridge,3000);
+function openDiag(){ if(!can("diagnostics")) return; diagUi.open=true; diagUi.snap=null; diagUi.checks=null; diagWrapBridge(); renderOverlays(); if(diagOn()) diagRefresh(); }
+function closeDiag(){ diagUi.open=false; renderOverlays(); }
+function diagToggle(on){
+  try{ localStorage.setItem(DIAG_KEY,on?"1":"0"); }catch(e){}
+  if(on){ diagWrapBridge(); diagLog("info","Diagnostics turned ON"); diagRefresh(); }
+  else { diagLogBuf=[]; try{ localStorage.removeItem(DIAG_LOG_KEY); }catch(e){} diagUi.snap=null; diagUi.checks=null; renderOverlays(); }
+}
+function diagClear(){ diagLogBuf=[]; try{ localStorage.removeItem(DIAG_LOG_KEY); }catch(e){} renderOverlays(); }
+async function diagSnapshot(){
+  const s={}, est=estimatedCloudDataSize();
+  s["Time"]=new Date().toLocaleString();
+  s["Network"]=navigator.onLine?"online":"offline";
+  s["Cloud sync"]=syncStatus+(lastSyncError?" · "+lastSyncError:"");
+  s["Firebase"]=fbDb?"started":"NOT started";
+  s["Cloud document"]=est!=null?formatBytes(est)+" = "+(est/1048576*100).toFixed(0)+"% of the 1 MB Firestore limit":"unknown";
+  s["Data"]=inventory.filter(m=>!m.deleted).length+" medicines · "+transactions.filter(t=>!t.deleted).length+" bills · "+profiles.filter(p=>!p.deleted).length+" users";
+  try{ const e=await navigator.storage.estimate(); s["Phone storage"]=formatBytes(e.usage)+" used of "+formatBytes(e.quota); }catch(x){ s["Phone storage"]="n/a"; }
+  s["Offline mode"]=navigator.serviceWorker?(navigator.serviceWorker.controller?"service worker active":"not controlling this page yet"):"not supported";
+  try{ s["App version"]=(await caches.keys()).join(", ")||"none"; }catch(x){ s["App version"]="n/a"; }
+  try{ s["Camera permission"]=(await navigator.permissions.query({name:"camera"})).state; }catch(x){ s["Camera permission"]="unknown"; }
+  s["AI reader"]=(aiGeminiKey()?"Gemini key saved":"no key")+" · "+aiList(AI_QUEUE_KEY).length+" photo(s) waiting";
+  s["Screen"]=innerWidth+"x"+innerHeight+" @"+devicePixelRatio+"x";
+  s["Memory"]=performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576)+" MB JS heap":"n/a";
+  const nav=performance.getEntriesByType("navigation")[0];
+  if(nav) s["Load time"]=Math.round(nav.domContentLoadedEventEnd)+" ms to ready · "+Math.round(nav.loadEventEnd)+" ms fully loaded";
+  s["Last screen draw"]=diagLastRender+" ms";
+  return s;
+}
+async function diagRunChecks(){
+  const out=[], add=(n,ok,d)=>out.push({n,ok,d:d||""});
+  let t=performance.now();
+  try{ await fetch("https://www.gstatic.com/generate_204",{mode:"no-cors",cache:"no-store"}); add("Internet",true,Math.round(performance.now()-t)+" ms"); }catch(e){ add("Internet",false,"not reachable"); }
+  if(fbDb){ t=performance.now(); try{ await withTimeout(cloudDocRef().get({source:"server"}),8000); add("Cloud database",true,Math.round(performance.now()-t)+" ms"); }catch(e){ add("Cloud database",false,formatSyncError(e)); } }
+  else add("Cloud database",false,"Firebase not started");
+  try{ localStorage.setItem("__diag","1"); localStorage.removeItem("__diag"); add("Saving on the phone",true); }catch(e){ add("Saving on the phone",false,e.message); }
+  add("Camera",!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia),"");
+  add("Offline mode",!!(navigator.serviceWorker&&navigator.serviceWorker.controller),"");
+  const pct=(estimatedCloudDataSize()||0)/1048576*100; add("Cloud document size",pct<70,pct.toFixed(0)+"% of the 1 MB limit");
+  diagLog("check",out.map(o=>(o.ok?"ok ":"FAIL ")+o.n).join("; "));
+  return out;
+}
+async function diagRefresh(){ diagUi.busy=true; renderOverlays(); diagUi.snap=await diagSnapshot(); diagUi.busy=false; renderOverlays(); }
+async function diagChecksNow(){ diagUi.busy=true; renderOverlays(); diagUi.checks=await diagRunChecks(); diagUi.snap=await diagSnapshot(); diagUi.busy=false; renderOverlays(); }
+function diagReport(){
+  const L=[]; L.push("Counter Book diagnostics "+new Date().toLocaleString());
+  if(diagUi.snap) Object.keys(diagUi.snap).forEach(k=>L.push(k+": "+diagUi.snap[k]));
+  if(diagUi.checks){ L.push("-- checks"); diagUi.checks.forEach(c=>L.push((c.ok?"OK   ":"FAIL ")+c.n+" "+c.d)); }
+  L.push("-- log"); diagLogBuf.slice(-60).forEach(e=>L.push(new Date(e.t).toLocaleTimeString()+" ["+e.type+"] "+e.msg));
+  return L.join("\n");
+}
+function diagCopy(){
+  const t=diagReport();
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(()=>showToast("✓ Report copied")).catch(()=>showToast("Couldn't copy"));
+  else showToast("Copy isn't available here");
+}
+function renderDiagModal(){
+  const root=document.getElementById("diagModalRoot"); if(!root) return;
+  if(!diagUi.open){ root.innerHTML=""; return; }
+  const on=diagOn(), colors={error:"#b91c1c",sync:"#b4650a",slow:"#b4650a",net:"#0f766e",bridge:"#6b7280",check:"#0f766e",info:"#6b7280"};
+  const snap=diagUi.snap?Object.keys(diagUi.snap).map(k=>`<div class="row" style="padding:4px 0;gap:10px;align-items:flex-start;"><span class="small faint" style="flex:0 0 38%;">${esc(k)}</span><span class="small" style="flex:1;word-break:break-word;text-align:right;">${esc(diagUi.snap[k])}</span></div>`).join(""):"";
+  const checks=diagUi.checks?diagUi.checks.map(c=>`<div class="row" style="padding:4px 0;"><span class="small">${c.ok?"✅":"❌"} ${esc(c.n)}</span><span class="small faint" style="text-align:right;word-break:break-word;">${esc(c.d)}</span></div>`).join(""):"";
+  const log=diagLogBuf.slice(-60).reverse().map(e=>`<div class="small" style="padding:3px 0;border-bottom:1px solid var(--border);word-break:break-word;"><span class="faint">${new Date(e.t).toLocaleTimeString()}</span> <b style="color:${colors[e.type]||"#374151"};">${esc(e.type)}</b> ${esc(e.msg)}</div>`).join("");
+  root.innerHTML=`
+    <div class="modal-overlay" onclick="if(event.target===this) closeDiag()">
+      <div class="modal">
+        <div class="modal-head"><strong>🩺 Diagnostics</strong><button class="modal-x" onclick="closeDiag()">✕</button></div>
+        <div style="padding:14px 16px;">
+          <label style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--primarySoft);border-radius:12px;cursor:pointer;margin-bottom:12px;">
+            <input type="checkbox" style="width:auto;margin:0;" ${on?"checked":""} onchange="diagToggle(this.checked)">
+            <span><strong>Diagnostic tools: ${on?"ON":"OFF"}</strong><br><span class="small faint">Records errors, sync events, network calls and slow screens. Off = nothing is recorded.</span></span>
+          </label>
+          ${!on?`<p class="small faint">Turn the switch on to see live status, run health checks and keep an event log. Secrets such as keys are never logged.</p>`:`
+          <div class="flex" style="gap:8px;margin-bottom:10px;">
+            <button class="btn btn-primary flex1" style="padding:9px;font-size:12px;" ${diagUi.busy?"disabled":""} onclick="diagChecksNow()">${diagUi.busy?"Working…":"▶ Run checks"}</button>
+            <button class="btn btn-outline flex1" style="padding:9px;font-size:12px;" ${diagUi.busy?"disabled":""} onclick="diagRefresh()">⟳ Refresh</button>
+          </div>
+          ${checks?`<div class="ai-sec">Health checks</div>${checks}`:""}
+          ${snap?`<div class="ai-sec">Status</div>${snap}`:""}
+          <div class="ai-sec">Event log (newest first)</div>
+          ${log||'<p class="small faint">Nothing recorded yet.</p>'}
+          <div class="flex" style="gap:8px;margin-top:12px;">
+            <button class="btn btn-outline flex1" style="padding:9px;font-size:12px;" onclick="diagCopy()">📋 Copy report</button>
+            <button class="btn btn-outline flex1" style="padding:9px;font-size:12px;" onclick="diagClear()">🗑 Clear log</button>
+          </div>`}
         </div>
       </div>
     </div>`;
