@@ -1,6 +1,6 @@
 // Counter Book offline cache. Bump CACHE_NAME (e.g. v42, v43...) any time index.html is updated
 // on GitHub, so returning devices pick up the new version.
-const CACHE_NAME = "counter-book-v43";
+const CACHE_NAME = "counter-book-v44";
 const APP_FILES = ["./", "./index.html"];
 // Big, versioned library files (Firebase SDK, OCR/barcode readers). They never change for a given
 // URL, so after the first download they are served from the phone instead of the network.

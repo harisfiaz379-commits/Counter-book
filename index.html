@@ -207,6 +207,11 @@
      invisible and unclickable. Confirm dialogs are always meant to be the topmost thing on
      screen, so they get a dedicated higher z-index instead of relying on DOM order. */
   #confirmModalRoot .modal-overlay{z-index:60;}
+  .priv-list{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff;}
+  .priv-row{display:flex;align-items:center;gap:12px;padding:12px 14px;font-size:14px;font-weight:600;border-bottom:1px solid var(--border);cursor:pointer;margin:0;text-align:left;}
+  .priv-row:last-child{border-bottom:none;}
+  .priv-row input[type=checkbox]{width:22px;height:22px;min-width:22px;flex:none;margin:0;padding:0;accent-color:var(--primary);}
+  .priv-row span{flex:1;text-align:left;}
   .formula-sug{border:1px solid var(--border);border-radius:10px;background:#fff;margin:-2px 0 8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}
   .formula-sug-item{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;background:#fff;border:none;border-bottom:1px solid var(--border);padding:10px 12px;font-size:14px;color:var(--text,#1B2430);cursor:pointer;}
   .formula-sug-item:last-child{border-bottom:none;}
@@ -474,6 +479,9 @@ let recEdit = { patient:"", fee:"", items:[], query:"", pills:"", selectedMedId:
 let notesUi = { openId:null, draftTitle:"", draftBody:"", searchQuery:"" };
 let sessionAuthed = false; // whether someone has entered a correct PIN this session; persists until "Switch User" is tapped
 let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock screen
+// setupHold: on a brand-new device the "set up Admin" screen stays put even if existing accounts arrive from the
+// cloud a few seconds later; the person chooses "Already have an account? Log in" themselves.
+let setupHold = false, setupWantLogin = false;
 let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
 let manageUi = { open:false, addingUser:false, newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false}, editingId:null, editRole:"", editPin:"", editPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} }; // admin-only "Manage Users" screen
 let forgotUi = { open:false, profileId:"", step:"choose", answer:"", code:"", newPin:"", confirmPin:"", error:"" }; // Admin-only "Forgot PIN" recovery flow on the login screen
@@ -1583,12 +1591,23 @@ function render(){
   renderHeaderMenu();
   renderUserBadge();
 
+  // AI reading and Settings act on data/a logged-in profile that doesn't exist yet during
+  // first-run setup or the PIN login screen, so they're hidden there — just Refresh stays.
+  {
+    const showHeaderExtras = visibleProfiles().length>0 && !setupHold && sessionAuthed;
+    const aiBtn = document.getElementById("aiReadingBtn");
+    const menuBtn = document.getElementById("headerMenuBtn");
+    if(aiBtn) aiBtn.style.display = showHeaderExtras ? "" : "none";
+    if(menuBtn) menuBtn.style.display = showHeaderExtras ? "" : "none";
+  }
+
   // Gate everything behind login: first-run shows "set up Admin"; otherwise shows the PIN
   // login screen until sessionAuthed. Both skip tabs/nav entirely — nothing else renders.
-  if(visibleProfiles().length===0){
+  if(visibleProfiles().length===0 || setupHold){
     document.getElementById("nav").innerHTML = "";
     const fab0 = document.getElementById("invFab"); if(fab0) fab0.className="hidden";
-    renderSetupAdmin();
+    if(visibleProfiles().length===0 && setupWantLogin) renderSetupWaiting();
+    else { setupHold = true; renderSetupAdmin(); }
     syncHeaderOffset();
     return;
   }
@@ -3618,6 +3637,17 @@ function parseBoxText(text){
   if(line) out.productName = line;
   return out;
 }
+// "Add bill offline": no photo/AI — closes the menu and opens the Bill tab for normal manual entry.
+function aiAddBillOffline(){
+  aiUi.open=false; aiUi.rows=null; aiUi.error=""; renderAiModal();
+  if(tab!=="bill") setTab("bill"); else render();
+}
+// "Add medicine offline": no photo/AI — closes the menu and opens a blank New medicine form on Inventory.
+function aiAddMedOffline(){
+  aiUi.open=false; aiUi.rows=null; aiUi.error=""; renderAiModal();
+  if(tab!=="inventory") setTab("inventory"); else render();
+  if(!inv.showForm) toggleInvForm();
+}
 // "Add M.Picture" (in the AI reading menu): opens a blank New medicine form on the Inventory tab
 // and fills it from a photo of the box. Works offline once the printed-text reader is downloaded.
 function aiAddMedPicture(){
@@ -5437,6 +5467,11 @@ async function submitSetupAdmin(){
   if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
   if(!question){ showToast("Choose or type a security question"); return; }
   if(!answer){ showToast("Enter an answer to your security question"); return; }
+  if(visibleProfiles().length>0){
+    // Existing accounts arrived from the cloud while this form was open — don't create a second Admin.
+    showToast("Accounts already exist on this clinic — please log in instead");
+    setupHold = false; setupWantLogin = true; render(); return;
+  }
   const code = genRecoveryCode();
   const [answerHash, codeHash] = await Promise.all([
     hashSecret(normalizeAnswer(answer)),
@@ -5453,6 +5488,7 @@ async function submitSetupAdmin(){
 function finishSetupAdmin(){
   const id = setupUi.pendingProfileId;
   setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" };
+  setupHold = false; setupWantLogin = false;
   activateProfile(id);
   render();
 }
@@ -5539,8 +5575,20 @@ function renderSetupAdmin(){
       <label class="field-label" style="text-align:left;">Answer</label>
       <input ${NOAC} value="${esc(setupUi.answer)}" oninput="onSetupAnswer(this.value)" placeholder="Answer only you'd know" class="mb2">
       <button class="btn btn-primary" style="width:100%;" onclick="submitSetupAdmin()">Create Admin account</button>
+      <button style="background:none;border:none;color:var(--faint);font-size:13px;margin-top:14px;cursor:pointer;padding:4px;" onclick="goToExistingLogin()">Already have an account? <b style="color:var(--primary);">Log in</b></button>
     </div>`;
 }
+function renderSetupWaiting(){
+  document.getElementById("main").innerHTML = `
+    <div class="card" style="max-width:340px;margin:40px auto 0;text-align:center;">
+      <p style="font-weight:700;font-size:16px;margin:0 0 6px;">Looking for your accounts…</p>
+      <p class="small faint" style="margin:0 0 16px;">Existing accounts download from the cloud, so this device needs internet. They will appear here by themselves as soon as they arrive.</p>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="trySyncNow()">Check again</button>
+      <button style="background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;padding:4px;" onclick="backToSetupFromWaiting()">← Create a new Admin account instead</button>
+    </div>`;
+}
+function goToExistingLogin(){ setupHold=false; setupWantLogin=true; try{ trySyncNow(); }catch(e){} render(); }
+function backToSetupFromWaiting(){ setupWantLogin=false; render(); }
 function renderLogin(){
   const list = visibleProfiles();
   const picked = list.find(p=>p.id===loginUi.pickedId);
@@ -5748,11 +5796,11 @@ function renderAddUserLoginModal(){
       <select onchange="onAddUserLoginRole(this.value)" class="mb2">${roleOpt(addUserLoginUi.newRole)}</select>
       ${addUserLoginUi.newRole==="semiadmin"?`
         <label class="field-label" style="text-align:left;">Privileges (Manage Users is never included)</label>
-        <div class="mb2">
+        <div class="priv-list mb2">
           ${PRIVILEGE_ITEMS.map(it=>`
-            <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:14px;">
+            <label class="priv-row">
               <input type="checkbox" ${addUserLoginUi.newPrivileges[it.key]?"checked":""} onchange="onAddUserLoginPrivilegeToggle('${it.key}')">
-              ${it.label}
+              <span>${it.label}</span>
             </label>`).join("")}
         </div>
       `:""}
@@ -6168,11 +6216,11 @@ function renderManageUsersModal(){
   ];
   const privilegeCheckboxesHtml = (privileges, toggleFn) => `
     <label class="field-label" style="text-align:left;">Privileges (Manage Users is never included)</label>
-    <div class="mb2">
+    <div class="priv-list mb2">
       ${PRIVILEGE_ITEMS.map(it=>`
-        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:14px;">
+        <label class="priv-row">
           <input type="checkbox" ${privileges[it.key]?"checked":""} onchange="${toggleFn}('${it.key}')">
-          ${it.label}
+          <span>${it.label}</span>
         </label>`).join("")}
     </div>`;
   root.innerHTML = `
@@ -7662,10 +7710,10 @@ function renderAiModal(){
     const qInfo = (nR?`<button class="btn btn-success" style="width:100%;margin-bottom:8px;" onclick="aiLoadReady()">📄 Load ${nR} read photo${nR>1?"s":""}</button>`:"")
       + (nQ?`<p class="small" style="margin:0 0 8px;color:var(--primary);">📥 ${nQ} photo${nQ>1?"s":""} waiting for internet</p>`:"");
     body = `${err}${qInfo}
-      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('hand')">📷 Read handwriting from a photo</button>
-      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('box')">📦 Scan a medicine box (normal + special, works offline)</button>
-      <button class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="aiAddMedPicture()">🖼 Add M.Picture (new medicine from a box photo)</button>
-      <button class="btn btn-outline" style="width:100%;margin-bottom:12px;" onclick="aiPickPhoto('print')">🖨 Read printed text (works offline)</button>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="aiPickPhoto('hand')">📷 Add bill online</button>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="aiAddBillOffline()">🧾 Add bill offline</button>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="aiAddMedPicture()">🖼 Add medicine online</button>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:12px;" onclick="aiAddMedOffline()">💊 Add medicine offline</button>
       <details ${aiUi.setupOpen?"open":""} ontoggle="aiUi.setupOpen=this.open">
         <summary class="small" style="cursor:pointer;color:var(--primary);">⚙ Handwriting setup (free Gemini key)</summary>
         <p class="small faint" style="margin:8px 0 6px;">Get a free key at aistudio.google.com → “Get API key”, then paste it here. It is saved on this phone only. Photos you read are sent to Google, and the free plan may use them to improve Google's models.</p>
