@@ -353,6 +353,8 @@
 <div id="privilegeConfirmModalRoot"></div>
 <div id="receiptModalRoot"></div>
 <div id="scanMethodModalRoot"></div>
+<div id="themeModalRoot"></div>
+<div id="receiptDesignRoot"></div>
 <div id="recoveryModalRoot"></div>
 <div id="forgotPinModalRoot"></div>
 <div id="datePickerModalRoot"></div>
@@ -377,7 +379,12 @@ const CURRENCY = "Rs ";
 // input's own native display, not in anything this page draws). If this fixes it, the
 // trade-off is medicine names may show spellcheck underlines; if it doesn't, this is safe to
 // revert and the real cause is still elsewhere.
-const NOAC = 'autocomplete="off" autocorrect="off" data-lpignore="true"';
+// autocapitalize="sentences" makes the keyboard start each box with a capital letter.
+// autocorrect="off" was removed: newer Android keyboards treat it as "no suggestions", which
+// also switches auto-capital off everywhere.
+const NOAC = 'autocomplete="off" autocapitalize="sentences" data-lpignore="true"';
+// For boxes holding keys, codes, addresses or dates — these must stay exactly as typed.
+const NOAC_RAW = 'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true"';
 let inventory = [];
 let transactions = [];
 let monthAdjustments = {}; // { "YYYY-MM": {doctorFee, medTotal, testsTotal, othersTotal, updatedAt} } — manual corrections, not tied to any bill
@@ -847,8 +854,8 @@ function renderHistoryModal(){
         <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
           <p class="small faint" style="margin:0 0 8px;">Leave dates blank to request everything currently kept (up to 60 days).</p>
           <div class="flex gap2 mb2">
-            <input ${NOAC} type="text" placeholder="From YYYY-MM-DD" value="${esc(historyUi.fromDraft)}" oninput="onHistoryFromDraft(this.value)" class="flex1">
-            <input ${NOAC} type="text" placeholder="To YYYY-MM-DD" value="${esc(historyUi.toDraft)}" oninput="onHistoryToDraft(this.value)" class="flex1">
+            <input ${NOAC_RAW} type="text" placeholder="From YYYY-MM-DD" value="${esc(historyUi.fromDraft)}" oninput="onHistoryFromDraft(this.value)" class="flex1">
+            <input ${NOAC_RAW} type="text" placeholder="To YYYY-MM-DD" value="${esc(historyUi.toDraft)}" oninput="onHistoryToDraft(this.value)" class="flex1">
           </div>
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="submitHistoryRequest()">${pendingReq?"Request again":"Request from that device"}</button>
           ${pendingReq?'<p class="small faint" style="margin:0 0 10px;">Waiting for that device to come online…</p>':""}
@@ -1501,7 +1508,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
+    printerUi.open || themeUi.open || rdUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1521,6 +1528,8 @@ function closeTopMenu(){
   if(manageUi.open){ manageUi.open=false; render(); return; }
   if(historyUi.open){ closeHistoryModal(); return; }
   if(aiUi.open){ closeQuickAdd(); return; }
+  if(themeUi.open){ closeThemeModal(); return; }
+  if(rdUi.open){ closeReceiptDesign(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
   if(diagUi.open){ diagUi.open=false; renderOverlays(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
@@ -1565,7 +1574,7 @@ function renderOverlays(){
   renderShareModal(); renderConfirmModal(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderPrinterModal();
   renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderHistoryModal();
   renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
-  renderScanMethodModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
+  renderScanMethodModal(); renderThemeModal(); renderReceiptDesignModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
   syncMenuHistory(); syncHeaderOffset();
 }
 function render(){
@@ -2271,6 +2280,58 @@ function getScanMethod(){
   try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="photo"||v==="camera") ? v : "scanner"; }catch(e){ return "scanner"; }
 }
 function saveScanMethod(v){ try{ localStorage.setItem("clinic_scan_method", v); }catch(e){} }
+// ---- App colour theme (Settings → 🎨 Theme). Only swaps the app's green/white accent colours
+// through the CSS variables in :root; saved per device. ----
+const THEMES = [
+  {id:"green",  name:"Green (default)", header:"#0F5C57", sub:"#CFE9E5", soft:"#E4F1EF", page:"#F3F6F7"},
+  {id:"blue",   name:"Blue",     header:"#1E4F9C", sub:"#D3E3FA", soft:"#E6EEFA", page:"#F3F5F9"},
+  {id:"purple", name:"Purple",   header:"#5B2C91", sub:"#E3D4F5", soft:"#EFE6F8", page:"#F6F4F9"},
+  {id:"pink",   name:"Pink",     header:"#A8325E", sub:"#F8D5E4", soft:"#FBE8F0", page:"#F9F4F6"},
+  {id:"red",    name:"Red",      header:"#B3261E", sub:"#F9D6D3", soft:"#FCE9E7", page:"#F9F4F4"},
+  {id:"orange", name:"Orange",   header:"#B45309", sub:"#FBE0C3", soft:"#FDF0E1", page:"#F9F6F2"},
+  {id:"slate",  name:"Charcoal", header:"#1F2937", sub:"#D1D5DB", soft:"#E5E7EB", page:"#F3F4F6"}
+];
+function getThemeId(){
+  try{ const v=localStorage.getItem("clinic_theme"); return THEMES.some(t=>t.id===v) ? v : "green"; }catch(e){ return "green"; }
+}
+function applyTheme(id){
+  const t = THEMES.find(x=>x.id===id) || THEMES[0], st = document.documentElement.style;
+  st.setProperty("--header", t.header); st.setProperty("--primary", t.header);
+  st.setProperty("--headerSub", t.sub); st.setProperty("--primarySoft", t.soft); st.setProperty("--page", t.page);
+  const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute("content", t.header);
+}
+let themeUi = { open:false };
+function openThemeModal(){ themeUi.open=true; renderOverlays(); }
+function closeThemeModal(){ themeUi.open=false; renderOverlays(); }
+function chooseTheme(id){
+  try{ localStorage.setItem("clinic_theme", id); }catch(e){}
+  applyTheme(id); renderOverlays();
+}
+function renderThemeModal(){
+  const root = document.getElementById("themeModalRoot");
+  if(!root) return;
+  if(!themeUi.open){ root.innerHTML=""; return; }
+  const cur = getThemeId();
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeThemeModal()">
+      <div class="modal">
+        <div class="modal-head">
+          <strong>🎨 App theme</strong>
+          <button class="modal-x" onclick="closeThemeModal()">✕</button>
+        </div>
+        <div style="padding:14px 16px;">
+          <p class="small faint" style="margin:0 0 12px;">Pick the main colour of the app. It changes instantly and is saved on this phone.</p>
+          ${THEMES.map(t=>`
+            <button type="button" onclick="chooseTheme('${t.id}')" style="display:flex;align-items:center;gap:12px;width:100%;margin-bottom:8px;padding:10px 12px;background:var(--card);border:2px solid ${cur===t.id?t.header:'var(--border)'};border-radius:12px;cursor:pointer;text-align:left;">
+              <span style="display:flex;width:44px;height:28px;border-radius:8px;overflow:hidden;border:1px solid var(--border);flex-shrink:0;"><span style="flex:2;background:${t.header};"></span><span style="flex:1;background:${t.sub};"></span><span style="flex:1;background:${t.soft};"></span></span>
+              <span style="flex:1;font-size:14px;font-weight:600;color:var(--text);">${t.name}</span>
+              <span style="font-size:16px;color:${t.header};">${cur===t.id?'✓':''}</span>
+            </button>`).join("")}
+        </div>
+      </div>
+    </div>`;
+}
+try{ applyTheme(getThemeId()); }catch(e){}
 let scanMethodUi = { open:false, method:"scanner" };
 function editScanMethodSettings(){
   scanMethodUi = { open:true, method:getScanMethod() };
@@ -2364,61 +2425,198 @@ function renderReceiptModal(){
     </div>`;
 }
 
-function buildEscPosReceipt(tx){
-  const ESC = "\x1B", GS = "\x1D", W = PRINTER_PAPER_CHARS;
-  const init = ESC + "@";                 // reset printer to defaults
-  const center = ESC + "a" + "\x01";
-  const left = ESC + "a" + "\x00";
-  const boldOn = ESC + "E" + "\x01";
-  const boldOff = ESC + "E" + "\x00";
-  const doubleOn = GS + "!" + "\x11";      // double width+height, for the shop name
-  const doubleOff = GS + "!" + "\x00";
-  const divider = "-".repeat(W) + "\n";
-  const feedAndCut = "\n\n\n" + GS + "V" + "\x00"; // feed 3 lines then full cut
-  const shop = getReceiptSettings();
-  const invoiceNo = (tx.id||"").slice(-6).toUpperCase();
+// ---- Receipt design (Settings → 🖌 Receipt design): what is printed and how it looks ----
+const RECEIPT_DESIGN_DEFAULT = {
+  paper:32,                       // characters per line: 32 = 58mm paper, 48 = 80mm paper
+  nameSize:"large",               // normal | tall | large
+  headAlign:"center", footAlign:"center",
+  showName:true, showAddress:true, showPhone:true, tagline:"",
+  showInvoice:true, showDate:true, showPatient:true, showPayment:true, showRemarks:true,
+  showMeds:true, showSpecial:true, showTests:true, showExtras:true,
+  itemStyle:"two",                // two = name then "qty x price .... amount" | one = single line
+  boldItems:false,
+  showDiscounts:true, showMedTotal:true, showTestsTotal:true, showFee:true, showQty:true,
+  boldTotal:true, totalSize:"normal",
+  divider:"-",                    // - | = | * | . | none
+  thanks:"Thank you!", footer:"",
+  feedLines:3, cut:true
+};
+function getReceiptDesign(){
+  let d = {}; try{ d = JSON.parse(localStorage.getItem("clinic_receipt_design")||"{}"); }catch(e){}
+  return Object.assign({}, RECEIPT_DESIGN_DEFAULT, d);
+}
+function saveReceiptDesign(d){ try{ localStorage.setItem("clinic_receipt_design", JSON.stringify(d)); }catch(e){} }
 
-  let r = init + center;
-  r += doubleOn + boldOn + shop.shopName + "\n" + boldOff + doubleOff;
-  if(shop.address) r += shop.address + "\n";
-  if(shop.phone) r += shop.phone + "\n";
-  r += left + divider;
-  r += padLR(`Invoice #${invoiceNo}`, fmtDateTime(tx.timestamp), W) + "\n";
-  r += `Patient: ${tx.patientName}\n`;
-  r += `Mode of Payment: ${tx.paymentMode||"Cash"}\n`;
-  if(tx.remarks) r += `Remarks: ${tx.remarks}\n`;
-  r += divider;
+// One list of lines {t:text, a:align, b:bold, z:size} is built here; the printer encoder and the
+// on-screen preview both read it, so what you see in the preview is what gets printed.
+function buildReceiptLines(tx, D){
+  D = D || getReceiptDesign();
+  const W = D.paper===48 ? 48 : 32, L=[];
+  const shop = getReceiptSettings();
+  const line = (t,o)=> L.push(Object.assign({t:t,a:"left",b:false,z:"normal"}, o||{}));
+  const divider = ()=>{ if(D.divider==="none") line(""); else line(D.divider.repeat(W)); };
+  const lr = (l,r,o)=> line(padLR(l,r,W), o);
+  const money$ = v=> `${CURRENCY}${money(v)}`;
+  const zw = z=> z==="large" ? Math.floor(W/2) : W;   // double-width text fits half as many characters
+
+  if(D.showName && shop.shopName) line(shop.shopName.slice(0,zw(D.nameSize)), {a:D.headAlign, b:true, z:D.nameSize});
+  if(D.tagline) line(D.tagline, {a:D.headAlign});
+  if(D.showAddress && shop.address) line(shop.address, {a:D.headAlign});
+  if(D.showPhone && shop.phone) line(shop.phone, {a:D.headAlign});
+  divider();
+  const invoiceNo = (tx.id||"").slice(-6).toUpperCase();
+  if(D.showInvoice && D.showDate) lr(`Invoice #${invoiceNo}`, fmtDateTime(tx.timestamp));
+  else if(D.showInvoice) line(`Invoice #${invoiceNo}`);
+  else if(D.showDate) line(fmtDateTime(tx.timestamp));
+  if(D.showPatient) line(`Patient: ${tx.patientName}`);
+  if(D.showPayment) line(`Mode of Payment: ${tx.paymentMode||"Cash"}`);
+  if(D.showRemarks && tx.remarks) line(`Remarks: ${tx.remarks}`);
+  divider();
 
   let totalQty = 0;
-  if(tx.items.length){
-    tx.items.forEach(it=>{
-      totalQty += it.pills;
-      r += `${it.name}${it.note?` (${it.note})`:""}\n`;
-      r += padLR(`  ${it.pills} x ${CURRENCY}${money(it.pricePerPill)}`, `${CURRENCY}${money(it.pricePerPill*it.pills)}`, W) + "\n";
+  const shown = (tx.items||[]).filter(it=> it.special ? D.showSpecial : D.showMeds);
+  (tx.items||[]).forEach(it=>{ totalQty += it.pills; });
+  if(shown.length){
+    shown.forEach(it=>{
+      const nm = `${it.name}${it.note?` (${it.note})`:""}`, amt = money$(it.pricePerPill*it.pills);
+      if(D.itemStyle==="one") lr(`${it.pills} x ${nm}`.slice(0,W-amt.length-1), amt, {b:D.boldItems});
+      else{
+        line(nm, {b:D.boldItems});
+        lr(`  ${it.pills} x ${money$(it.pricePerPill)}`, amt);
+      }
     });
-    if(tx.medsDiscount) r += padLR("Medicines discount", `-${CURRENCY}${money(tx.medsDiscount)}`, W) + "\n";
-    r += divider;
+    if(D.showDiscounts && tx.medsDiscount) lr("Medicines discount", `-${money$(tx.medsDiscount)}`);
+    divider();
   }
-  if(tx.tests && tx.tests.length){
-    tx.tests.forEach(t=> r += padLR(t.name, `${CURRENCY}${money(t.amount)}`, W) + "\n");
-    if(tx.testsDiscount) r += padLR("Tests discount", `-${CURRENCY}${money(tx.testsDiscount)}`, W) + "\n";
-    r += divider;
+  if(D.showTests && tx.tests && tx.tests.length){
+    tx.tests.forEach(t=> lr(t.name, money$(t.amount)));
+    if(D.showDiscounts && tx.testsDiscount) lr("Tests discount", `-${money$(tx.testsDiscount)}`);
+    divider();
   }
-  if(tx.extras && tx.extras.length){
-    tx.extras.forEach((ex,i)=> r += padLR(ex.label || `Other charge ${i+1}`, `${CURRENCY}${money(ex.amount)}`, W) + "\n");
-    r += divider;
+  if(D.showExtras && tx.extras && tx.extras.length){
+    tx.extras.forEach((ex,i)=> lr(ex.label || `Other charge ${i+1}`, money$(ex.amount)));
+    divider();
   }
-
-  r += padLR("Medicine total", `${CURRENCY}${money((tx.medTotal||0)-(tx.medsDiscount||0))}`, W) + "\n";
-  if(tx.tests && tx.tests.length) r += padLR("Tests total", `${CURRENCY}${money((tx.testsTotal||0)-(tx.testsDiscount||0))}`, W) + "\n";
-  r += padLR("Doctor fee", `${CURRENCY}${money((tx.doctorFee||0)-(tx.feeDiscount||0))}`, W) + "\n";
-  if(tx.feeDiscount) r += padLR("Doctor fee discount", `-${CURRENCY}${money(tx.feeDiscount)}`, W) + "\n";
-  r += divider;
-  if(totalQty) r += padLR("Total Qty", String(totalQty), W) + "\n";
-  r += boldOn + padLR("PAYABLE", `${CURRENCY}${money(tx.grandTotal)}`, W) + boldOff + "\n";
-  r += divider + center + "Thank you!\n" + left;
-  r += feedAndCut;
+  if(D.showMedTotal) lr("Medicine total", money$((tx.medTotal||0)-(tx.medsDiscount||0)));
+  if(D.showTestsTotal && tx.tests && tx.tests.length) lr("Tests total", money$((tx.testsTotal||0)-(tx.testsDiscount||0)));
+  if(D.showFee){
+    lr("Doctor fee", money$((tx.doctorFee||0)-(tx.feeDiscount||0)));
+    if(D.showDiscounts && tx.feeDiscount) lr("Doctor fee discount", `-${money$(tx.feeDiscount)}`);
+  }
+  divider();
+  if(D.showQty && totalQty) lr("Total Qty", String(totalQty));
+  const tz = D.totalSize==="tall" ? "tall" : "normal";
+  lr("PAYABLE", money$(tx.grandTotal), {b:D.boldTotal, z:tz});
+  divider();
+  if(D.thanks) line(D.thanks, {a:D.footAlign});
+  if(D.footer) line(D.footer, {a:D.footAlign});
+  return L;
+}
+function buildEscPosReceipt(tx){
+  const ESC = "\x1B", GS = "\x1D", D = getReceiptDesign();
+  const sizeCode = {normal:"\x00", tall:"\x01", large:"\x11"};
+  const alignCode = {left:"\x00", center:"\x01", right:"\x02"};
+  let r = ESC + "@";
+  buildReceiptLines(tx, D).forEach(l=>{
+    r += ESC+"a"+alignCode[l.a] + (l.b?ESC+"E\x01":"") + GS+"!"+sizeCode[l.z] + l.t + "\n" + GS+"!\x00" + ESC+"E\x00";
+  });
+  r += ESC+"a\x00" + "\n".repeat(Math.max(0,Math.min(8,D.feedLines|0)));
+  if(D.cut) r += GS + "V" + "\x00";
   return r;
+}
+let rdUi = { open:false, d:null };
+function openReceiptDesign(){
+  if(!can("receiptSetup")){ showToast("Only Admin can change receipt design"); return; }
+  rdUi = { open:true, d:getReceiptDesign() }; renderOverlays();
+}
+function closeReceiptDesign(){ rdUi.open=false; renderOverlays(); }
+function rdSet(k,v){ rdUi.d[k]=v; renderOverlays(); }
+function rdText(k,v){ rdUi.d[k]=v; rdRefreshPreview(); }
+function rdReset(){ rdUi.d=Object.assign({},RECEIPT_DESIGN_DEFAULT); renderOverlays(); }
+function rdSave(){ saveReceiptDesign(rdUi.d); rdUi.open=false; showToast("✓ Receipt design saved"); renderOverlays(); }
+function rdSample(){
+  return { id:"SAMPLE123456", timestamp:Date.now(), patientName:"Ayesha Khan", paymentMode:"Cash", remarks:"Dr. Salman",
+    items:[ {name:"Paracetamol 500mg", pills:10, pricePerPill:2, note:"2 x 5 days"}, {name:"Amoxicillin 250mg", pills:15, pricePerPill:8},
+            {name:"Insulin Pen", pills:1, pricePerPill:950, special:true} ],
+    medTotal:1090, medsDiscount:40, tests:[{name:"CBC", amount:500}], testsTotal:500, testsDiscount:0, extras:[{label:"Dressing", amount:100}],
+    doctorFee:500, feeDiscount:0, grandTotal:2150 };
+}
+function rdPreviewHtml(){
+  const D=rdUi.d, W=D.paper===48?48:32, scale={normal:1,tall:1,large:2};
+  const rows = buildReceiptLines(rdSample(), D).map(l=>{
+    const fs = l.z==="large"?"1.9em":l.z==="tall"?"1.35em":"1em";
+    return `<div style="text-align:${l.a};font-weight:${l.b?700:400};font-size:${fs};white-space:pre;line-height:1.25;">${esc(l.t)||"&nbsp;"}</div>`;
+  }).join("");
+  return rows;
+}
+function rdRefreshPreview(){
+  const el=document.getElementById("rdPreview"); if(el) el.innerHTML=rdPreviewHtml();
+}
+function renderReceiptDesignModal(){
+  const root=document.getElementById("receiptDesignRoot"); if(!root) return;
+  if(!rdUi.open){ root.innerHTML=""; return; }
+  const D=rdUi.d;
+  const chk=(k,label)=>`<label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:14px;cursor:pointer;"><input type="checkbox" style="width:20px;height:20px;margin:0;flex-shrink:0;accent-color:var(--primary);" ${D[k]?"checked":""} onchange="rdSet('${k}',this.checked)"><span>${label}</span></label>`;
+  const seg=(k,opts)=>`<div class="flex gap2" style="flex-wrap:wrap;margin-bottom:10px;">${opts.map(o=>`<button type="button" class="btn ${String(D[k])===String(o[0])?'btn-primary':'btn-outline'}" style="flex:1;min-width:70px;padding:8px 6px;font-size:13px;" onclick="rdSet('${k}',${typeof o[0]==='number'?o[0]:`'${o[0]}'`})">${o[1]}</button>`).join("")}</div>`;
+  const h=t=>`<div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--primary);margin:16px 0 6px;">${t}</div>`;
+  const lbl=t=>`<label class="field-label" style="text-align:left;">${t}</label>`;
+  root.innerHTML=`
+    <div class="modal-overlay" onclick="if(event.target===this) closeReceiptDesign()">
+      <div class="modal" style="max-height:92vh;">
+        <div class="modal-head"><strong>🖌 Receipt design</strong><button class="modal-x" onclick="closeReceiptDesign()">✕</button></div>
+        <div style="padding:6px 16px 16px;overflow-y:auto;">
+          ${h("Live preview")}
+          <div style="background:#fff;border:1px dashed var(--faint);border-radius:8px;padding:12px 10px;overflow-x:auto;">
+            <div id="rdPreview" style="font-family:'Courier New',monospace;font-size:${D.paper===48?10:12.5}px;width:${D.paper}ch;margin:0 auto;color:#111;">${rdPreviewHtml()}</div>
+          </div>
+          <p class="small faint" style="margin:6px 0 0;">Sample bill. The shop name, address and phone come from 🧾 Receipt setup.</p>
+
+          ${h("Paper")}
+          ${seg("paper",[[32,"58 mm"],[48,"80 mm"]])}
+          ${lbl("Line between sections")}
+          ${seg("divider",[["-","- - -"],["=","= = ="],["*","* * *"],[".",". . ."],["none","None"]])}
+
+          ${h("Header")}
+          ${chk("showName","Print shop name")}${chk("showAddress","Print address")}${chk("showPhone","Print phone number")}
+          ${lbl("Shop name size")}
+          ${seg("nameSize",[["normal","Normal"],["tall","Tall"],["large","Large"]])}
+          ${lbl("Header alignment")}
+          ${seg("headAlign",[["left","Left"],["center","Center"],["right","Right"]])}
+          ${lbl("Extra header line (tagline, licence no. …)")}
+          <input ${NOAC} value="${esc(D.tagline)}" oninput="rdText('tagline',this.value)" placeholder="Leave blank to skip" class="mb2">
+
+          ${h("Bill details")}
+          ${chk("showInvoice","Print invoice number")}${chk("showDate","Print date & time")}${chk("showPatient","Print patient name")}${chk("showPayment","Print mode of payment")}${chk("showRemarks","Print remarks / doctor name")}
+
+          ${h("Items")}
+          ${chk("showMeds","Print medicines")}${chk("showSpecial","Print special medicines")}${chk("showTests","Print tests")}${chk("showExtras","Print other charges")}
+          ${lbl("Item layout")}
+          ${seg("itemStyle",[["two","Two lines"],["one","One line"]])}
+          ${chk("boldItems","Bold item names")}
+
+          ${h("Totals")}
+          ${chk("showDiscounts","Print discounts")}${chk("showMedTotal","Print medicine total")}${chk("showTestsTotal","Print tests total")}${chk("showFee","Print doctor fee")}${chk("showQty","Print total quantity")}${chk("boldTotal","Bold PAYABLE line")}
+          ${lbl("PAYABLE size")}
+          ${seg("totalSize",[["normal","Normal"],["tall","Tall"]])}
+
+          ${h("Footer")}
+          ${lbl("Thank-you message")}
+          <input ${NOAC} value="${esc(D.thanks)}" oninput="rdText('thanks',this.value)" placeholder="e.g. Thank you!" class="mb2">
+          ${lbl("Extra footer line (e.g. Get well soon)")}
+          <input ${NOAC} value="${esc(D.footer)}" oninput="rdText('footer',this.value)" placeholder="Leave blank to skip" class="mb2">
+          ${lbl("Footer alignment")}
+          ${seg("footAlign",[["left","Left"],["center","Center"],["right","Right"]])}
+          ${lbl("Empty lines before cutting")}
+          ${seg("feedLines",[[0,"0"],[2,"2"],[3,"3"],[5,"5"]])}
+          ${chk("cut","Cut paper after printing")}
+
+          <div class="flex gap2" style="margin-top:14px;">
+            <button class="btn btn-outline" style="flex:1;" onclick="rdReset()">Reset</button>
+            <button class="btn btn-primary" style="flex:2;" onclick="rdSave()">Save design</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
 }
 
 // Hands the raw ESC/POS bytes to the native app over the bridge, prefixed "PRINT:" so
@@ -2740,7 +2938,7 @@ function renderBill(){
             <p class="small faint" style="margin:0 0 8px;">Edit each test's name or amount — used whenever you add it to a bill.</p>
             ${allTests().map(t=>`
               <div class="flex gap2 mb2" style="align-items:center;">
-                <input autocomplete="off" autocorrect="off" spellcheck="false" class="flex1" id="testNameDraft-${t.id}" type="text" value="${esc(testNameDraft[t.id]!=null?testNameDraft[t.id]:t.name)}" oninput="onTestNameDraft('${t.id}',this.value)" placeholder="Test name">
+                <input autocomplete="off" autocapitalize="sentences" class="flex1" id="testNameDraft-${t.id}" type="text" value="${esc(testNameDraft[t.id]!=null?testNameDraft[t.id]:t.name)}" oninput="onTestNameDraft('${t.id}',this.value)" placeholder="Test name">
                 <input ${NOAC} id="testPriceDraft-${t.id}" type="text" inputmode="decimal" style="width:90px;" value="${esc(testPriceDraft[t.id]||"")}" oninput="onTestPriceDraft('${t.id}',this.value)" placeholder="0">
                 <button style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;padding:0 2px;" onclick="removeCustomTest('${t.id}')">🗑</button>
               </div>`).join("")}
@@ -2748,7 +2946,7 @@ function renderBill(){
             <div class="mt3 divider-top">
               <p class="small faint" style="margin:0 0 6px;font-weight:600;">Add a new test</p>
               <div class="flex gap2 mb2">
-                <input autocomplete="off" autocorrect="off" spellcheck="false" class="flex1" id="newTestNameDraft" type="text" value="${esc(newTestNameDraft)}" oninput="onNewTestNameDraft(this.value)" placeholder="Test name">
+                <input autocomplete="off" autocapitalize="sentences" class="flex1" id="newTestNameDraft" type="text" value="${esc(newTestNameDraft)}" oninput="onNewTestNameDraft(this.value)" placeholder="Test name">
                 <input ${NOAC} id="newTestPriceDraft" type="text" inputmode="decimal" style="width:90px;" value="${esc(newTestPriceDraft)}" oninput="onNewTestPriceDraft(this.value)" placeholder="Price">
               </div>
               <button class="btn btn-outline" style="width:100%;" ${!newTestNameDraft.trim()?"disabled":""} onclick="addNewCustomTest()">+ Add test</button>
@@ -3637,16 +3835,17 @@ function parseBoxText(text){
   if(line) out.productName = line;
   return out;
 }
-// "Add bill offline": no photo/AI — closes the menu and opens the Bill tab for normal manual entry.
-function aiAddBillOffline(){
-  aiUi.open=false; aiUi.rows=null; aiUi.error=""; renderAiModal();
-  if(tab!=="bill") setTab("bill"); else render();
-}
-// "Add medicine offline": no photo/AI — closes the menu and opens a blank New medicine form on Inventory.
+// "Add bill offline": photo of a printed prescription/list -> on-phone text reader (no internet,
+// no Gemini) -> same preview + add-to-bill screen as the online reader.
+function aiAddBillOffline(){ aiPickPhoto("print"); }
+// "Add medicine offline": photos of the box -> on-phone text reader -> fills the New medicine form.
 function aiAddMedOffline(){
   aiUi.open=false; aiUi.rows=null; aiUi.error=""; renderAiModal();
-  if(tab!=="inventory") setTab("inventory"); else render();
-  if(!inv.showForm) toggleInvForm();
+  takePhoto(files=>{
+    if(tab!=="inventory") setTab("inventory"); else render();
+    if(!inv.showForm) toggleInvForm();
+    processBoxPhotos(files, true);
+  }, 3);
 }
 // "Add M.Picture" (in the AI reading menu): opens a blank New medicine form on the Inventory tab
 // and fills it from a photo of the box. Works offline once the printed-text reader is downloaded.
@@ -3707,16 +3906,16 @@ function boxBusyOff(keepFlag){
   const o=document.getElementById("boxBusyOverlay"); if(o) o.remove();
   if(!keepFlag) window.__boxBusy=false;
 }
-async function processBoxPhotos(files){
+async function processBoxPhotos(files, forceOffline){
   boxBusyOn(files.length);
-  try{ await processBoxPhotosInner(files); }
+  try{ await processBoxPhotosInner(files, forceOffline); }
   finally{ boxBusyOff(); }
 }
-async function processBoxPhotosInner(files){
+async function processBoxPhotosInner(files, forceOffline){
   {
     showToast("🖼 Reading "+files.length+" photo"+(files.length>1?"s":"")+"…");
     try{
-      if(aiGeminiKey() && navigator.onLine){
+      if(!forceOffline && aiGeminiKey() && navigator.onLine){
         try{
           const imgs=await Promise.all(files.map(f=>aiResizeImage(f,1400)));
           const txt=await aiReadImage(imgs, AI_BOX_PROMPT);
@@ -4232,7 +4431,7 @@ function buildInvCard(m){
   if(inv.restockId===m.id){
     extra = `
       <div class="mt2 divider-top8">
-        <input ${NOAC} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
+        <input ${NOAC_RAW} id="restockScanInput-${m.id}" value="${esc(inv.restockScanText)}" oninput="onRestockScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyRestockScanInput('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
         <div class="flex gap2" style="align-items:flex-end;">
           <div class="flex1">
             <label class="small">Boxes/strips received</label>
@@ -4272,7 +4471,7 @@ function buildInvCard(m){
             <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleEditCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
             <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='startBarcodeScan({kind:"edit",medId:"${m.id}"})'>📷 Scan barcode</button>
           </div>
-          <input ${NOAC} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
+          <input ${NOAC_RAW} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
           ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
         </div>
         <div class="flex gap2 mt2">
@@ -4479,7 +4678,7 @@ function renderInvFormModal(){
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="toggleInvCopyMenu()">🧬 Save &amp; add a variant (S.Copy)</button>
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
             </div>
-            <input ${NOAC} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
+            <input ${NOAC_RAW} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
             ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
@@ -5688,7 +5887,7 @@ function renderForgotPinModal(){
   } else if(forgotUi.step==="code"){
     body = `
       <label class="field-label" style="text-align:left;">Recovery code</label>
-      <input ${NOAC} value="${esc(forgotUi.code)}" oninput="onForgotCode(this.value)" placeholder="e.g. 7F3K-9QX2-RT" class="mb2" style="text-transform:uppercase;">
+      <input ${NOAC_RAW} value="${esc(forgotUi.code)}" oninput="onForgotCode(this.value)" placeholder="e.g. 7F3K-9QX2-RT" class="mb2" style="text-transform:uppercase;">
       ${forgotUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(forgotUi.error)}</p>`:""}
       <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="verifyForgotCode()">Verify</button>
       ${p.securityQuestion?`<button class="btn btn-outline" style="width:100%;" onclick="chooseForgotMethod('question')">Use security question instead</button>`:""}
@@ -6738,7 +6937,9 @@ function renderHeaderMenu(){
   if(can("printer")) items.push({label:"🖨 Printer", action:"selectPrinter()"});
   items.push({label:"💾 Backup", action:"toggleBackupModal()"});
   if(can("receiptSetup")) items.push({label:"🧾 Receipt setup", action:"editReceiptSettings()"});
+  if(can("receiptSetup")) items.push({label:"🖌 Receipt design", action:"openReceiptDesign()"});
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
+  items.push({label:"🎨 Theme", action:"openThemeModal()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
   if(can("diagnostics")) items.push({label:"🩺 Diagnostics", action:"openDiag()"}); // Admin always; Semi-Admin only if ticked
@@ -7274,7 +7475,7 @@ function renderPrinterModal(){
           <button class="btn btn-primary" style="width:100%;margin-bottom:10px;" onclick="pickBluetoothPrinter()">📶 Bluetooth printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <label class="field-label">WiFi printer IP address</label>
-          <input ${NOAC} type="text" value="${esc(printerUi.wifiIp||savedIp)}" oninput="onWifiIp(this.value)" placeholder="e.g. 192.168.1.50" style="margin-bottom:8px;">
+          <input ${NOAC_RAW} type="text" value="${esc(printerUi.wifiIp||savedIp)}" oninput="onWifiIp(this.value)" placeholder="e.g. 192.168.1.50" style="margin-bottom:8px;">
           <label class="field-label">Port (usually 9100)</label>
           <input ${NOAC} type="text" inputmode="numeric" value="${esc(printerUi.wifiPort||savedPort)}" oninput="onWifiPort(this.value)" placeholder="9100" style="margin-bottom:10px;">
           <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="saveWifiPrinter()">🌐 Save WiFi printer</button>
@@ -7284,7 +7485,7 @@ function renderPrinterModal(){
           <button class="btn btn-outline" style="width:100%;margin-bottom:10px;" onclick="pickUsbPrinter()">🔌 USB printer</button>
           <p class="small faint" style="margin:0 0 6px;">— or —</p>
           <label class="field-label">Cloud print server URL</label>
-          <input ${NOAC} type="text" value="${esc(printerUi.cloudUrl||savedCloudUrl)}" oninput="onCloudUrl(this.value)" placeholder="e.g. https://myprintserver.com/print" style="margin-bottom:10px;">
+          <input ${NOAC_RAW} type="text" value="${esc(printerUi.cloudUrl||savedCloudUrl)}" oninput="onCloudUrl(this.value)" placeholder="e.g. https://myprintserver.com/print" style="margin-bottom:10px;">
           <button class="btn btn-outline" style="width:100%;" onclick="saveCloudPrinter()">☁️ Save Cloud printer</button>
         </div>
       </div>
@@ -7628,7 +7829,7 @@ async function takePhoto(cb, max){
   ov.innerHTML='<video id="tpVideo" autoplay playsinline muted style="flex:1;min-height:0;width:100%;object-fit:contain;"></video>'
     +(multi?'<div id="tpThumbs" style="display:flex;gap:8px;align-items:center;padding:8px 14px;background:#111;min-height:60px;color:#9ca3af;font-size:12px;">Take up to '+max+' photos — e.g. front, back, price side</div>':'')
     +'<div style="display:flex;gap:10px;padding:14px;background:#111;"><button id="tpCancel" style="flex:1;padding:14px;border:none;border-radius:10px;background:#333;color:#fff;font-size:15px;">Cancel</button>'
-    +'<button id="tpShot" style="flex:2;padding:14px;border:none;border-radius:10px;background:#0f766e;color:#fff;font-size:15px;font-weight:700;">📸 Capture'+(multi?' (0/'+max+')':'')+'</button>'
+    +'<button id="tpShot" style="flex:2;padding:14px;border:none;border-radius:10px;background:var(--primary);color:#fff;font-size:15px;font-weight:700;">📸 Capture'+(multi?' (0/'+max+')':'')+'</button>'
     +(multi?'<button id="tpDone" disabled style="flex:1.2;padding:14px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-size:15px;font-weight:700;opacity:.4;">✓ Done</button>':'')+'</div>';
   document.body.appendChild(ov);
   const v=ov.querySelector("#tpVideo"); v.srcObject=stream; v.play().catch(()=>{}); setTimeout(()=>v.play().catch(()=>{}),300);
@@ -7657,7 +7858,7 @@ async function takePhoto(cb, max){
     const tc=document.createElement("canvas"); tc.width=88; tc.height=Math.max(1,Math.round(88*c.height/c.width));
     tc.getContext("2d").drawImage(v,0,0,tc.width,tc.height);
     const th=ov.querySelector("#tpThumbs"); if(taken===1) th.innerHTML="";
-    th.insertAdjacentHTML("beforeend",'<img src="'+tc.toDataURL("image/jpeg",0.6)+'" style="height:44px;width:auto;border-radius:8px;border:2px solid #0f766e;">');
+    th.insertAdjacentHTML("beforeend",'<img src="'+tc.toDataURL("image/jpeg",0.6)+'" style="height:44px;width:auto;border-radius:8px;border:2px solid var(--primary);">');
     ov.querySelector("#tpShot").textContent="📸 Capture ("+taken+"/"+max+")";
     const d=ov.querySelector("#tpDone"); d.disabled=false; d.style.opacity="1";
     pending.push(new Promise(res=>c.toBlob(b=>{ if(b) shots.push(new File([b],"photo.jpg",{type:"image/jpeg"})); res(); },"image/jpeg",0.85)));
@@ -7717,8 +7918,8 @@ function renderAiModal(){
       <details ${aiUi.setupOpen?"open":""} ontoggle="aiUi.setupOpen=this.open">
         <summary class="small" style="cursor:pointer;color:var(--primary);">⚙ Handwriting setup (free Gemini key)</summary>
         <p class="small faint" style="margin:8px 0 6px;">Get a free key at aistudio.google.com → “Get API key”, then paste it here. It is saved on this phone only. Photos you read are sent to Google, and the free plan may use them to improve Google's models.</p>
-        <input ${NOAC} type="text" value="${esc(aiGeminiKey())}" oninput="localStorage.setItem(AI_GEMINI_KEY,this.value.trim())" placeholder="Gemini API key" style="margin-bottom:6px;">
-        <input ${NOAC} type="text" value="${esc(localStorage.getItem(AI_MODEL_KEY)||"")}" oninput="localStorage.setItem(AI_MODEL_KEY,this.value.trim())" placeholder="Model (leave empty for ${AI_DEFAULT_MODEL})">
+        <input ${NOAC_RAW} type="text" value="${esc(aiGeminiKey())}" oninput="localStorage.setItem(AI_GEMINI_KEY,this.value.trim())" placeholder="Gemini API key" style="margin-bottom:6px;">
+        <input ${NOAC_RAW} type="text" value="${esc(localStorage.getItem(AI_MODEL_KEY)||"")}" oninput="localStorage.setItem(AI_MODEL_KEY,this.value.trim())" placeholder="Model (leave empty for ${AI_DEFAULT_MODEL})">
       </details>`;
   } else {
     const rows = aiUi.rows.map((r,i)=>{
@@ -7934,6 +8135,7 @@ function renderDiagModal(){
 // always sees the real saved data. On a normal browser where the shim never installed itself
 // (real localStorage worked fine), __localStorageReady still resolves immediately either way.
 Promise.resolve(window.__localStorageReady).then(function(){
+  applyTheme(getThemeId());
   loadAll();
   bill = newBillState();
   render();
@@ -8073,11 +8275,11 @@ if("serviceWorker" in navigator){
         if(document.getElementById("webUpdateBanner")) return;
         var b = document.createElement("div");
         b.id = "webUpdateBanner";
-        b.style.cssText = "position:fixed;left:0;right:0;top:var(--header-h);z-index:55;background:#0F5C57;color:#fff;"+
+        b.style.cssText = "position:fixed;left:0;right:0;top:var(--header-h);z-index:55;background:var(--primary);color:#fff;"+
           "padding:10px 14px;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;"+
           "box-shadow:0 2px 6px rgba(0,0,0,.2);";
         b.innerHTML = '<span>An updated version of the app is ready.</span>'+
-          '<button type="button" style="background:#fff;color:#0F5C57;font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Refresh now</button>'+
+          '<button type="button" style="background:#fff;color:var(--primary);font-weight:700;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;">Refresh now</button>'+
           '<button type="button" aria-label="Dismiss" style="background:none;border:none;color:#fff;opacity:.8;font-size:16px;cursor:pointer;padding:0 4px;line-height:1;">✕</button>';
         b.querySelector("button").onclick = ()=>window.location.reload();
         b.querySelectorAll("button")[1].onclick = ()=>b.remove();
