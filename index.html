@@ -327,7 +327,7 @@
   .sum-card .v{font-size:15px;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .sum-card .v.warn{color:var(--danger);}
   @media (orientation:portrait){
-    nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));border-radius:999px;border-top:none;
+    nav{left:12px;right:12px;bottom:max(4px, calc(10px + env(safe-area-inset-bottom) - 28px));border-radius:999px;border-top:none;
       box-shadow:0 4px 18px rgba(0,0,0,.15);padding:6px;}
     #navSafeBar{background:var(--page);}
     nav button{padding:6px 10px;border-radius:999px;flex:1;min-width:0;transition:background .15s,color .15s;}
@@ -2507,12 +2507,12 @@ function expiryRows(){
 function expiryCardHtml(){
   const rows = expiryRows(); if(!rows.length) return "";
   const c = { exp:rows.filter(r=>r.d<0).length, a:rows.filter(r=>r.d>=0&&r.d<=30).length, b:rows.filter(r=>r.d>30&&r.d<=60).length, c:rows.filter(r=>r.d>60).length };
-  return `<button type="button" class="hint-card" style="width:100%;text-align:left;cursor:pointer;margin-bottom:12px;font-family:inherit;color:var(--text);" onclick="openTools('expiry')">
-    <div class="row"><strong style="font-size:13px;">⏳ Expiry outlook</strong><span class="small">View all ›</span></div>
-    <div class="chip-row" style="margin-top:6px;">${c.exp?`<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);">${c.exp} expired</span>`:""}
-    <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);">${c.a} within 30 days</span>
-    <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${c.b} in 31–60</span>
-    <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${c.c} in 61–90</span></div></button>`;
+  const pill=(bg,fg,t)=>`<span class="pill-badge" style="background:${bg};color:${fg};font-size:11px;padding:3px 8px;white-space:nowrap;">${t}</span>`;
+  // One slim, tappable line (was a 3-row card): icon, the buckets as small pills, and a chevron.
+  return `<button type="button" style="width:100%;display:flex;align-items:center;gap:6px;text-align:left;cursor:pointer;margin-bottom:10px;padding:6px 10px;font-family:inherit;color:var(--text);background:var(--primarySoft);border:none;border-radius:12px;overflow:hidden;" onclick="openTools('expiry')">
+    <span style="font-size:14px;flex:none;">⏳</span>
+    <span style="display:flex;gap:5px;flex:1;min-width:0;overflow:hidden;">${c.exp?pill("var(--dangerSoft)","var(--danger)",c.exp+" expired"):""}${pill("var(--warningSoft)","var(--warning)",c.a+" ≤30d")}${pill("#fff","var(--primary)",c.b+" 31–60")}${pill("#fff","var(--primary)",c.c+" 61–90")}</span>
+    <span class="small" style="flex:none;">›</span></button>`;
 }
 function expiryBodyHtml(){
   const rows = expiryRows(); if(!rows.length) return `<p class="small faint">Nothing expires in the next 90 days.</p>`;
@@ -2694,7 +2694,7 @@ function backupReminderHtml(){
   }catch(e){ return ""; }
 }
 function snoozeBackup(){ try{ localStorage.setItem("clinic_backup_snooze", new Date().toDateString()); }catch(e){} render(); }
-function billExtrasHtml(){ return backupReminderHtml() + expiryCardHtml() + quickPickHtml(); }
+function billExtrasHtml(){ return backupReminderHtml() + expiryCardHtml(); }
 
 // ---- 14. Dark mode ----
 function getAppearance(){ try{ const v=localStorage.getItem("clinic_appearance"); return v==="dark"||v==="auto"?v:"light"; }catch(e){ return "light"; } }
@@ -3395,6 +3395,7 @@ function renderBill(){
       ` : ""}
     </div>
 
+    ${quickPickHtml()}
     <div class="card">
       <h3 class="mb2" style="font-size:14px;font-weight:700;">Add medicine</h3>
       <div class="search-wrap">
@@ -4998,6 +4999,10 @@ function renderInventory(){
   const pillBtn = (active, softVar, solidVar, count, kind)=>
     `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${count}</button>`;
   document.getElementById("main").innerHTML = `
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
+    </div>
     <div class="mb2" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;">
       <div class="flex gap2">
         ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
@@ -5007,10 +5012,6 @@ function renderInventory(){
         ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
         ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
       </div>
-    </div>
-    <div class="search-wrap mb2">
-      <span class="search-icon">🔍</span>
-      <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
     </div>
     <div id="invListContainer"></div>
   `;
