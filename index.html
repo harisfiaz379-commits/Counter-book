@@ -300,7 +300,15 @@
   .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
-  body.kb-open #invFab{bottom:16px !important;}
+  body.kb-open nav, body.kb-open #navSafeBar{display:none !important;}
+  body.kb-open #invFab:not([data-moved]){bottom:16px !important;}
+  #invStickyBar{position:sticky;top:0;z-index:25;background:var(--page);margin:0 -12px 4px;padding:8px 12px 2px;transition:transform .22s ease;will-change:transform;}
+  #invStickyBar.hide{transform:translateY(-115%);}
+  .recent-box{position:fixed;z-index:80;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.14);overflow:hidden;}
+  .recent-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:#fff;border:none;border-bottom:1px solid var(--border);padding:11px 12px;font-size:14px;color:var(--text);cursor:pointer;}
+  .recent-row .rt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .recent-head{display:flex;justify-content:space-between;align-items:center;padding:7px 12px 4px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);}
+  .recent-head button{background:none;border:none;color:var(--primary);font-size:12px;font-weight:700;cursor:pointer;padding:0;text-transform:none;letter-spacing:0;}
 
   /* ===== Modern look (soft cards, pill buttons, floating nav) — overrides of the rules above ===== */
   @keyframes cbSlideUp{from{transform:translateY(40px);opacity:0;}to{transform:none;opacity:1;}}
@@ -363,6 +371,9 @@
   html[data-mode="dark"] [style*="color:#111"],html[data-mode="dark"] [style*="color:#333"],html[data-mode="dark"] [style*="color:#000"]{color:var(--text)!important;}
   html[data-mode="dark"] .keep-light{background:#fff!important;}
   html[data-mode="dark"] .keep-light *{color:#111!important;}
+  #datePickerModalRoot,#datePickerModalRoot *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
+  #datePickerModalRoot button{touch-action:manipulation;}
+  body.dp-open,body.dp-open *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -1307,24 +1318,26 @@ function ymd(y, m, d){ return y+"-"+String(m+1).padStart(2,"0")+"-"+String(d).pa
 // innerHTML write, same as before v-date-picker.
 function openDatePicker(currentValue, kind, args){
   const base = currentValue ? new Date(currentValue+"T00:00:00") : new Date();
+  try{ window.getSelection().removeAllRanges(); }catch(_){}
+  document.body.classList.add("dp-open");
   datePickerUi = { open:true, viewYear: base.getFullYear(), viewMonth: base.getMonth(), selected: currentValue||"", targetKind: kind, targetArgs: args||null };
   renderDatePickerModal();
   syncMenuHistory(); // cheap (no DOM rebuild) — keeps the back button aware this opened, without the full render() this function deliberately skips
 }
-function closeDatePicker(){ datePickerUi.open=false; renderDatePickerModal(); syncMenuHistory(); }
+function closeDatePicker(){ document.body.classList.remove("dp-open"); datePickerUi.open=false; renderDatePickerModal(); syncMenuHistory(); }
 function datePickerPrevMonth(){
   datePickerUi.viewMonth--;
   if(datePickerUi.viewMonth<0){ datePickerUi.viewMonth=11; datePickerUi.viewYear--; }
-  renderDatePickerModal();
+  refreshDatePickerBody();
 }
 function datePickerNextMonth(){
   datePickerUi.viewMonth++;
   if(datePickerUi.viewMonth>11){ datePickerUi.viewMonth=0; datePickerUi.viewYear++; }
-  renderDatePickerModal();
+  refreshDatePickerBody();
 }
 function pickDatePickerDay(d){
   datePickerUi.selected = ymd(datePickerUi.viewYear, datePickerUi.viewMonth, d);
-  renderDatePickerModal();
+  refreshDatePickerBody();
 }
 // Confirm/Clear are the only two actions whose result is visible OUTSIDE the modal (the
 // "Select expiry date"/"Set expiry date" button text on the page behind it), so — and only
@@ -1338,10 +1351,7 @@ function applyDatePickerResult(value){
 }
 function confirmDatePicker(){ applyDatePickerResult(datePickerUi.selected); }
 function clearDatePicker(){ applyDatePickerResult(""); }
-function renderDatePickerModal(){
-  const root = document.getElementById("datePickerModalRoot");
-  if(!root) return;
-  if(!datePickerUi.open){ root.innerHTML=""; return; }
+function datePickerView(){
   const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const { viewYear, viewMonth, selected } = datePickerUi;
   const first = new Date(viewYear, viewMonth, 1);
@@ -1368,23 +1378,30 @@ function renderDatePickerModal(){
   const trailing = 42 - totalCellsSoFar;
   for(let i=0;i<trailing;i++) cells += `<div></div>`;
   const headerLabel = selected ? new Date(selected+"T00:00:00").toLocaleDateString(undefined,{weekday:"short", month:"short", day:"numeric"}) : "No date set";
+  return { cells, headerLabel, viewYear, monthLabel: MONTH_NAMES[viewMonth]+" "+viewYear };
+}
+function renderDatePickerModal(){
+  const root = document.getElementById("datePickerModalRoot");
+  if(!root) return;
+  if(!datePickerUi.open){ root.innerHTML=""; return; }
+  const { cells, headerLabel, viewYear, monthLabel } = datePickerView();
   root.innerHTML = `
     <div class="modal-overlay" style="align-items:center;padding:16px 0;" onclick="if(event.target===this) closeDatePicker()">
       <div class="modal" style="border-radius:16px;max-width:340px;max-height:90vh;">
         <div style="background:var(--primary);color:#fff;padding:16px 18px;border-radius:16px 16px 0 0;flex:0 0 auto;">
-          <div class="small" style="color:var(--headerSub);">${viewYear}</div>
-          <div style="font-size:20px;font-weight:700;">${esc(headerLabel)}</div>
+          <div class="small" id="dpYear" style="color:var(--headerSub);">${viewYear}</div>
+          <div id="dpLabel" style="font-size:20px;font-weight:700;">${esc(headerLabel)}</div>
         </div>
         <div style="padding:12px 16px;overflow-y:auto;">
           <div class="row mb2">
-            <button type="button" onclick="datePickerPrevMonth()" style="background:none;border:none;font-size:20px;color:var(--primary);cursor:pointer;padding:4px 10px;">‹</button>
-            <strong>${MONTH_NAMES[viewMonth]} ${viewYear}</strong>
-            <button type="button" onclick="datePickerNextMonth()" style="background:none;border:none;font-size:20px;color:var(--primary);cursor:pointer;padding:4px 10px;">›</button>
+            <button type="button" data-dp-nav="-1" aria-label="Previous month" style="background:none;border:none;font-size:20px;color:var(--primary);cursor:pointer;padding:4px 10px;">&#8249;</button>
+            <strong id="dpMonth">${monthLabel}</strong>
+            <button type="button" data-dp-nav="1" aria-label="Next month" style="background:none;border:none;font-size:20px;color:var(--primary);cursor:pointer;padding:4px 10px;">&#8250;</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;font-size:11px;color:var(--muted);font-weight:600;margin-bottom:4px;">
             <div>S</div><div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:34px;gap:2px;justify-items:center;align-items:center;">
+          <div id="dpCells" style="display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:34px;gap:2px;justify-items:center;align-items:center;">
             ${cells}
           </div>
         </div>
@@ -1399,6 +1416,31 @@ function renderDatePickerModal(){
     </div>`;
 }
 
+// Month flips / day taps only touch the four spots that change, so the arrow buttons are never
+// replaced while a finger is on them (that is what lets press-and-hold keep stepping).
+function refreshDatePickerBody(){
+  const c=document.getElementById("dpCells"); if(!c){ renderDatePickerModal(); return; }
+  const v=datePickerView();
+  c.innerHTML=v.cells; document.getElementById("dpMonth").textContent=v.monthLabel;
+  document.getElementById("dpYear").textContent=v.viewYear; document.getElementById("dpLabel").textContent=v.headerLabel;
+}
+(function(){
+  let holdT=null, repT=null;
+  function stop(){ clearTimeout(holdT); clearInterval(repT); holdT=null; repT=null; }
+  function step(dir){ if(dir<0) datePickerPrevMonth(); else datePickerNextMonth(); }
+  const root=document.getElementById("datePickerModalRoot"); if(!root) return;
+  root.addEventListener("pointerdown", e=>{
+    const b=e.target.closest && e.target.closest("[data-dp-nav]"); if(!b) return;
+    e.preventDefault(); try{ window.getSelection().removeAllRanges(); }catch(_){}
+    stop(); const dir=Number(b.getAttribute("data-dp-nav")); step(dir);
+    holdT=setTimeout(()=>{ repT=setInterval(()=>{ if(!datePickerUi.open) stop(); else step(dir); },110); },380);
+  });
+  root.addEventListener("contextmenu", e=>e.preventDefault());
+  root.addEventListener("selectstart", e=>e.preventDefault());
+  root.addEventListener("touchstart", e=>{ const b=e.target.closest && e.target.closest("[data-dp-nav]"); if(b && e.cancelable) e.preventDefault(); }, {passive:false});
+  document.addEventListener("selectionchange", ()=>{ if(datePickerUi.open){ try{ const sel=window.getSelection(); if(sel && sel.rangeCount && !sel.isCollapsed) sel.removeAllRanges(); }catch(_){} } });
+  ["pointerup","pointercancel","touchend","touchcancel","blur"].forEach(ev=>window.addEventListener(ev, stop, true));
+})();
 /* Coalesces render() calls into once-per-frame. Several input handlers below
    call this instead of render() directly: calling render() synchronously on
    every keystroke destroys and recreates the focused <input> element (since
@@ -4999,6 +5041,7 @@ function renderInventory(){
   const pillBtn = (active, softVar, solidVar, count, kind)=>
     `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${count}</button>`;
   document.getElementById("main").innerHTML = `
+    <div id="invStickyBar">
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
@@ -5012,6 +5055,7 @@ function renderInventory(){
         ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
         ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
       </div>
+    </div>
     </div>
     <div id="invListContainer"></div>
   `;
@@ -8187,6 +8231,110 @@ setTimeout(aiProcessQueue,6000);
   window.addEventListener("resize",chk);
   if(window.visualViewport) window.visualViewport.addEventListener("resize",chk);
   window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=window.innerHeight; chk(); },500));
+})();
+
+// ===== Draggable "+" button, recent searches, hide-on-scroll search bar =====
+(function(){
+  // 1) "+" (Add medicine) button: press and HOLD it for a moment, then drag it anywhere. It remembers its spot.
+  const fab=document.getElementById("invFab"); if(!fab) return;
+  const KEY="clinic_fab_pos"; let lastW=innerWidth;
+  function place(L,T){
+    const w=fab.offsetWidth||54, h=fab.offsetHeight||54;
+    L=Math.min(Math.max(0,L),innerWidth-w); T=Math.min(Math.max(0,T),innerHeight-h);
+    fab.dataset.moved="1"; fab.style.right="auto"; fab.style.bottom="auto"; fab.style.left=L+"px"; fab.style.top=T+"px";
+    return {x:L/innerWidth,y:T/innerHeight};
+  }
+  function load(){ try{ const p=JSON.parse(localStorage.getItem(KEY)||"null"); if(p&&typeof p.x==="number") place(p.x*innerWidth,p.y*innerHeight); }catch(e){} }
+  load(); setTimeout(load,1200); // the saved-data layer can finish loading a moment after start
+  window.addEventListener("resize",()=>{ if(innerWidth!==lastW){ lastW=innerWidth; load(); } });
+  let timer=null, dragging=false, sx=0, sy=0, ox=0, oy=0, noClickUntil=0, pos=null;
+  fab.addEventListener("touchstart",e=>{
+    const t=e.touches[0]; sx=t.clientX; sy=t.clientY; dragging=false;
+    clearTimeout(timer);
+    timer=setTimeout(()=>{ dragging=true; const r=fab.getBoundingClientRect(); ox=sx-r.left; oy=sy-r.top; fab.style.transition="none"; fab.style.transform="scale(1.12)"; try{navigator.vibrate&&navigator.vibrate(30);}catch(_){} },350);
+  },{passive:true});
+  fab.addEventListener("touchmove",e=>{
+    const t=e.touches[0];
+    if(!dragging){ if(Math.hypot(t.clientX-sx,t.clientY-sy)>10) clearTimeout(timer); return; }
+    e.preventDefault(); pos=place(t.clientX-ox,t.clientY-oy);
+  },{passive:false});
+  function end(e){
+    clearTimeout(timer);
+    if(dragging){
+      dragging=false; fab.style.transform=""; fab.style.transition="";
+      if(pos){ try{ localStorage.setItem(KEY,JSON.stringify(pos)); }catch(_){} }
+      noClickUntil=Date.now()+500; if(e&&e.cancelable) e.preventDefault();
+    }
+  }
+  fab.addEventListener("touchend",end); fab.addEventListener("touchcancel",end);
+  fab.addEventListener("click",e=>{ if(Date.now()<noClickUntil){ e.stopImmediatePropagation(); e.preventDefault(); } },true);
+  fab.addEventListener("contextmenu",e=>e.preventDefault());
+})();
+
+(function(){
+  // 2) Recent searches: tap into any "Search…" box while it's empty to see its last searches.
+  const STORE="clinic_recent_searches", MAX=6; let box=null, curInput=null;
+  function readAll(){ try{ return JSON.parse(localStorage.getItem(STORE)||"{}")||{}; }catch(e){ return {}; } }
+  function writeAll(o){ try{ localStorage.setItem(STORE,JSON.stringify(o)); }catch(e){} }
+  function keyOf(el){ return el.id ? el.id.replace(/-.*$/,"") : (el.getAttribute("placeholder")||"search"); }
+  function isSearch(el){ return el && el.tagName==="INPUT" && /^Search/i.test(el.getAttribute("placeholder")||""); }
+  function save(key,term){
+    term=String(term||"").trim(); if(term.length<2) return;
+    const all=readAll(); let list=all[key]||[]; const low=term.toLowerCase();
+    if(list.some(x=>x.toLowerCase()!==low && x.toLowerCase().startsWith(low))) return; // a longer search already covers this
+    list=list.filter(x=>x.toLowerCase()!==low && !low.startsWith(x.toLowerCase())); // drop dupes and half-typed versions of it
+    list.unshift(term); all[key]=list.slice(0,MAX); writeAll(all);
+  }
+  window.saveRecentSearch=function(inputId,term){ save(inputId,term); };
+  function hide(){ if(box){ box.remove(); box=null; } curInput=null; }
+  function show(el){
+    hide(); const list=readAll()[keyOf(el)]||[]; if(!list.length) return;
+    curInput=el; const r=el.getBoundingClientRect();
+    box=document.createElement("div"); box.className="recent-box";
+    box.style.left=r.left+"px"; box.style.top=(r.bottom+4)+"px"; box.style.width=r.width+"px";
+    box.addEventListener("mousedown",e=>e.preventDefault());
+    const head=document.createElement("div"); head.className="recent-head";
+    head.innerHTML='<span>Recent searches</span>'; const clr=document.createElement("button"); clr.type="button"; clr.textContent="Clear";
+    clr.onclick=function(){ const all=readAll(); delete all[keyOf(el)]; writeAll(all); hide(); };
+    head.appendChild(clr); box.appendChild(head);
+    list.forEach(term=>{
+      const b=document.createElement("button"); b.type="button"; b.className="recent-row";
+      const ic=document.createElement("span"); ic.textContent="🕘"; const tx=document.createElement("span"); tx.className="rt"; tx.textContent=term;
+      b.appendChild(ic); b.appendChild(tx);
+      b.onclick=function(){ el.value=term; hide(); el.dispatchEvent(new Event("input",{bubbles:true})); el.focus(); };
+      box.appendChild(b);
+    });
+    document.body.appendChild(box);
+  }
+  document.addEventListener("focusin",e=>{ const el=e.target; if(isSearch(el) && !el.value) show(el); });
+  document.addEventListener("input",e=>{ if(box && e.target===curInput) hide(); });
+  document.addEventListener("focusout",e=>{
+    const el=e.target; if(!isSearch(el)) return;
+    const key=keyOf(el);
+    setTimeout(()=>{ save(key,el.value); if(curInput===el) hide(); },250);
+  });
+  const app=document.getElementById("app"); if(app) app.addEventListener("scroll",hide,{passive:true});
+  // Selecting a medicine from the New Bill search saves its full name as the recent search.
+  try{
+    if(typeof pickBillMed==="function"){
+      const core=pickBillMed;
+      pickBillMed=function(id){ try{ const m=inventory.find(x=>x.id===id); if(m) save("billQueryInput",m.name); }catch(e){} return core.apply(this,arguments); };
+    }
+  }catch(e){}
+})();
+
+(function(){
+  // 3) Inventory search bar + counts hide when you scroll down and come back as soon as you scroll up a little.
+  const app=document.getElementById("app"); if(!app) return;
+  let last=0, acc=0;
+  app.addEventListener("scroll",()=>{
+    const bar=document.getElementById("invStickyBar"); const y=app.scrollTop, dy=y-last; last=y;
+    if(!bar) return;
+    if(y<60 || bar.contains(document.activeElement)){ bar.classList.remove("hide"); acc=0; return; }
+    if((dy>0)!==(acc>0)) acc=0;
+    acc+=dy;
+    if(acc>14) bar.classList.add("hide"); else if(acc<-8) bar.classList.remove("hide");
+  },{passive:true});
 })();
 function aiLoadTesseract(){
   return new Promise((resolve,reject)=>{
