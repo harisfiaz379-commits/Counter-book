@@ -301,6 +301,68 @@
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
   body.kb-open #invFab{bottom:16px !important;}
+
+  /* ===== Modern look (soft cards, pill buttons, floating nav) — overrides of the rules above ===== */
+  @keyframes cbSlideUp{from{transform:translateY(40px);opacity:0;}to{transform:none;opacity:1;}}
+  @keyframes cbFade{from{opacity:0;}to{opacity:1;}}
+  header{border-radius:0 0 22px 22px;box-shadow:0 4px 16px rgba(0,0,0,.18);}
+  .card{border:none;border-radius:16px;padding:16px;box-shadow:0 2px 10px rgba(15,23,30,.07);}
+  input,textarea,select{border:1px solid transparent;border-radius:12px;background-color:#EEF3F2;padding:11px 14px;
+    transition:background-color .15s,box-shadow .15s;}
+  input:focus,textarea:focus,select:focus{background-color:#fff;outline:2px solid var(--primary);outline-offset:-1px;}
+  .btn{border-radius:999px;padding:11px 18px;transition:transform .12s,box-shadow .12s,opacity .12s;}
+  .btn:active{transform:scale(.97);}
+  .btn-primary{box-shadow:0 4px 12px rgba(15,92,87,.25);}
+  .btn-outline{border:1px solid var(--border);background:#fff;}
+  .btn-dashed{border-radius:16px;}
+  .dropdown{border:none;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.16);}
+  .modal{border-radius:24px 24px 0 0;animation:cbSlideUp .22s ease-out;}
+  .modal-overlay{animation:cbFade .18s ease-out;}
+  main{animation:cbFade .2s ease-out;}
+  .sum-row{display:flex;gap:8px;margin-bottom:12px;}
+  .sum-card{flex:1;min-width:0;background:var(--card);border:none;border-radius:16px;padding:11px 12px;text-align:left;cursor:pointer;
+    box-shadow:0 2px 10px rgba(15,23,30,.07);font-family:inherit;color:var(--text);transition:transform .12s;}
+  .sum-card:active{transform:scale(.97);}
+  .sum-card .l{font-size:11px;color:var(--muted);}
+  .sum-card .v{font-size:15px;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sum-card .v.warn{color:var(--danger);}
+  @media (orientation:portrait){
+    nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));border-radius:999px;border-top:none;
+      box-shadow:0 4px 18px rgba(0,0,0,.15);padding:6px;}
+    #navSafeBar{background:var(--page);}
+    nav button{padding:6px 10px;border-radius:999px;flex:1;min-width:0;transition:background .15s,color .15s;}
+    nav button.active{background:var(--primarySoft);}
+    nav button .icon svg{width:22px;height:22px;display:block;}
+    main{padding-bottom:116px;}
+    #invFab{bottom:calc(92px + env(safe-area-inset-bottom));}
+  }
+  nav button .icon svg{width:22px;height:22px;display:block;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
+  @media (orientation:landscape){ header{border-radius:0;} }
+
+  /* ===== Smart tools + dark mode ===== */
+  .hint-card{background:var(--primarySoft);border:none;border-radius:14px;padding:10px 12px;margin-top:8px;}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+  .chip{border:none;background:var(--primarySoft);color:var(--primary);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;}
+  .chip:active{transform:scale(.96);}
+  .cb-fx{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:70;pointer-events:none;}
+  .cb-fx>div{width:96px;height:96px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(0,0,0,.28);animation:cbPop .95s ease-out forwards;}
+  @keyframes cbPop{0%{transform:scale(.3);opacity:0;}25%{transform:scale(1.1);opacity:1;}70%{transform:scale(1);opacity:1;}100%{transform:scale(1);opacity:0;}}
+  .cb-undo{position:fixed;left:16px;right:16px;bottom:calc(92px + env(safe-area-inset-bottom));z-index:45;display:none;align-items:center;justify-content:space-between;
+    background:#1F2937;color:#fff;border-radius:999px;padding:8px 8px 8px 18px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.3);animation:cbSlideUp .2s ease-out;}
+  .cb-undo button{background:#fff;color:#1F2937;border:none;border-radius:999px;padding:8px 18px;font-weight:700;font-size:13px;cursor:pointer;}
+  @media (orientation:landscape){ .cb-undo{bottom:16px;left:90px;} }
+  html[data-mode="dark"]{color-scheme:dark;}
+  html[data-mode="dark"] input,html[data-mode="dark"] textarea,html[data-mode="dark"] select{background-color:#232D34;color:var(--text);}
+  html[data-mode="dark"] input:focus,html[data-mode="dark"] textarea:focus,html[data-mode="dark"] select:focus{background-color:#1B242A;}
+  html[data-mode="dark"] ::placeholder{color:#6F7F8C;}
+  html[data-mode="dark"] .modal,html[data-mode="dark"] .dropdown,html[data-mode="dark"] nav,html[data-mode="dark"] .sum-card{background:var(--card);}
+  html[data-mode="dark"] .btn-outline{background:transparent;color:var(--muted);}
+  html[data-mode="dark"] .btn-outline{border-color:var(--border);}
+  html[data-mode="dark"] #navSafeBar{background:var(--page);}
+  html[data-mode="dark"] [style*="background:#fff"],html[data-mode="dark"] [style*="background: #fff"],html[data-mode="dark"] [style*="background:#FFF"],html[data-mode="dark"] [style*="background:white"],html[data-mode="dark"] [style*="background:#ffffff"]{background:var(--card)!important;}
+  html[data-mode="dark"] [style*="color:#111"],html[data-mode="dark"] [style*="color:#333"],html[data-mode="dark"] [style*="color:#000"]{color:var(--text)!important;}
+  html[data-mode="dark"] .keep-light{background:#fff!important;}
+  html[data-mode="dark"] .keep-light *{color:#111!important;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -355,6 +417,7 @@
 <div id="scanMethodModalRoot"></div>
 <div id="themeModalRoot"></div>
 <div id="receiptDesignRoot"></div>
+<div id="toolsModalRoot"></div>
 <div id="recoveryModalRoot"></div>
 <div id="forgotPinModalRoot"></div>
 <div id="datePickerModalRoot"></div>
@@ -1508,7 +1571,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || themeUi.open || rdUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
+    printerUi.open || themeUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1530,6 +1593,7 @@ function closeTopMenu(){
   if(aiUi.open){ closeQuickAdd(); return; }
   if(themeUi.open){ closeThemeModal(); return; }
   if(rdUi.open){ closeReceiptDesign(); return; }
+  if(toolsUi.open){ closeTools(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
   if(diagUi.open){ diagUi.open=false; renderOverlays(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
@@ -1574,7 +1638,7 @@ function renderOverlays(){
   renderShareModal(); renderConfirmModal(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderPrinterModal();
   renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderHistoryModal();
   renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
-  renderScanMethodModal(); renderThemeModal(); renderReceiptDesignModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
+  renderScanMethodModal(); renderThemeModal(); renderReceiptDesignModal(); renderToolsModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
   syncMenuHistory(); syncHeaderOffset();
 }
 function render(){
@@ -1712,6 +1776,25 @@ function lowStockList(){
   return _lowStockCache;
 }
 
+const NAV_SVG = {
+  bill:'<svg viewBox="0 0 24 24"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/></svg>',
+  inventory:'<svg viewBox="0 0 24 24"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>',
+  records:'<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
+  stock:'<svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  notes:'<svg viewBox="0 0 24 24"><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M16 2v20"/></svg>'
+};
+function greetingText(){ const h=new Date().getHours(); return h<12?"Good morning":h<17?"Good afternoon":"Good evening"; }
+function billSummaryHtml(){
+  const today = new Date().toDateString();
+  const todays = visibleTransactions().filter(t=> new Date(t.timestamp).toDateString()===today);
+  const total = todays.reduce((a,t)=>a+(t.grandTotal||0),0);
+  const low = lowStockList().length;
+  return `<div class="sum-row">
+    ${can("monthlyTotal") ? `<button class="sum-card" onclick="setTab('records')"><div class="l">Today</div><div class="v">${CURRENCY}${money(total)}</div></button>` : ""}
+    <button class="sum-card" onclick="setTab('records')"><div class="l">Bills today</div><div class="v">${todays.length}</div></button>
+    <button class="sum-card" onclick="setTab('stock')"><div class="l">Low stock</div><div class="v${low?' warn':''}">${low}</div></button>
+  </div>`;
+}
 function renderNav(){
   const tabs = [
     {id:"bill",label:"New Bill",icon:"📄"},
@@ -1720,9 +1803,10 @@ function renderNav(){
     {id:"stock",label:"Warnings",icon:"⚠️",badge:lowStockList().length+expiringBatches().length},
     {id:"notes",label:"Notepad",icon:"📝"},
   ];
+  const hs=document.querySelector(".header-sub"); if(hs) hs.textContent=greetingText();
   document.getElementById("nav").innerHTML = tabs.map(t=>`
     <button class="${tab===t.id?'active':''}" onclick="setTab('${t.id}')">
-      <span class="icon">${t.icon}</span>
+      <span class="icon">${NAV_SVG[t.id]||t.icon}</span>
       <span>${t.label}</span>
       ${t.badge?`<span class="badge">${t.badge}</span>`:""}
     </button>`).join("");
@@ -2200,6 +2284,7 @@ function showToast(msg){
 
 function completeBill(){
   if(!canCompleteBill()) return;
+  const _undoSnap = captureUndoSnap();
   bill.items.forEach(it=>{
     const med = inventory.find(m=>m.id===it.medId);
     if(med) deductStock(med, it.pills);
@@ -2215,9 +2300,9 @@ function completeBill(){
   logActivity("bill_add", `${tx.patientName||"Bill"} · ${money(tx.grandTotal)}`);
   saveTransactions();
   autoPrintAfterBill(tx);
-  bill = newBillState();
+  const _savedBill = bill; bill = newBillState();
   render();
-  showToast("✓ Bill saved — find it anytime in Records");
+  showBillSavedUi(tx, _savedBill, _undoSnap);
 }
 
 function buildBillText(tx){
@@ -2294,10 +2379,17 @@ const THEMES = [
 function getThemeId(){
   try{ const v=localStorage.getItem("clinic_theme"); return THEMES.some(t=>t.id===v) ? v : "green"; }catch(e){ return "green"; }
 }
+function hexMix(a,b,r){ const pa=[1,3,5].map(i=>parseInt(a.substr(i,2),16)), pb=[1,3,5].map(i=>parseInt(b.substr(i,2),16)); return "#"+pa.map((v,i)=>Math.round(v*r+pb[i]*(1-r)).toString(16).padStart(2,"0")).join(""); }
+const DARK_VARS = {"--page":"#0E1417","--card":"#192127","--text":"#E8EEF2","--muted":"#9AA9B6","--faint":"#6F7F8C","--border":"#2B3640","--successSoft":"#12342A","--dangerSoft":"#3A1C19","--warningSoft":"#3A2B12"};
 function applyTheme(id){
-  const t = THEMES.find(x=>x.id===id) || THEMES[0], st = document.documentElement.style;
-  st.setProperty("--header", t.header); st.setProperty("--primary", t.header);
-  st.setProperty("--headerSub", t.sub); st.setProperty("--primarySoft", t.soft); st.setProperty("--page", t.page);
+  const t = THEMES.find(x=>x.id===id) || THEMES[0], root = document.documentElement, st = root.style, dark = isDarkMode();
+  root.setAttribute("data-mode", dark ? "dark" : "light");
+  Object.keys(DARK_VARS).forEach(k=>{ if(dark) st.setProperty(k, DARK_VARS[k]); else st.removeProperty(k); });
+  st.setProperty("--header", t.header);
+  st.setProperty("--primary", dark ? hexMix(t.header,"#ffffff",.8) : t.header);
+  st.setProperty("--headerSub", t.sub);
+  st.setProperty("--primarySoft", dark ? hexMix(t.header,"#192127",.35) : t.soft);
+  if(!dark) st.setProperty("--page", t.page);
   const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute("content", t.header);
 }
 let themeUi = { open:false };
@@ -2320,7 +2412,9 @@ function renderThemeModal(){
           <button class="modal-x" onclick="closeThemeModal()">✕</button>
         </div>
         <div style="padding:14px 16px;">
-          <p class="small faint" style="margin:0 0 12px;">Pick the main colour of the app. It changes instantly and is saved on this phone.</p>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--primary);margin:0 0 6px;">Appearance</div>
+          <div class="flex gap2" style="margin-bottom:14px;">${[["light","☀ Light"],["dark","🌙 Dark"],["auto","Auto"]].map(([k,l])=>`<button type="button" class="btn ${getAppearance()===k?'btn-primary':'btn-outline'}" style="flex:1;padding:8px 4px;font-size:13px;" onclick="chooseAppearance('${k}')">${l}</button>`).join("")}</div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--primary);margin:0 0 6px;">Colour</div>
           ${THEMES.map(t=>`
             <button type="button" onclick="chooseTheme('${t.id}')" style="display:flex;align-items:center;gap:12px;width:100%;margin-bottom:8px;padding:10px 12px;background:var(--card);border:2px solid ${cur===t.id?t.header:'var(--border)'};border-radius:12px;cursor:pointer;text-align:left;">
               <span style="display:flex;width:44px;height:28px;border-radius:8px;overflow:hidden;border:1px solid var(--border);flex-shrink:0;"><span style="flex:2;background:${t.header};"></span><span style="flex:1;background:${t.sub};"></span><span style="flex:1;background:${t.soft};"></span></span>
@@ -2332,6 +2426,282 @@ function renderThemeModal(){
     </div>`;
 }
 try{ applyTheme(getThemeId()); }catch(e){}
+// ======================= Smart tools (repeat bill, quick-pick, undo, reports, stock count …) =======================
+let toolsUi = { open:false, kind:"", date:"", tab:"closing", counts:{}, q:"", histName:"", range:"7" };
+function openTools(kind, extra){ toolsUi = Object.assign({ open:true, kind:kind, date:"", tab:"closing", counts:{}, q:"", histName:"", range:"7" }, extra||{}); renderOverlays(); }
+function closeTools(){ toolsUi.open=false; renderOverlays(); }
+const fmtMoney = v => `${CURRENCY}${money(v)}`;
+function localDateStr(ts){ const d=new Date(ts||Date.now()); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function dayStartTs(ts){ const d=new Date(ts); d.setHours(0,0,0,0); return d.getTime(); }
+function netParts(t){ return { meds:(t.medTotal||0)-(t.medsDiscount||0), tests:(t.testsTotal||0)-(t.testsDiscount||0), extras:t.extrasTotal||0,
+  fee:(t.doctorFee||0)-(t.feeDiscount||0), disc:(t.medsDiscount||0)+(t.testsDiscount||0)+(t.feeDiscount||0), total:t.grandTotal||0 }; }
+function txBetween(a,b){ return visibleTransactions().filter(t=>t.timestamp>=a && t.timestamp<b); }
+
+// ---- 1. Repeat a bill + patient history ----
+function repeatBillFromTx(id){
+  const t = transactions.find(x=>x.id===id); if(!t) return;
+  const go = ()=>{
+    const nb = newBillState(); nb.patient = t.patientName||"";
+    let skipped=0, capped=0;
+    (t.items||[]).forEach(it=>{
+      const med = inventory.find(m=>m.id===it.medId);
+      if(!med || med.deleted || it.special || !(med.stockPills>0)){ skipped++; return; }
+      let pills = it.pills; if(pills>med.stockPills){ pills=med.stockPills; capped++; }
+      const price = nextBatchUnitPrice(med);
+      nb.items.push({ medId:med.id, name:med.name, pills, pricePerPill:price, subtotal:price*pills, note:it.note||"", perDay:it.perDay==null?null:it.perDay, linkedToGlobalDays:false });
+    });
+    bill = nb; toolsUi.open=false;
+    if(tab!=="bill") setTab("bill"); else render();
+    renderOverlays();
+    showToast(skipped||capped ? `Bill copied — ${skipped?skipped+" item(s) skipped (out of stock/special). ":""}${capped?capped+" quantity adjusted to stock.":""}` : "✓ Previous bill copied — check and complete");
+  };
+  if(bill.items.length) askConfirm("Replace the bill you're working on with this one?", go, "Replace"); else go();
+}
+function patientTxList(name){ const n=String(name||"").trim().toLowerCase(); return visibleTransactions().filter(t=>String(t.patientName||"").trim().toLowerCase()===n).sort((a,b)=>b.timestamp-a.timestamp); }
+let _patHintNames = [];
+function patientHintHtml(){
+  const q = (bill.patient||"").trim().toLowerCase();
+  if(q.length<2){ _patHintNames=[]; return ""; }
+  const exact = patientTxList(q);
+  if(exact.length){
+    const last = exact[0];
+    return `<div class="hint-card"><div class="small" style="margin-bottom:6px;">Returning patient · last visit ${fmtDateTime(last.timestamp)} · ${exact.length} bill${exact.length===1?"":"s"}</div>
+      <div class="flex gap2"><button type="button" class="btn btn-primary flex1" style="font-size:12px;padding:8px;" onclick="repeatBillFromTx('${last.id}')">🔁 Repeat last bill</button>
+      <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openTools('patient',{histName:'${esc(last.patientName).replace(/'/g,"&#39;")}'})">🕘 History</button></div></div>`;
+  }
+  const seen = new Map();
+  visibleTransactions().forEach(t=>{ const nm=String(t.patientName||"").trim(); if(nm && nm.toLowerCase().includes(q) && !seen.has(nm.toLowerCase())) seen.set(nm.toLowerCase(), nm); });
+  _patHintNames = [...seen.values()].slice(0,4);
+  if(!_patHintNames.length) return "";
+  return `<div class="chip-row">${_patHintNames.map((n,i)=>`<button type="button" class="chip" onclick="pickPatientHint(${i})">${esc(n)}</button>`).join("")}</div>`;
+}
+function pickPatientHint(i){ const n=_patHintNames[i]; if(n===undefined) return; bill.patient=n; render(); }
+function refreshPatientHint(){ const el=document.getElementById("billPatientHint"); if(el) el.innerHTML=patientHintHtml(); }
+(function(){ const orig = onBillPatient; onBillPatient = function(v){ orig(v); refreshPatientHint(); }; })();
+function patientBodyHtml(){
+  const list = patientTxList(toolsUi.histName).slice(0,15);
+  if(!list.length) return `<p class="small faint">No bills found.</p>`;
+  return list.map(t=>`<div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;margin-bottom:8px;">
+    <div class="row"><strong style="font-size:13px;">${fmtDateTime(t.timestamp)}</strong><strong>${fmtMoney(t.grandTotal)}</strong></div>
+    <p class="small" style="margin:4px 0 8px;">${esc((t.items||[]).map(i=>i.name+" ×"+i.pills).join(", ")||"No medicines")}</p>
+    <button class="btn btn-outline" style="font-size:12px;padding:6px 12px;" onclick="repeatBillFromTx('${t.id}')">🔁 Repeat this bill</button></div>`).join("");
+}
+
+// ---- 2. Frequently sold quick-pick ----
+function topSoldMeds(n){
+  const cutoff = Date.now()-60*86400000, cnt = {};
+  visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; (t.items||[]).forEach(it=>{ if(!it.special) cnt[it.medId]=(cnt[it.medId]||0)+1; }); });
+  return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(id=>inventory.find(m=>m.id===id)).filter(m=>m && !m.deleted && !m.specialCategory && m.stockPills>0).slice(0,n);
+}
+function quickPickHtml(){
+  if(bill.selectedMedId) return "";
+  const list = topSoldMeds(6); if(!list.length) return "";
+  return `<div class="small" style="margin:2px 2px 6px;font-weight:600;">Frequently sold</div><div class="chip-row" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;">${list.map(m=>`<button type="button" class="chip" style="flex-shrink:0;" onclick="pickBillMed('${m.id}')">${esc(m.name)}</button>`).join("")}</div>`;
+}
+
+// ---- 5. Expiry outlook ----
+function expiryRows(){
+  const out=[]; inventory.forEach(m=>{ if(m.deleted) return; activeBatches(m).forEach(b=>{ if(b.expiryDate && b.pillsRemaining>0){ const d=daysUntil(b.expiryDate); if(d!==null && d<=90) out.push({m,b,d}); } }); });
+  out.sort((a,b)=>a.d-b.d); return out;
+}
+function expiryCardHtml(){
+  const rows = expiryRows(); if(!rows.length) return "";
+  const c = { exp:rows.filter(r=>r.d<0).length, a:rows.filter(r=>r.d>=0&&r.d<=30).length, b:rows.filter(r=>r.d>30&&r.d<=60).length, c:rows.filter(r=>r.d>60).length };
+  return `<button type="button" class="hint-card" style="width:100%;text-align:left;cursor:pointer;margin-bottom:12px;font-family:inherit;color:var(--text);" onclick="openTools('expiry')">
+    <div class="row"><strong style="font-size:13px;">⏳ Expiry outlook</strong><span class="small">View all ›</span></div>
+    <div class="chip-row" style="margin-top:6px;">${c.exp?`<span class="pill-badge" style="background:var(--dangerSoft);color:var(--danger);">${c.exp} expired</span>`:""}
+    <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);">${c.a} within 30 days</span>
+    <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${c.b} in 31–60</span>
+    <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);">${c.c} in 61–90</span></div></button>`;
+}
+function expiryBodyHtml(){
+  const rows = expiryRows(); if(!rows.length) return `<p class="small faint">Nothing expires in the next 90 days.</p>`;
+  const groups=[["Expired",r=>r.d<0],["Within 30 days",r=>r.d>=0&&r.d<=30],["31–60 days",r=>r.d>30&&r.d<=60],["61–90 days",r=>r.d>60]];
+  return groups.map(([t,f])=>{ const g=rows.filter(f); if(!g.length) return ""; return `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--primary);margin:12px 0 6px;">${t} (${g.length})</div>`+
+    g.slice(0,60).map(r=>`<div class="item-row"><div style="min-width:0;"><div style="font-size:13px;font-weight:600;">${esc(r.m.name)}</div><div class="small">${r.b.pillsRemaining} left · ${r.d<0?Math.abs(r.d)+" days ago":r.d===0?"today":"in "+r.d+" days"}</div></div><span class="small">${esc(r.b.expiryDate)}</span></div>`).join(""); }).join("");
+}
+
+// ---- 6. Reorder list ----
+function shareReorderList(){
+  const list = lowStockList().slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  if(!list.length){ showToast("Nothing is low on stock right now"); return; }
+  const lines = [`📦 Reorder list — ${fmtDateTime(Date.now())}`, ""];
+  list.forEach((m,i)=> lines.push(`${i+1}. ${m.name}${m.mg?" "+m.mg:""} — ${m.stockPills} left (minimum ${m.lowStockAt??0})`));
+  openShare(lines.join("\n"));
+}
+
+// ---- 7. Duplicate medicine warning ----
+(function(){ const core = addBillItem; addBillItem = function(){
+  const med = inventory.find(m=>m.id===bill.selectedMedId);
+  if(med && canAddBillItem() && bill.items.some(it=>it.medId===med.id && !it.special)){
+    askConfirm(`${med.name} is already in this bill. Add it again?`, ()=>core(), "Add again"); return;
+  }
+  core();
+}; })();
+
+// ---- 8. Stock count ----
+function diffLabel(m){
+  const c = toolsUi.counts[m.id]; if(c===undefined || c==="") return "";
+  const n = Number(c); if(!isFinite(n) || n<0) return " · invalid";
+  const d = n - m.stockPills; return d===0 ? " · matches" : ` · <b style="color:${d<0?"var(--danger)":"var(--success)"}">${d>0?"+":""}${d}</b>`;
+}
+function countChanges(){ return inventory.filter(m=>{ if(m.deleted) return false; const c=toolsUi.counts[m.id]; if(c===undefined||c==="") return false; const n=Number(c); return isFinite(n)&&n>=0&&n!==m.stockPills; }); }
+function countListHtml(){
+  const q = toolsUi.q.trim().toLowerCase();
+  let list = inventory.filter(m=>!m.deleted); if(q) list = list.filter(m=>medicineMatchesQuery(m,q));
+  list.sort((a,b)=>String(a.name).localeCompare(String(b.name))); const total=list.length; list=list.slice(0,40);
+  if(!list.length) return `<p class="small faint">No medicines found.</p>`;
+  return list.map(m=>`<div class="item-row" style="gap:10px;"><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}</div>
+    <div class="small">In app: <b>${m.stockPills}</b><span id="cd-${m.id}">${diffLabel(m)}</span></div></div>
+    <input ${NOAC_RAW} inputmode="numeric" value="${esc(toolsUi.counts[m.id]===undefined?"":toolsUi.counts[m.id])}" placeholder="Counted" oninput="onCountInput('${m.id}',this.value)" style="width:92px;text-align:center;"></div>`).join("")
+    + (total>40?`<p class="small faint" style="margin-top:8px;">Showing 40 of ${total} — type in the search box to narrow down.</p>`:"");
+}
+function countBodyHtml(){
+  return `<p class="small" style="margin:0 0 8px;">Type what you actually counted on the shelf. Only boxes you fill in are changed.</p>
+    <input ${NOAC} value="${esc(toolsUi.q)}" oninput="onCountSearch(this.value)" placeholder="Search medicine…" class="mb2">
+    <div id="countList">${countListHtml()}</div>
+    <button id="countApplyBtn" class="btn btn-primary" style="width:100%;margin-top:12px;" onclick="applyCount()">${countApplyLabel()}</button>`;
+}
+function countApplyLabel(){ const n=countChanges().length; return n?`Apply ${n} change${n===1?"":"s"}`:"Nothing to apply yet"; }
+function onCountSearch(v){ toolsUi.q=v; const el=document.getElementById("countList"); if(el) el.innerHTML=countListHtml(); }
+function onCountInput(id,v){ toolsUi.counts[id]=String(v).replace(/[^0-9]/g,""); const m=inventory.find(x=>x.id===id); const el=document.getElementById("cd-"+id); if(el&&m) el.innerHTML=diffLabel(m); const b=document.getElementById("countApplyBtn"); if(b) b.textContent=countApplyLabel(); }
+function applyCount(){
+  const ch = countChanges(); if(!ch.length){ showToast("Fill in at least one counted number first"); return; }
+  askConfirm(`Update the stock of ${ch.length} medicine${ch.length===1?"":"s"} to the counted numbers?`, ()=>{
+    ch.forEach(m=>{ const from=m.stockPills; adjustStockTo(m, Number(toolsUi.counts[m.id])); m.updatedAt=Date.now(); logActivity("stock_count", `${m.name}: ${from} → ${m.stockPills}`); });
+    saveInventory(); toolsUi.counts={}; toolsUi.open=false; render(); showToast(`✓ Stock updated for ${ch.length} medicine${ch.length===1?"":"s"}`);
+  }, "Update stock");
+}
+
+// ---- 9/10/11. Reports: daily closing, weekly chart, top sellers, profit estimate ----
+function rpSet(k,v){ toolsUi[k]=v; renderOverlays(); }
+function closingData(dateStr){
+  const a = new Date(dateStr+"T00:00:00").getTime(), b = a+86400000, list = txBetween(a,b);
+  const r = { n:list.length, meds:0, tests:0, extras:0, fee:0, disc:0, total:0, modes:{} };
+  list.forEach(t=>{ const p=netParts(t); r.meds+=p.meds; r.tests+=p.tests; r.extras+=p.extras; r.fee+=p.fee; r.disc+=p.disc; r.total+=p.total;
+    const m=t.paymentMode||"Cash"; r.modes[m]=r.modes[m]||{n:0,amt:0}; r.modes[m].n++; r.modes[m].amt+=p.total; });
+  return r;
+}
+function closingText(dateStr){
+  const r = closingData(dateStr), d = new Date(dateStr+"T00:00:00");
+  const L = [`📊 Daily closing — ${d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})}`, `Bills: ${r.n}`, "",
+    `Medicines: ${fmtMoney(r.meds)}`, `Tests: ${fmtMoney(r.tests)}`, `Other charges: ${fmtMoney(r.extras)}`, `Doctor fees: ${fmtMoney(r.fee)}`, `Discounts given: ${fmtMoney(r.disc)}`, "--------------------------"];
+  Object.keys(r.modes).forEach(k=> L.push(`${k}: ${fmtMoney(r.modes[k].amt)} (${r.modes[k].n} bill${r.modes[k].n===1?"":"s"})`));
+  L.push("--------------------------", `TOTAL: ${fmtMoney(r.total)}`); return L.join("\n");
+}
+function shareClosing(){ const t=closingText(toolsUi.date||localDateStr()); closeTools(); openShare(t); }
+function weekData(){
+  const out=[], today=dayStartTs(Date.now());
+  for(let i=6;i>=0;i--){ const a=today-i*86400000, b=a+86400000; const list=txBetween(a,b); out.push({ label:new Date(a).toLocaleDateString(undefined,{weekday:"short"}), total:list.reduce((s,t)=>s+(t.grandTotal||0),0), n:list.length }); }
+  return out;
+}
+function weekChartHtml(){
+  const d=weekData(), max=Math.max(1,...d.map(x=>x.total)), tot=d.reduce((s,x)=>s+x.total,0);
+  const bars=d.map((x,i)=>{ const h=Math.round(x.total/max*110), bx=12+i*47; return `<rect x="${bx}" y="${140-h}" width="32" height="${Math.max(h,2)}" rx="6" fill="var(--primary)" opacity="${x.total?1:.25}"/>
+    <text x="${bx+16}" y="${134-h}" text-anchor="middle" font-size="9" fill="var(--muted)">${x.total?Math.round(x.total).toLocaleString():""}</text>
+    <text x="${bx+16}" y="156" text-anchor="middle" font-size="10" fill="var(--muted)">${x.label}</text>`; }).join("");
+  return `<svg viewBox="0 0 340 164" style="width:100%;height:auto;display:block;"><line x1="6" y1="140" x2="334" y2="140" stroke="var(--border)"/>${bars}</svg>
+    <div class="row" style="margin-top:10px;"><span class="small">Last 7 days</span><strong>${fmtMoney(tot)}</strong></div><div class="row"><span class="small">Daily average</span><strong>${fmtMoney(tot/7)}</strong></div>`;
+}
+function topSellersHtml(){
+  const cutoff=Date.now()-30*86400000, map={};
+  visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; (t.items||[]).forEach(it=>{ const k=it.medId||it.name; const e=map[k]=map[k]||{name:it.name,qty:0,rev:0}; e.qty+=it.pills||0; e.rev+=it.subtotal!=null?it.subtotal:(it.pricePerPill||0)*(it.pills||0); }); });
+  const list=Object.values(map).sort((a,b)=>b.qty-a.qty).slice(0,10); if(!list.length) return `<p class="small faint">No sales in the last 30 days.</p>`;
+  const max=list[0].qty||1;
+  return `<p class="small" style="margin:0 0 8px;">Top 10 medicines by quantity — last 30 days</p>`+list.map((e,i)=>`<div style="margin-bottom:10px;"><div class="row"><span style="font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i+1}. ${esc(e.name)}</span><span class="small" style="flex-shrink:0;margin-left:8px;">${e.qty} · ${fmtMoney(e.rev)}</span></div>
+    <div style="height:6px;border-radius:99px;background:var(--primarySoft);margin-top:4px;"><div style="height:100%;width:${Math.round(e.qty/max*100)}%;border-radius:99px;background:var(--primary);"></div></div></div>`).join("");
+}
+function costPct(){ let v=NaN; try{ v=Number(localStorage.getItem("clinic_cost_pct")); }catch(e){} return isFinite(v)&&v>0&&v<=100 ? v : 80; }
+function profitCalc(){
+  const days=Number(toolsUi.range)||7, today=dayStartTs(Date.now()), a=today-(days-1)*86400000, list=txBetween(a, today+86400000);
+  const rev=list.reduce((s,t)=>s+netParts(t).meds,0), cost=rev*costPct()/100; return { n:list.length, rev, cost, profit:rev-cost };
+}
+function profitOutHtml(){ const p=profitCalc(); return `<div class="row"><span class="small">Medicine sales (after discounts)</span><strong>${fmtMoney(p.rev)}</strong></div>
+  <div class="row"><span class="small">Estimated purchase cost</span><strong>${fmtMoney(p.cost)}</strong></div><div class="row" style="margin-top:6px;"><span style="font-weight:700;">Estimated profit</span><strong style="color:var(--success);font-size:18px;">${fmtMoney(p.profit)}</strong></div>`; }
+function onCostPct(v){ const n=Number(String(v).replace(/[^0-9.]/g,"")); if(n>0&&n<=100){ try{ localStorage.setItem("clinic_cost_pct", String(n)); }catch(e){} } const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml(); }
+function reportsBodyHtml(){
+  const tabs=[["closing","Closing"],["week","7 days"],["top","Top sellers"],["profit","Profit"]];
+  const seg=`<div class="flex gap2" style="margin-bottom:12px;">${tabs.map(([k,l])=>`<button type="button" class="btn ${toolsUi.tab===k?"btn-primary":"btn-outline"}" style="flex:1;padding:8px 4px;font-size:12px;" onclick="rpSet('tab','${k}')">${l}</button>`).join("")}</div>`;
+  let body="";
+  if(toolsUi.tab==="closing"){
+    const ds=toolsUi.date||localDateStr(), r=closingData(ds);
+    body=`<label class="field-label">Date</label><input type="date" value="${ds}" max="${localDateStr()}" onchange="rpSet('date',this.value||'')" class="mb2">
+      <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;">
+      <div class="row"><span class="small">Bills</span><strong>${r.n}</strong></div><div class="row"><span class="small">Medicines</span><strong>${fmtMoney(r.meds)}</strong></div>
+      <div class="row"><span class="small">Tests</span><strong>${fmtMoney(r.tests)}</strong></div><div class="row"><span class="small">Other charges</span><strong>${fmtMoney(r.extras)}</strong></div>
+      <div class="row"><span class="small">Doctor fees</span><strong>${fmtMoney(r.fee)}</strong></div><div class="row"><span class="small">Discounts given</span><strong>${fmtMoney(r.disc)}</strong></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:8px 0;">
+      ${Object.keys(r.modes).map(k=>`<div class="row"><span class="small">${esc(k)} (${r.modes[k].n})</span><strong>${fmtMoney(r.modes[k].amt)}</strong></div>`).join("")||`<p class="small faint" style="margin:0;">No bills on this day.</p>`}
+      <div class="row" style="margin-top:8px;"><span style="font-weight:700;">Total</span><strong style="font-size:18px;color:var(--primary);">${fmtMoney(r.total)}</strong></div></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:12px;" onclick="shareClosing()">📤 Share closing summary</button>`;
+  } else if(toolsUi.tab==="week") body=weekChartHtml();
+  else if(toolsUi.tab==="top") body=topSellersHtml();
+  else body=`<div class="flex gap2" style="margin-bottom:12px;">${[["1","Today"],["7","7 days"],["30","30 days"]].map(([k,l])=>`<button type="button" class="btn ${toolsUi.range===k?"btn-primary":"btn-outline"}" style="flex:1;padding:8px 4px;font-size:12px;" onclick="rpSet('range','${k}')">${l}</button>`).join("")}</div>
+      <label class="field-label">Average purchase cost, % of selling price</label><input ${NOAC_RAW} inputmode="decimal" value="${costPct()}" oninput="onCostPct(this.value)" class="mb2">
+      <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;" id="profitOut">${profitOutHtml()}</div>
+      <p class="small faint">This is an estimate: the app doesn't store purchase prices, so profit = sales × (100 − cost %).</p>`;
+  return seg+body;
+}
+function renderToolsModal(){
+  const root=document.getElementById("toolsModalRoot"); if(!root) return;
+  if(!toolsUi.open){ root.innerHTML=""; return; }
+  const k=toolsUi.kind; let title="", body="";
+  if(k==="expiry"){ title="⏳ Expiry outlook"; body=expiryBodyHtml(); }
+  else if(k==="count"){ title="📋 Stock count"; body=countBodyHtml(); }
+  else if(k==="reports"){ title="📊 Reports"; body=reportsBodyHtml(); }
+  else if(k==="patient"){ title="🕘 "+esc(toolsUi.histName); body=patientBodyHtml(); }
+  root.innerHTML=`<div class="modal-overlay" onclick="if(event.target===this) closeTools()"><div class="modal" style="max-height:90vh;"><div class="modal-head"><strong>${title}</strong><button class="modal-x" onclick="closeTools()">✕</button></div><div style="padding:12px 16px 18px;overflow-y:auto;">${body}</div></div></div>`;
+}
+
+// ---- 4 + 15. Undo after completing a bill, success animation, haptic ----
+let _undoInfo = null, _undoTimer = null;
+function captureUndoSnap(){
+  const snap = {}; bill.items.forEach(it=>{ const m=inventory.find(x=>x.id===it.medId); if(m && !snap[m.id]) snap[m.id]=JSON.parse(JSON.stringify(m.batches||[])); }); return snap;
+}
+function showBillSavedUi(tx, savedBill, snap){
+  try{ if(navigator.vibrate) navigator.vibrate(35); }catch(e){}
+  const fx=document.createElement("div"); fx.className="cb-fx"; fx.innerHTML='<div><svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>';
+  document.body.appendChild(fx); setTimeout(()=>fx.remove(), 1000);
+  _undoInfo = { txId:tx.id, savedBill, snap };
+  let bar=document.getElementById("undoBar");
+  if(!bar){ bar=document.createElement("div"); bar.id="undoBar"; bar.className="cb-undo"; document.body.appendChild(bar); }
+  bar.innerHTML='<span>✓ Bill saved</span><button type="button" onclick="undoLastBill()">Undo</button>';
+  bar.style.display="flex"; clearTimeout(_undoTimer); _undoTimer=setTimeout(hideUndoBar, 9000);
+}
+function hideUndoBar(){ const bar=document.getElementById("undoBar"); if(bar) bar.style.display="none"; _undoInfo=null; }
+function undoLastBill(){
+  const u=_undoInfo; if(!u) return; hideUndoBar();
+  const t=transactions.find(x=>x.id===u.txId); if(!t || t.deleted){ return; }
+  Object.keys(u.snap).forEach(id=>{ const m=inventory.find(x=>x.id===id); if(!m) return; m.batches=JSON.parse(JSON.stringify(u.snap[id])); m.batches.forEach(b=>{ b.updatedAt=Date.now(); }); m.updatedAt=Date.now(); recomputeStock(m); });
+  t.deleted=true; t.updatedAt=Date.now(); logActivity("bill_del", (t.patientName||"Bill")+" (undone)");
+  saveInventory(); saveTransactions();
+  bill=u.savedBill; if(tab!=="bill") setTab("bill"); else render();
+  showToast("↩ Bill undone — stock restored. A receipt that already printed can't be recalled.");
+}
+
+// ---- 12. Backup reminder (admin only) ----
+function backupReminderHtml(){
+  try{
+    if(currentRole()!=="admin") return "";
+    if(!inventory.length && !transactions.length) return "";
+    if(localStorage.getItem("clinic_backup_snooze")===new Date().toDateString()) return "";
+    const last=Number(localStorage.getItem("clinic_last_backup")||0), days=last?Math.floor((Date.now()-last)/86400000):null;
+    if(days!==null && days<7) return "";
+    return `<div class="hint-card" style="margin-bottom:12px;"><div style="font-size:13px;font-weight:600;margin-bottom:4px;">💾 Time for a backup</div>
+      <div class="small" style="margin-bottom:8px;">${days===null?"No backup file has been saved from this phone yet.":"Last backup was "+days+" days ago."}</div>
+      <div class="flex gap2"><button type="button" class="btn btn-primary flex1" style="font-size:12px;padding:8px;" onclick="toggleBackupModal()">Back up now</button>
+      <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="snoozeBackup()">Later</button></div></div>`;
+  }catch(e){ return ""; }
+}
+function snoozeBackup(){ try{ localStorage.setItem("clinic_backup_snooze", new Date().toDateString()); }catch(e){} render(); }
+function billExtrasHtml(){ return backupReminderHtml() + expiryCardHtml() + quickPickHtml(); }
+
+// ---- 14. Dark mode ----
+function getAppearance(){ try{ const v=localStorage.getItem("clinic_appearance"); return v==="dark"||v==="auto"?v:"light"; }catch(e){ return "light"; } }
+function isDarkMode(){ const a=getAppearance(); return a==="dark" || (a==="auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches); }
+function chooseAppearance(v){ try{ localStorage.setItem("clinic_appearance", v); }catch(e){} applyTheme(getThemeId()); renderOverlays(); }
+try{ if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ()=>{ if(getAppearance()==="auto") applyTheme(getThemeId()); }); }catch(e){}
+
 let scanMethodUi = { open:false, method:"scanner" };
 function editScanMethodSettings(){
   scanMethodUi = { open:true, method:getScanMethod() };
@@ -2452,7 +2822,7 @@ function saveReceiptDesign(d){ try{ localStorage.setItem("clinic_receipt_design"
 function buildReceiptLines(tx, D){
   D = D || getReceiptDesign();
   const W = D.paper===48 ? 48 : 32, L=[];
-  const shop = getReceiptSettings();
+  const shop = (rdUi.open && rdUi.shop) ? rdUi.shop : getReceiptSettings();
   const line = (t,o)=> L.push(Object.assign({t:t,a:"left",b:false,z:"normal"}, o||{}));
   const divider = ()=>{ if(D.divider==="none") line(""); else line(D.divider.repeat(W)); };
   const lr = (l,r,o)=> line(padLR(l,r,W), o);
@@ -2527,13 +2897,14 @@ function buildEscPosReceipt(tx){
 let rdUi = { open:false, d:null };
 function openReceiptDesign(){
   if(!can("receiptSetup")){ showToast("Only Admin can change receipt design"); return; }
-  rdUi = { open:true, d:getReceiptDesign() }; renderOverlays();
+  rdUi = { open:true, d:getReceiptDesign(), shop:Object.assign({shopName:"",address:"",phone:""}, getReceiptSettings()) }; renderOverlays();
 }
 function closeReceiptDesign(){ rdUi.open=false; renderOverlays(); }
 function rdSet(k,v){ rdUi.d[k]=v; renderOverlays(); }
 function rdText(k,v){ rdUi.d[k]=v; rdRefreshPreview(); }
+function rdShop(k,v){ rdUi.shop[k]=v; rdRefreshPreview(); }
 function rdReset(){ rdUi.d=Object.assign({},RECEIPT_DESIGN_DEFAULT); renderOverlays(); }
-function rdSave(){ saveReceiptDesign(rdUi.d); rdUi.open=false; showToast("✓ Receipt design saved"); renderOverlays(); }
+function rdSave(){ saveReceiptDesign(rdUi.d); saveReceiptSettings({ shopName:(rdUi.shop.shopName||"").trim()||"Counter Book", address:(rdUi.shop.address||"").trim(), phone:(rdUi.shop.phone||"").trim() }); rdUi.open=false; showToast("✓ Receipt design saved"); renderOverlays(); }
 function rdSample(){
   return { id:"SAMPLE123456", timestamp:Date.now(), patientName:"Ayesha Khan", paymentMode:"Cash", remarks:"Dr. Salman",
     items:[ {name:"Paracetamol 500mg", pills:10, pricePerPill:2, note:"2 x 5 days"}, {name:"Amoxicillin 250mg", pills:15, pricePerPill:8},
@@ -2566,10 +2937,18 @@ function renderReceiptDesignModal(){
         <div class="modal-head"><strong>🖌 Receipt design</strong><button class="modal-x" onclick="closeReceiptDesign()">✕</button></div>
         <div style="padding:6px 16px 16px;overflow-y:auto;">
           ${h("Live preview")}
-          <div style="background:#fff;border:1px dashed var(--faint);border-radius:8px;padding:12px 10px;overflow-x:auto;">
+          <div class="keep-light" style="background:#fff;border:1px dashed var(--faint);border-radius:8px;padding:12px 10px;overflow-x:auto;">
             <div id="rdPreview" style="font-family:'Courier New',monospace;font-size:${D.paper===48?10:12.5}px;width:${D.paper}ch;margin:0 auto;color:#111;">${rdPreviewHtml()}</div>
           </div>
-          <p class="small faint" style="margin:6px 0 0;">Sample bill. The shop name, address and phone come from 🧾 Receipt setup.</p>
+          <p class="small faint" style="margin:6px 0 0;">Sample bill — updates as you change things below.</p>
+
+          ${h("Shop details")}
+          ${lbl("Shop / clinic name")}
+          <input ${NOAC} value="${esc(rdUi.shop.shopName)}" oninput="rdShop('shopName',this.value)" placeholder="e.g. Counter Book" class="mb2">
+          ${lbl("Address (optional)")}
+          <input ${NOAC} value="${esc(rdUi.shop.address)}" oninput="rdShop('address',this.value)" placeholder="Leave blank to skip" class="mb2">
+          ${lbl("Phone number (optional)")}
+          <input ${NOAC} value="${esc(rdUi.shop.phone)}" oninput="rdShop('phone',this.value)" placeholder="Leave blank to skip" class="mb2">
 
           ${h("Paper")}
           ${seg("paper",[[32,"58 mm"],[48,"80 mm"]])}
@@ -2979,9 +3358,11 @@ function renderBill(){
     </div>`;
 
   document.getElementById("main").innerHTML = `
+    ${billSummaryHtml()}${billExtrasHtml()}
     <div class="card">
       <label class="field-label">Patient name</label>
       <input ${NOAC} id="billPatientInput" value="${esc(bill.patient)}" oninput="onBillPatient(this.value)" placeholder="Type patient's name">
+      <div id="billPatientHint">${patientHintHtml()}</div>
       <div class="flex mt3" style="justify-content:space-between;align-items:center;">
         <div>
           <label class="field-label" style="margin-bottom:2px;">Doctor visit fee</label>
@@ -5311,6 +5692,7 @@ function renderTxCard(t){
           ${t.feeDiscount?`<div class="row small" style="color:var(--success);margin-bottom:4px;"><span>Doctor fee discount</span><span>-${CURRENCY}${money(t.feeDiscount)}</span></div>`:""}
           <div class="flex gap2 mt3">
             <button class="btn btn-success flex1" style="font-size:12px;padding:8px;" onclick='openShare(${JSON.stringify(buildBillText(t))})'>📤 Share bill</button>
+            <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="repeatBillFromTx('${t.id}')">🔁 Repeat</button>
             <button class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='printReceipt(${JSON.stringify(t)})'>🖨 Print</button>
             <button class="btn btn-outline" style="padding:8px 12px;border-radius:999px;" onclick="openEditTx('${t.id}')">Edit</button>
             <button class="btn btn-outline" style="padding:8px 12px;" onclick="deleteTx('${t.id}')">🗑</button>
@@ -5527,6 +5909,7 @@ function renderStock(){
       ${expiringSoonItems.length ? pillBtn(filter==='expiringSoon', '--warningSoft', '--warning', `⏳ ${expiringSoonItems.length} expiring soon`, 'expiringSoon') : ""}
       ${list.length ? pillBtn(filter==='lowStock', '--dangerSoft', '--danger', `📦 ${list.length} low stock`, 'lowStock') : ""}
     </div>
+    <div class="flex gap2 mb2"><button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="shareReorderList()">📤 Reorder list</button><button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openTools('expiry')">⏳ Expiry outlook</button></div>
     ${filter ? `<p class="small faint mb2">Filtered · <button type="button" onclick="toggleWarnFilter('${filter}')" style="background:none;border:none;color:var(--primary);font-weight:700;cursor:pointer;padding:0;font-size:inherit;">Show all</button></p>` : ""}
   `;
 
@@ -6936,10 +7319,12 @@ function renderHeaderMenu(){
   const items = [];
   if(can("printer")) items.push({label:"🖨 Printer", action:"selectPrinter()"});
   items.push({label:"💾 Backup", action:"toggleBackupModal()"});
-  if(can("receiptSetup")) items.push({label:"🧾 Receipt setup", action:"editReceiptSettings()"});
   if(can("receiptSetup")) items.push({label:"🖌 Receipt design", action:"openReceiptDesign()"});
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   items.push({label:"🎨 Theme", action:"openThemeModal()"});
+  if(can("monthlyTotal")) items.push({label:"📊 Reports", action:"openTools('reports')"});
+  items.push({label:"📋 Stock count", action:"openTools('count')"});
+  items.push({label:"📤 Reorder list", action:"shareReorderList()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
   if(can("diagnostics")) items.push({label:"🩺 Diagnostics", action:"openDiag()"}); // Admin always; Semi-Admin only if ticked
@@ -7346,6 +7731,7 @@ function collectAllNotes(){
   return out;
 }
 function exportBackup(){
+  try{ localStorage.setItem("clinic_last_backup", String(Date.now())); }catch(e){}
   const payload = {
     version: 1,
     exportedAt: Date.now(),
