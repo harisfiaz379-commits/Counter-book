@@ -4309,6 +4309,51 @@ function parseBoxText(text){
   if(line) out.productName = line;
   return out;
 }
+// Best-effort, offline-only extras the box-text scan previously never attempted at all: the
+// dosage form (category), the composition block (formula + strength) and the pack size
+// ("2x10 Tablets" -> 20/box). Nowhere near as reliable as the online reader's structured
+// reading of the whole box, but far better than leaving these boxes blank every time.
+function parseBoxTextDetails(text){
+  const t = String(text||"");
+  const out = {};
+  const formMatch = t.match(/\b(tablets?|capsules?|syrups?|suspensions?|injections?|ointments?|creams?|lotions?|drops?|gels?|powders?|sachets?|sprays?)\b/i);
+  if(formMatch) out.form = formMatch[1].toLowerCase().replace(/s$/,"").replace(/^[a-z]/,c=>c.toUpperCase());
+  const pack = t.match(/\b(\d{1,3})\s*[x×]\s*(\d{1,4})\s*(?:tablets?|capsules?|tabs?|caps?)\b/i) || t.match(/\b(\d{1,4})\s*(?:tablets?|capsules?)\s*(?:per\s*(?:box|pack|strip))?\b/i);
+  if(pack) out.perBox = pack[2] ? Number(pack[1])*Number(pack[2]) : Number(pack[1]);
+  const compStart = t.search(/composition/i);
+  if(compStart>=0){
+    const rest = t.slice(compStart);
+    const compEnd = rest.search(/\b(indication|dosage|direction|storage|contra|side\s*effect|precaution|warning)\b/i);
+    const block = compEnd>0 ? rest.slice(0, compEnd) : rest.slice(0, 300);
+    const names=[], strengths=[];
+    // A dose's digits must not be glued to a letter (so "Vitamin D3" isn't mistaken for a dose
+    // starting at its "3"), and the LAST dose-looking number on the line wins — composition
+    // lines often have an aside like "(Eq. To 400mg Elemental Calcium)" before the real final
+    // dose, and taking the first match would grab the aside's number instead.
+    const doseRe = /(?<![A-Za-z])(\d[\d,]*(?:\.\d+)?)\s*(mg|mcg|µg|gm|g|ml|iu|i\.u\.?|%)\b/gi;
+    block.split("\n").forEach(raw=>{
+      // Dot leaders ("....") are plain punctuation here, not part of any number — strip them
+      // before matching so they can't get swallowed into a dose figure.
+      let l = raw.replace(/\s+/g," ").replace(/\.{2,}/g," ").trim();
+      if(!l || /composition|^each\b.*contains?:?$/i.test(l)) return;
+      const all = [...l.matchAll(doseRe)];
+      const dose = all[all.length-1];
+      let name = dose ? l.slice(0, dose.index) : l;
+      name = name.replace(/\([^)]*\)/g,"").replace(/[:.\s]+$/,"").trim();
+      if(name && /[A-Za-z]{3}/.test(name)){
+        if(names.length<3){ names.push(name); strengths[names.length-1] = dose ? dose[0].replace(/\s+/g," ").trim().toUpperCase() : undefined; }
+      } else if(dose && names.length && strengths[names.length-1]===undefined){
+        // A continuation line that's only a parenthetical aside + the real dose, with no
+        // ingredient name of its own — attach it to the name from the line just above.
+        strengths[names.length-1] = dose[0].replace(/\s+/g," ").trim().toUpperCase();
+      }
+    });
+    if(names.length) out.formula = names.join(" + ");
+    const strOut = strengths.filter(Boolean);
+    if(strOut.length) out.strength = strOut.join(" + ");
+  }
+  return out;
+}
 // "Add bill offline": photo of a printed prescription/list -> on-phone text reader (no internet,
 // no Gemini) -> same preview + add-to-bill screen as the online reader.
 function aiAddBillOffline(){ aiPickPhoto("print"); }
@@ -4367,14 +4412,23 @@ async function aiOcrCanvas(file, deg){ // bigger + grayscale + more contrast hel
 // Photos are often taken with the box turned sideways or upside-down, and the offline reader then returns
 // garbage. Try the 4 orientations on a small copy (cheap), keep the one that reads the most real words,
 // then do the full-quality read in that orientation.
-async function aiOcrRotated(file){
-  await aiLoadTesseract();
-  let worker=null; try{ worker=await window.Tesseract.createWorker("eng"); }catch(e){ worker=null; }
+// worker: a single Tesseract worker shared across the whole batch of photos — spinning one up
+// is one of the most expensive parts of this, so processBoxPhotosInner now creates exactly one
+// for all 3 photos instead of one each (was 3x the engine-startup cost for nothing, since the
+// same photo of the same box is always read with the same language).
+// knownDeg: once the first photo's orientation has been found, every later photo in the same
+// batch is assumed to have been held the same way and skips the 4-way probe entirely — that
+// probe was the single biggest cost here (up to 4 extra OCR passes per photo).
+async function aiOcrRotated(file, worker, knownDeg){
   const run=async img=> worker ? worker.recognize(img) : window.Tesseract.recognize(img,"eng");
-  try{
-    const bmp=await createImageBitmap(file), sc=Math.min(1,800/Math.max(bmp.width,bmp.height));
+  const bmp=await createImageBitmap(file);
+  let best = knownDeg;
+  if(best==null){
+    // Small and rough is fine here — this pass only needs to compare 4 orientations against
+    // each other, not actually transcribe anything, so it runs well under full resolution.
+    const sc=Math.min(1,500/Math.max(bmp.width,bmp.height));
     const w=Math.round(bmp.width*sc), h=Math.round(bmp.height*sc);
-    let best=0, bestScore=-1;
+    let bestScore=-1; best=0;
     for(const deg of [0,90,180,270]){
       const swap=(deg===90||deg===270), c=document.createElement("canvas"); c.width=swap?h:w; c.height=swap?w:h;
       const x=c.getContext("2d"); x.translate(c.width/2,c.height/2); x.rotate(deg*Math.PI/180); x.drawImage(bmp,-w/2,-h/2,w,h);
@@ -4383,8 +4437,10 @@ async function aiOcrRotated(file){
       if(sco>bestScore){ bestScore=sco; best=deg; }
       if(deg===0 && sco>=40) break; // already upright and clearly readable — skip the other turns
     }
-    return await run(await aiOcrCanvas(file,best));
-  } finally { if(worker){ try{ await worker.terminate(); }catch(e){} } }
+  }
+  const result = await run(await aiOcrCanvas(file,best));
+  result.__deg = best; // handed back so the caller can reuse it for the next photo in this batch
+  return result;
 }
 function boxBusyOn(n){
   window.__boxBusy=true;
@@ -4422,17 +4478,28 @@ async function processBoxPhotosInner(files, forceOffline){
         }catch(e){ showToast("Online reader failed — using the offline reader"); }
       }
       await aiLoadTesseract();
-      for(const file of files){   // offline: read each photo; every one only fills the boxes still empty
-        const r=await aiOcrRotated(file);
-        const parsed=parseBoxText(r&&r.data&&r.data.text);
-        // Only trust a name line that is mostly real letters (rejects scribbles like "< BEL =").
-        const real=l=>{ const letters=(l.text.match(/[A-Za-z]/g)||[]).length, all=l.text.replace(/\s/g,"").length; return letters>=3 && all>0 && letters/all>=0.75; };
-        const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
-          .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
-        parsed.productName = big ? big.text.replace(/\s+/g," ").trim() : null; // never keep an unchecked guess
-        if(parsed.productName || parsed.price || parsed.gtin) applyScanToNewMedForm(parsed);
-        else showToast("⚠ Couldn't read this photo — try again with the box upright and well lit");
-      }
+      // One worker and one orientation guess for the whole batch (see aiOcrRotated) — this used
+      // to spin up a fresh engine and re-probe all 4 rotations for every single photo, which was
+      // most of what made this slow with 3 photos per scan.
+      let worker=null; try{ worker=await window.Tesseract.createWorker("eng"); }catch(e){ worker=null; }
+      let sharedDeg=null;
+      try{
+        for(const file of files){   // offline: read each photo; every one only fills the boxes still empty
+          const r=await aiOcrRotated(file, worker, sharedDeg);
+          if(sharedDeg==null) sharedDeg=r.__deg;
+          const parsed=Object.assign(parseBoxText(r&&r.data&&r.data.text), parseBoxTextDetails(r&&r.data&&r.data.text));
+          // Only trust a name line that is mostly real letters (rejects scribbles like "< BEL =").
+          const real=l=>{ const letters=(l.text.match(/[A-Za-z]/g)||[]).length, all=l.text.replace(/\s/g,"").length; return letters>=3 && all>0 && letters/all>=0.75; };
+          // Brand names on a box front are 1-3 words ("ORSUP D", "Panadol Extra") — a big bold
+          // banner line like "HELP TO PREVENT OSTEOPOROSIS" is taller than the actual name here
+          // but is a full sentence, so it's excluded from the race even though it's the tallest.
+          const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text) && l.text.trim().split(/\s+/).length<=3)
+            .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
+          parsed.productName = big ? big.text.replace(/\s+/g," ").trim() : null; // never keep an unchecked guess
+          if(parsed.productName || parsed.price || parsed.gtin || parsed.formula || parsed.form || parsed.perBox) applyScanToNewMedForm(parsed);
+          else showToast("⚠ Couldn't read this photo — try again with the box upright and well lit");
+        }
+      } finally { if(worker){ try{ await worker.terminate(); }catch(e){} } }
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
   }
 }
@@ -4469,6 +4536,14 @@ function applyScanToNewMedForm(parsed){
     }
   }
   if(parsed.price && !String(inv.form.mrp||"").trim()){ inv.form.mrp = String(parsed.price); filled.push("MRP"); }
+  if(parsed.formula && !String(inv.form.formula||"").trim()){ inv.form.formula = parsed.formula; filled.push("formula"); }
+  if(parsed.strength && !String(inv.form.mg||"").trim()){ inv.form.mg = parsed.strength; filled.push("strength"); }
+  if(parsed.perBox && !String(inv.form.pillsPerBox||"").trim()){ inv.form.pillsPerBox = String(parsed.perBox); filled.push("per box"); }
+  if(parsed.form && !inv.form.category && !inv.form.specialCategory){
+    let cat = MED_CATEGORIES.find(c=>c.toLowerCase()===parsed.form.toLowerCase());
+    if(!cat && can("manageCategories")){ cat = parsed.form; MED_CATEGORIES.push(cat); saveMedCategoriesStorage(); touchCategories(); }
+    if(cat){ inv.form.category = cat; filled.push("category"); }
+  }
   // Only complain when there was genuinely nothing to write into the boxes.
   if(filled.length) showToast("✓ " + filled.join(" & ") + " filled in from the scan — please check");
   else if(parsed.gtin) showToast("Barcode linked, but this code has no name or MRP to fill in — type them in");
