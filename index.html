@@ -300,8 +300,14 @@
   .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
-  body.kb-open nav, body.kb-open #navSafeBar{display:none !important;}
+  body.kb-open nav, body.kb-open #navSafeBar, body.kb-typing nav, body.kb-typing #navSafeBar{display:none !important;}
+  #datePickerModalRoot .modal-overlay{z-index:70;}
+  #invFab{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
+  #invStickyBar{box-shadow:0 6px 8px -6px rgba(15,23,30,.22);}
+  #invStickyBar .search-wrap input{background:#fff !important;border:1px solid #CBD5E1 !important;box-shadow:0 2px 6px rgba(15,23,30,.10);}
+  #invStickyBar .pill-badge{box-shadow:0 1px 3px rgba(15,23,30,.20);border:1px solid rgba(15,23,30,.07) !important;}
   body.kb-open #invFab:not([data-moved]){bottom:16px !important;}
+  #invCardsList > div{content-visibility:auto;contain-intrinsic-size:auto 300px;}
   #invStickyBar{position:sticky;top:0;z-index:25;background:var(--page);margin:0 -12px 4px;padding:8px 12px 2px;transition:transform .22s ease;will-change:transform;}
   #invStickyBar.hide{transform:translateY(-115%);}
   .recent-box{position:fixed;z-index:80;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.14);overflow:hidden;}
@@ -441,6 +447,8 @@
 
 <script>
 /* ===================== STATE ===================== */
+// Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
+const APP_VERSION = "v52";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -639,11 +647,38 @@ function genRecoveryCode(){
   }
   return out; // e.g. "7F3K-9QX2-RT"
 }
-function money(n){ const v=Number(n)||0; return v.toFixed(2).replace(/\.00$/,""); }
+// Thousands separators for everything shown on screen: 1234567.5 -> 1,234,567.5
+// NUM_GROUP_FROM_LEFT = true -> commas after every 3 digits counting from the LEFT (555,558,85).
+// Set it to false to go back to the usual way, counting from the right (55,555,885).
+const NUM_GROUP_FROM_LEFT = true;
+function commaInt(str){
+  const t=String(str);
+  return NUM_GROUP_FROM_LEFT ? t.replace(/(\d{3})(?=\d)/g,"$1,") : t.replace(/\B(?=(\d{3})+(?!\d))/g,",");
+}
+function money(n){
+  const v=Number(n)||0, t=v.toFixed(2).replace(/\.00$/,""), neg=t.charAt(0)==="-", parts=t.replace("-","").split(".");
+  return (neg?"-":"")+commaInt(parts[0])+(parts[1]?"."+parts[1]:"");
+}
+function fmtInt(n){
+  const v=Number(n); if(!isFinite(v)) return String(n==null?"":n);
+  const t=String(Math.round(Math.abs(v)*100)/100), parts=t.split(".");
+  return (v<0?"-":"")+commaInt(parts[0])+(parts[1]?"."+parts[1]:"");
+}
+// Free-text strengths like "200000 IU": put commas in any run of 4+ digits (display only).
+function fmtBig(t){ return String(t==null?"":t).replace(/\d{4,}/g, d=>commaInt(d)); }
+// Compact strength for the Frequently-sold chips: mg is implied ("8"), gram -> "g", IU -> "I".
+function shortStrength(mg){
+  let t=String(mg||"").trim();
+  t=t.replace(/(\d)\s*(?:mg|milligrams?)\b/gi,"$1")
+     .replace(/(\d)\s*(?:grams?|gms?|g)\b/gi,"$1g")
+     .replace(/(\d)\s*i\.?u\.?(?![a-z])/gi,"$1I")
+     .replace(/\s+/g," ").trim();
+  return fmtBig(t);
+}
 // For medicine MRP / per-pill price display only: caps the shown text to its first 8
 // characters. Storage and every calculation still use the full number untouched — this only
 // shortens what's printed on screen.
-function mrpDisplay(n){ return money(n).slice(0,8); }
+function mrpDisplay(n){ return money(n); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtDateTime(ts){
   const d=new Date(ts);
@@ -787,7 +822,7 @@ function saveHistoryProcessedIds(){ try{ localStorage.setItem("clinic_history_pr
 // are deliberately never logged here.
 function logActivity(action, summary){
   if(!currentProfileId || currentRole()==="admin") return;
-  const day = new Date().toISOString().slice(0,10);
+  const day = localDateStr();   // the clinic's own calendar day (was UTC, which is wrong between midnight and 5 am)
   if(!activityLog[currentProfileId]) activityLog[currentProfileId] = {};
   if(!activityLog[currentProfileId][day]) activityLog[currentProfileId][day] = [];
   activityLog[currentProfileId][day].push({ t:Date.now(), a:String(action), s:String(summary||"").slice(0,100) });
@@ -796,7 +831,7 @@ function logActivity(action, summary){
 // Drops any day older than 60 days, for every profile this device has ever logged. "YYYY-MM-DD"
 // strings sort/compare correctly as plain text, so this needs no date parsing at all.
 function purgeOldActivityLogs(){
-  const cutoffDay = new Date(Date.now() - 60*24*60*60*1000).toISOString().slice(0,10);
+  const cutoffDay = localDateStr(Date.now() - 60*24*60*60*1000);
   let changed = false;
   Object.keys(activityLog).forEach(pid=>{
     Object.keys(activityLog[pid]).forEach(day=>{
@@ -1345,7 +1380,9 @@ function pickDatePickerDay(d){
 function applyDatePickerResult(value){
   const kind = datePickerUi.targetKind, args = datePickerUi.targetArgs;
   datePickerUi.open = false;
-  if(kind==="restock"){ inv.restockExpiry = value; render(); }
+  document.body.classList.remove("dp-open");
+  if(kind==="report"){ toolsUi.date = value||""; renderDatePickerModal(); renderOverlays(); syncMenuHistory(); }
+  else if(kind==="restock"){ inv.restockExpiry = value; render(); }
   else if(kind==="batch" && args){ onBatchExpiryChange(args.medId, args.batchId, value); }
   else { render(); }
 }
@@ -1833,8 +1870,8 @@ function billSummaryHtml(){
   const low = lowStockList().length;
   return `<div class="sum-row">
     ${can("monthlyTotal") ? `<button class="sum-card" onclick="setTab('records')"><div class="l">Today</div><div class="v">${CURRENCY}${money(total)}</div></button>` : ""}
-    <button class="sum-card" onclick="setTab('records')"><div class="l">Bills today</div><div class="v">${todays.length}</div></button>
-    <button class="sum-card" onclick="setTab('stock')"><div class="l">Low stock</div><div class="v${low?' warn':''}">${low}</div></button>
+    <button class="sum-card" onclick="setTab('records')"><div class="l">Bills today</div><div class="v">${fmtInt(todays.length)}</div></button>
+    <button class="sum-card" onclick="setTab('stock')"><div class="l">Low stock</div><div class="v${low?' warn':''}">${fmtInt(low)}</div></button>
   </div>`;
 }
 function renderNav(){
@@ -2353,7 +2390,7 @@ function buildBillText(tx){
   lines.push(``);
   if(tx.items.length){
     lines.push(`Medicines:`);
-    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${it.pills} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.pricePerPill*it.pills)}`));
+    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.pricePerPill*it.pills)}`));
     if(tx.medsDiscount) lines.push(`Medicines discount: -${CURRENCY}${money(tx.medsDiscount)}`);
     lines.push(``);
   }
@@ -2535,10 +2572,22 @@ function topSoldMeds(n){
   visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; (t.items||[]).forEach(it=>{ if(!it.special) cnt[it.medId]=(cnt[it.medId]||0)+1; }); });
   return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(id=>inventory.find(m=>m.id===id)).filter(m=>m && !m.deleted && !m.specialCategory && m.stockPills>0).slice(0,n);
 }
+// Small grey tag after a Frequently-sold name: first letter of the category (S. prefix if tagged) + strength, e.g. "T · 60 mg".
+function quickPickTag(m){
+  const cat=String(m.category||m.specialCategory||"").trim();
+  let letter="";
+  if(cat){
+    const col = m.specialCategory ? "color:var(--warning);opacity:1;" : "";   // special category = yellow letter
+    letter = (m.sTag?`<span style="color:var(--danger);opacity:1;">S.</span>`:"")+`<span style="${col}">${esc(cat.charAt(0).toUpperCase())}</span>`;
+  }
+  const st=shortStrength(m.mg);
+  const inner=[letter, st?esc(st):""].filter(Boolean).join(" · ");
+  return inner ? ` <span style="font-size:11px;font-weight:700;margin-left:3px;"><span style="opacity:.8;">${inner}</span></span>` : "";
+}
 function quickPickHtml(){
   if(bill.selectedMedId) return "";
   const list = topSoldMeds(6); if(!list.length) return "";
-  return `<div class="small" style="margin:2px 2px 6px;font-weight:600;">Frequently sold</div><div class="chip-row" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;">${list.map(m=>`<button type="button" class="chip" style="flex-shrink:0;" onclick="pickBillMed('${m.id}')">${esc(m.name)}</button>`).join("")}</div>`;
+  return `<div class="small" style="margin:2px 2px 6px;font-weight:600;">Frequently sold</div><div class="chip-row" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;">${list.map(m=>`<button type="button" class="chip" style="flex-shrink:0;" onclick="pickBillMed('${m.id}')">${esc(m.name)}${quickPickTag(m)}</button>`).join("")}</div>`;
 }
 
 // ---- 5. Expiry outlook ----
@@ -2568,7 +2617,7 @@ function shareReorderList(){
   const list = lowStockList().slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
   if(!list.length){ showToast("Nothing is low on stock right now"); return; }
   const lines = [`📦 Reorder list — ${fmtDateTime(Date.now())}`, ""];
-  list.forEach((m,i)=> lines.push(`${i+1}. ${m.name}${m.mg?" "+m.mg:""} — ${m.stockPills} left (minimum ${m.lowStockAt??0})`));
+  list.forEach((m,i)=> lines.push(`${i+1}. ${m.name}${m.mg?" "+m.mg:""} — ${fmtInt(m.stockPills)} left (minimum ${fmtInt(m.lowStockAt??0)})`));
   openShare(lines.join("\n"));
 }
 
@@ -2594,7 +2643,7 @@ function countListHtml(){
   list.sort((a,b)=>String(a.name).localeCompare(String(b.name))); const total=list.length; list=list.slice(0,40);
   if(!list.length) return `<p class="small faint">No medicines found.</p>`;
   return list.map(m=>`<div class="item-row" style="gap:10px;"><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}</div>
-    <div class="small">In app: <b>${m.stockPills}</b><span id="cd-${m.id}">${diffLabel(m)}</span></div></div>
+    <div class="small">In app: <b>${fmtInt(m.stockPills)}</b><span id="cd-${m.id}">${diffLabel(m)}</span></div></div>
     <input ${NOAC_RAW} inputmode="numeric" value="${esc(toolsUi.counts[m.id]===undefined?"":toolsUi.counts[m.id])}" placeholder="Counted" oninput="onCountInput('${m.id}',this.value)" style="width:92px;text-align:center;"></div>`).join("")
     + (total>40?`<p class="small faint" style="margin-top:8px;">Showing 40 of ${total} — type in the search box to narrow down.</p>`:"");
 }
@@ -2640,7 +2689,7 @@ function weekData(){
 function weekChartHtml(){
   const d=weekData(), max=Math.max(1,...d.map(x=>x.total)), tot=d.reduce((s,x)=>s+x.total,0);
   const bars=d.map((x,i)=>{ const h=Math.round(x.total/max*110), bx=12+i*47; return `<rect x="${bx}" y="${140-h}" width="32" height="${Math.max(h,2)}" rx="6" fill="var(--primary)" opacity="${x.total?1:.25}"/>
-    <text x="${bx+16}" y="${134-h}" text-anchor="middle" font-size="9" fill="var(--muted)">${x.total?Math.round(x.total).toLocaleString():""}</text>
+    <text x="${bx+16}" y="${134-h}" text-anchor="middle" font-size="9" fill="var(--muted)">${x.total?commaInt(Math.round(x.total)):""}</text>
     <text x="${bx+16}" y="156" text-anchor="middle" font-size="10" fill="var(--muted)">${x.label}</text>`; }).join("");
   return `<svg viewBox="0 0 340 164" style="width:100%;height:auto;display:block;"><line x1="6" y1="140" x2="334" y2="140" stroke="var(--border)"/>${bars}</svg>
     <div class="row" style="margin-top:10px;"><span class="small">Last 7 days</span><strong>${fmtMoney(tot)}</strong></div><div class="row"><span class="small">Daily average</span><strong>${fmtMoney(tot/7)}</strong></div>`;
@@ -2667,7 +2716,8 @@ function reportsBodyHtml(){
   let body="";
   if(toolsUi.tab==="closing"){
     const ds=toolsUi.date||localDateStr(), r=closingData(ds);
-    body=`<label class="field-label">Date</label><input type="date" value="${ds}" max="${localDateStr()}" onchange="rpSet('date',this.value||'')" class="mb2">
+    const dsLabel=new Date(ds+"T00:00:00").toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+    body=`<label class="field-label">Date</label><button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);margin-bottom:8px;" onclick="openDatePicker('${ds}','report',null)"><span>${esc(dsLabel)}</span><span style="flex-shrink:0;" class="chev"></span></button>
       <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;">
       <div class="row"><span class="small">Bills</span><strong>${r.n}</strong></div><div class="row"><span class="small">Medicines</span><strong>${fmtMoney(r.meds)}</strong></div>
       <div class="row"><span class="small">Tests</span><strong>${fmtMoney(r.tests)}</strong></div><div class="row"><span class="small">Other charges</span><strong>${fmtMoney(r.extras)}</strong></div>
@@ -2891,7 +2941,7 @@ function buildReceiptLines(tx, D){
   if(shown.length){
     shown.forEach(it=>{
       const nm = `${it.name}${it.note?` (${it.note})`:""}`, amt = money$(it.pricePerPill*it.pills);
-      if(D.itemStyle==="one") lr(`${it.pills} x ${nm}`.slice(0,W-amt.length-1), amt, {b:D.boldItems});
+      if(D.itemStyle==="one") lr(`${fmtInt(it.pills)} x ${nm}`.slice(0,W-amt.length-1), amt, {b:D.boldItems});
       else{
         line(nm, {b:D.boldItems});
         lr(`  ${it.pills} x ${money$(it.pricePerPill)}`, amt);
@@ -3255,8 +3305,8 @@ function billQueryDropdownHtml(){
       <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
         <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillMed('${m.id}')">
           <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.category)}</span>`:""}</span>
-          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</span>`:""}
+          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${fmtInt(m.stockPills)} medicine left</span>
         </button>
         ${stockLostBtnHtml(m)}
         ${m.formula?`<button title="Find other medicines with this formula" onclick='searchBillByFormula(${JSON.stringify(m.formula)})' style="width:auto;flex-shrink:0;border:none;border-left:1px solid var(--border);background:none;padding:8px 14px;cursor:pointer;color:var(--primary);font-size:15px;display:flex;align-items:center;justify-content:center;">🔎</button>`:""}
@@ -3277,8 +3327,8 @@ function billSpecialQueryDropdownHtml(){
       <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillSpecialMed('${m.id}')">
         <div style="min-width:0;">
           <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
-          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</span>`:""}
-          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+          ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</span>`:""}
+          <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${fmtInt(m.stockPills)} medicine left</span>
         </div>
       </button>
       ${stockLostBtnHtml(m)}
@@ -3312,7 +3362,7 @@ function renderBill(){
       bill.items.map((it,idx)=>`
         <div class="item-row">
           <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}${it.special?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;vertical-align:middle;">${esc(it.specialCategory||"Special")}</span>`:""}</div>
-          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
+          <div class="small faint">${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
             <button onclick="editBillItem(${idx})" class="btn btn-outline" style="padding:5px 12px;font-size:12px;border-radius:999px;">Edit</button>
@@ -4304,13 +4354,37 @@ function aiApplyBoxInfo(info){
   showToast(filled.length?("✓ "+filled.join(", ")+" filled"+(filled.includes("MRP")?"":" — no MRP found, include the price side next time")+" — please check"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
   render();
 }
-async function aiOcrCanvas(file){ // bigger + grayscale + more contrast helps Tesseract on phone photos
+async function aiOcrCanvas(file, deg){ // bigger + grayscale + more contrast helps Tesseract on phone photos; deg turns a sideways photo upright
+  deg = deg||0;
   const bmp=await createImageBitmap(file), sc=Math.min(2200/bmp.width,2);
-  const c=document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
-  const x=c.getContext("2d"); x.drawImage(bmp,0,0,c.width,c.height);
+  const w=Math.round(bmp.width*sc), h=Math.round(bmp.height*sc), swap=(deg===90||deg===270);
+  const c=document.createElement("canvas"); c.width=swap?h:w; c.height=swap?w:h;
+  const x=c.getContext("2d"); x.translate(c.width/2,c.height/2); x.rotate(deg*Math.PI/180); x.drawImage(bmp,-w/2,-h/2,w,h); x.setTransform(1,0,0,1,0,0);
   const d=x.getImageData(0,0,c.width,c.height), a=d.data;
   for(let i=0;i<a.length;i+=4){ let v=0.3*a[i]+0.59*a[i+1]+0.11*a[i+2]; v=Math.max(0,Math.min(255,(v-128)*1.5+128)); a[i]=a[i+1]=a[i+2]=v; }
   x.putImageData(d,0,0); return c;
+}
+// Photos are often taken with the box turned sideways or upside-down, and the offline reader then returns
+// garbage. Try the 4 orientations on a small copy (cheap), keep the one that reads the most real words,
+// then do the full-quality read in that orientation.
+async function aiOcrRotated(file){
+  await aiLoadTesseract();
+  let worker=null; try{ worker=await window.Tesseract.createWorker("eng"); }catch(e){ worker=null; }
+  const run=async img=> worker ? worker.recognize(img) : window.Tesseract.recognize(img,"eng");
+  try{
+    const bmp=await createImageBitmap(file), sc=Math.min(1,800/Math.max(bmp.width,bmp.height));
+    const w=Math.round(bmp.width*sc), h=Math.round(bmp.height*sc);
+    let best=0, bestScore=-1;
+    for(const deg of [0,90,180,270]){
+      const swap=(deg===90||deg===270), c=document.createElement("canvas"); c.width=swap?h:w; c.height=swap?w:h;
+      const x=c.getContext("2d"); x.translate(c.width/2,c.height/2); x.rotate(deg*Math.PI/180); x.drawImage(bmp,-w/2,-h/2,w,h);
+      const r=await run(c); let sco=0;
+      ((r&&r.data&&r.data.words)||[]).forEach(wd=>{ const t=String(wd.text||"").trim(); if(/^[A-Za-z]{3,}$/.test(t) && wd.confidence>60) sco+=t.length; });
+      if(sco>bestScore){ bestScore=sco; best=deg; }
+      if(deg===0 && sco>=40) break; // already upright and clearly readable — skip the other turns
+    }
+    return await run(await aiOcrCanvas(file,best));
+  } finally { if(worker){ try{ await worker.terminate(); }catch(e){} } }
 }
 function boxBusyOn(n){
   window.__boxBusy=true;
@@ -4349,13 +4423,15 @@ async function processBoxPhotosInner(files, forceOffline){
       }
       await aiLoadTesseract();
       for(const file of files){   // offline: read each photo; every one only fills the boxes still empty
-        const r=await window.Tesseract.recognize(await aiOcrCanvas(file),"eng");
+        const r=await aiOcrRotated(file);
         const parsed=parseBoxText(r&&r.data&&r.data.text);
-        const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>55 && /[A-Za-z]{3}/.test(l.text) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
+        // Only trust a name line that is mostly real letters (rejects scribbles like "< BEL =").
+        const real=l=>{ const letters=(l.text.match(/[A-Za-z]/g)||[]).length, all=l.text.replace(/\s/g,"").length; return letters>=3 && all>0 && letters/all>=0.75; };
+        const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text))
           .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
-        if(big) parsed.productName=big.text.replace(/\s+/g," ").trim();
+        parsed.productName = big ? big.text.replace(/\s+/g," ").trim() : null; // never keep an unchecked guess
         if(parsed.productName || parsed.price || parsed.gtin) applyScanToNewMedForm(parsed);
-        else showToast("⚠ One photo was too blurry to read");
+        else showToast("⚠ Couldn't read this photo — try again with the box upright and well lit");
       }
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
   }
@@ -4909,9 +4985,9 @@ function buildInvCard(m){
       <div class="flex" style="justify-content:space-between;align-items:flex-start;">
         <div>
           <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
-          ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-          <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${mrpDisplay(m.mrpPerBox)} / box · ${m.pillsPerBox} medicine · ${CURRENCY}${mrpDisplay(pricePerPill)}/medicine</p>
-          <p class="small faint" style="margin:2px 0 0;">Warns at ${m.lowStockAt ?? 0} medicine${m.noWarn?" (warnings off)":""}</p>
+          ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
+          <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${mrpDisplay(m.mrpPerBox)} / box · ${fmtInt(m.pillsPerBox)} medicine · ${CURRENCY}${mrpDisplay(pricePerPill)}/medicine</p>
+          <p class="small faint" style="margin:2px 0 0;">Warns at ${fmtInt(m.lowStockAt ?? 0)} medicine${m.noWarn?" (warnings off)":""}</p>
         </div>
         <div class="flex gap1" style="align-items:center;flex-shrink:0;">
           ${m.stockPills>0?`<button onclick="markStockLost('${m.id}')" title="Stock Lost — write off all current stock (spoiled/damaged/missing), setting it to 0" style="background:var(--dangerSoft);color:var(--danger);border:none;border-radius:999px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">S.L</button>`:""}
@@ -4920,7 +4996,7 @@ function buildInvCard(m){
         </div>
       </div>
       <div class="flex mt2" style="justify-content:space-between;align-items:center;">
-        <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${m.stockPills} medicine in stock${isExpired?" · expired":""}</span>
+        <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${fmtInt(m.stockPills)} medicine in stock${isExpired?" · expired":""}</span>
         <div class="flex gap2">
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
@@ -4935,7 +5011,7 @@ function buildInvCard(m){
             const soon = d!==null && d<=10;
             return `
             <div class="flex gap2 mt2" style="align-items:center;">
-              <span class="small" style="flex-shrink:0;">${b.pillsRemaining} medicine</span>
+              <span class="small" style="flex-shrink:0;">${fmtInt(b.pillsRemaining)} medicine</span>
               <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
               ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
               <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
@@ -5039,7 +5115,7 @@ function renderInventory(){
   // just that group (see toggleInvStatFilter). The active one is filled solid instead of its
   // usual soft tint so it's clear at a glance which filter (if any) is currently applied.
   const pillBtn = (active, softVar, solidVar, count, kind)=>
-    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${count}</button>`;
+    `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${fmtInt(count)}</button>`;
   document.getElementById("main").innerHTML = `
     <div id="invStickyBar">
     <div class="search-wrap mb2">
@@ -5279,7 +5355,7 @@ function renderBreakdownDetailRows(mTx, section){
     return rows.map(r=>`
       <div style="padding:7px 0;border-bottom:1px solid var(--border);">
         <div class="row">
-          <span class="small">${esc(r.name)} <span class="faint">×${r.qty}</span></span>
+          <span class="small">${esc(r.name)} <span class="faint">×${fmtInt(r.qty)}</span></span>
           <span class="small" style="font-weight:600;">${CURRENCY}${money(r.worth)}</span>
         </div>
         <p class="small faint" style="margin:2px 0 0;">${r.dates.map(d=>fmtBreakdownDate(d.ts)+" ("+CURRENCY+money(d.amount)+")").join(", ")}</p>
@@ -5570,7 +5646,7 @@ function editTxDropdownHtml(){
   return (matches.length && !selMed) ? `<div class="dropdown">${matches.map(m=>`
       <button onclick="pickEditTxMed('${m.id}')">
         <span style="font-size:14px;font-weight:600;color:var(--text);">${esc(m.name)}</span>
-        <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${m.stockPills} medicine left</span>
+        <span style="font-size:12px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${fmtInt(m.stockPills)} medicine left</span>
       </button>`).join("")}</div>` : "";
 }
 // Updates just the dropdown next to the edit-bill medicine search box, keyed off whichever
@@ -5656,7 +5732,7 @@ function renderTxEditForm(t){
       ${recEdit.items.map((it,idx)=>`
         <div class="item-row">
           <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}</div>
-          <div class="small faint">${it.pills} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
+          <div class="small faint">${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
             <button onclick="removeEditTxItem(${idx})" class="icon-del-btn">🗑</button>
@@ -5704,7 +5780,7 @@ function renderTxCard(t){
                 <span class="chev" style="${rec.expandedTxSection==="items"?"transform:rotate(180deg);":""}"></span>
               </div>
             </button>
-            ${rec.expandedTxSection==="items" ? `<div style="padding-left:4px;">${t.items.map(it=>`<div class="row small" style="color:var(--muted);margin-bottom:4px;"><span>${esc(it.name)} × ${it.pills}</span><span>${CURRENCY}${money(it.subtotal)}</span></div>`).join("")}
+            ${rec.expandedTxSection==="items" ? `<div style="padding-left:4px;">${t.items.map(it=>`<div class="row small" style="color:var(--muted);margin-bottom:4px;"><span>${esc(it.name)} × ${fmtInt(it.pills)}</span><span>${CURRENCY}${money(it.subtotal)}</span></div>`).join("")}
               ${t.medsDiscount?`<div class="row small" style="color:var(--success);margin-bottom:4px;"><span>Medicines discount</span><span>-${CURRENCY}${money(t.medsDiscount)}</span></div>`:""}
             </div>` : ""}
           </div>` : ""}
@@ -5818,12 +5894,16 @@ function renderRecordsBody(){
 
   container.innerHTML = monthStat + daysHtml + renderRecordArchive();
 }
+function recordsReportsBtn(){
+  return can("monthlyTotal") ? `<button type="button" class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="openTools('reports')">📊 Reports</button>` : "";
+}
 function renderRecords(){
   if(visibleTransactions().length===0){
-    document.getElementById("main").innerHTML = `<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
+    document.getElementById("main").innerHTML = `${recordsReportsBtn()}<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
     return;
   }
   document.getElementById("main").innerHTML = `
+    ${recordsReportsBtn()}
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
@@ -5839,7 +5919,7 @@ function shareLowStock(){
   const lines = [`⚠️ Out of stock / low stock`, `As of ${fmtDateTime(Date.now())}`, ``];
   list.forEach((m,i)=>{
     const strength = [m.formula,m.mg].filter(Boolean).join(" · ");
-    lines.push(`${i+1}. ${m.name}${strength?` (${strength})`:""} — ${m.stockPills} medicine left`);
+    lines.push(`${i+1}. ${m.name}${strength?` (${strength})`:""} — ${fmtInt(m.stockPills)} medicine left`);
   });
   openShare(lines.join("\n"));
 }
@@ -5862,8 +5942,8 @@ function buildLowStockRow(m){
         <div class="row">
           <div>
             <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <span style="font-size:12px;font-weight:700;color:var(--danger);">${m.stockPills} medicine left</span>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
+            <span style="font-size:12px;font-weight:700;color:var(--danger);">${fmtInt(m.stockPills)} medicine left</span>
           </div>
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="dismissLowStock('${m.id}')">We'll buy it later</button>
         </div>
@@ -5875,8 +5955,8 @@ function buildHiddenLowStockRow(m){
         <div class="row">
           <div>
             <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
-            <p class="small faint" style="margin:2px 0 0;">${m.stockPills} medicine left</p>
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
+            <p class="small faint" style="margin:2px 0 0;">${fmtInt(m.stockPills)} medicine left</p>
           </div>
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;" onclick="toggleWarnBack('${m.id}')">Turn warning back on</button>
         </div>
@@ -5888,7 +5968,7 @@ function buildExpiringRow({med:m,batch:b,daysLeft}){
         <div class="row">
           <div>
             <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
-            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(m.mg)}</p>`:""}
+            ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
             <p class="small" style="margin:2px 0 0;color:var(--danger);font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
           </div>
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;white-space:nowrap;" onclick="disposeBatch('${m.id}','${b.id}')">Medicine disposed</button>
@@ -7367,16 +7447,16 @@ function renderHeaderMenu(){
   if(can("receiptSetup")) items.push({label:"🖌 Receipt design", action:"openReceiptDesign()"});
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   items.push({label:"🎨 Theme", action:"openThemeModal()"});
-  if(can("monthlyTotal")) items.push({label:"📊 Reports", action:"openTools('reports')"});
   items.push({label:"📋 Stock count", action:"openTools('count')"});
-  items.push({label:"📤 Reorder list", action:"shareReorderList()"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
+  if(can("diagnostics")) items.push({label:"📈 Storage & health", action:"showStorageHealth()"});
+  items.push({label: (window.isFabLocked && window.isFabLocked()) ? "📌 + button position: locked (tap to unlock)" : "📍 Lock + button position", action:"toggleFabLock()"});
   if(can("diagnostics")) items.push({label:"🩺 Diagnostics", action:"openDiag()"}); // Admin always; Semi-Admin only if ticked
   { const me = profiles.find(x=>x.id===currentProfileId);
     if(GMAIL_LOGIN_ENABLED && window.AppInventor) items.push({label: me && me.email ? "🔗 Gmail: "+me.email+" (change)" : "🔗 Link my Gmail", action:"startLinkGmail()"}); }
   items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
-  el.innerHTML = items.map((it,i)=>`
+  el.innerHTML = `<div style="padding:8px 14px 6px;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--faint);border-bottom:1px solid var(--border);">Counter Book · version ${APP_VERSION}</div>` + items.map((it,i)=>`
     <button onclick="closeHeaderMenu();syncMenuHistory();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
   `).join("");
 }
@@ -7799,7 +7879,7 @@ function exportBackup(){
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0,10);
+  const stamp = localDateStr();
   a.href = url; a.download = `counter-book-backup-${stamp}.json`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
@@ -8231,6 +8311,11 @@ setTimeout(aiProcessQueue,6000);
   window.addEventListener("resize",chk);
   if(window.visualViewport) window.visualViewport.addEventListener("resize",chk);
   window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=window.innerHeight; chk(); },500));
+  // Belt and braces: some phones never shrink the page when the keyboard opens, so the tab bar would
+  // float on top of it. Hide the tab bar as soon as a typing box gets focus, show it again when it loses focus.
+  const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
+  document.addEventListener("focusin",e=>{ if(typing(e.target)) document.body.classList.add("kb-typing"); });
+  document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typing(document.activeElement)) document.body.classList.remove("kb-typing"); },150));
 })();
 
 // ===== Draggable "+" button, recent searches, hide-on-scroll search bar =====
@@ -8244,14 +8329,34 @@ setTimeout(aiProcessQueue,6000);
     fab.dataset.moved="1"; fab.style.right="auto"; fab.style.bottom="auto"; fab.style.left=L+"px"; fab.style.top=T+"px";
     return {x:L/innerWidth,y:T/innerHeight};
   }
-  function load(){ try{ const p=JSON.parse(localStorage.getItem(KEY)||"null"); if(p&&typeof p.x==="number") place(p.x*innerWidth,p.y*innerHeight); }catch(e){} }
+  const LOCK="clinic_fab_lock";
+  const isLocked=()=>{ try{ return localStorage.getItem(LOCK)==="1"; }catch(e){ return false; } };
+  // The spot is remembered across app restarts ONLY while locked from Settings; otherwise it goes back to the default next time.
+  function load(){ if(!isLocked()) return; try{ const p=JSON.parse(localStorage.getItem(KEY)||"null"); if(p&&typeof p.x==="number") place(p.x*innerWidth,p.y*innerHeight); }catch(e){} }
+  window.isFabLocked=isLocked;
+  window.toggleFabLock=function(){
+    if(isLocked()){
+      try{ localStorage.removeItem(LOCK); localStorage.removeItem(KEY); }catch(e){}
+      showToast("🔓 Unlocked — the + button goes back to its normal spot the next time the app opens");
+    } else {
+      try{
+        localStorage.setItem(LOCK,"1");
+        if(fab.dataset.moved){ const r=fab.getBoundingClientRect(); localStorage.setItem(KEY,JSON.stringify({x:r.left/innerWidth,y:r.top/innerHeight})); }
+        else localStorage.removeItem(KEY);
+      }catch(e){}
+      showToast("📌 + button position locked — it will stay where it is, even after closing the app");
+    }
+  };
   load(); setTimeout(load,1200); // the saved-data layer can finish loading a moment after start
   window.addEventListener("resize",()=>{ if(innerWidth!==lastW){ lastW=innerWidth; load(); } });
   let timer=null, dragging=false, sx=0, sy=0, ox=0, oy=0, noClickUntil=0, pos=null;
+  let fabTouch=false;
+  document.addEventListener("selectstart",e=>{ if(fabTouch) e.preventDefault(); });
   fab.addEventListener("touchstart",e=>{
+    fabTouch=true;
     const t=e.touches[0]; sx=t.clientX; sy=t.clientY; dragging=false;
     clearTimeout(timer);
-    timer=setTimeout(()=>{ dragging=true; const r=fab.getBoundingClientRect(); ox=sx-r.left; oy=sy-r.top; fab.style.transition="none"; fab.style.transform="scale(1.12)"; try{navigator.vibrate&&navigator.vibrate(30);}catch(_){} },350);
+    timer=setTimeout(()=>{ dragging=true; try{ window.getSelection().removeAllRanges(); }catch(_){} const r=fab.getBoundingClientRect(); ox=sx-r.left; oy=sy-r.top; fab.style.transition="none"; fab.style.transform="scale(1.12)"; try{navigator.vibrate&&navigator.vibrate(30);}catch(_){} },350);
   },{passive:true});
   fab.addEventListener("touchmove",e=>{
     const t=e.touches[0];
@@ -8259,10 +8364,10 @@ setTimeout(aiProcessQueue,6000);
     e.preventDefault(); pos=place(t.clientX-ox,t.clientY-oy);
   },{passive:false});
   function end(e){
-    clearTimeout(timer);
+    clearTimeout(timer); setTimeout(()=>{ fabTouch=false; },400);
     if(dragging){
       dragging=false; fab.style.transform=""; fab.style.transition="";
-      if(pos){ try{ localStorage.setItem(KEY,JSON.stringify(pos)); }catch(_){} }
+      if(pos && isLocked()){ try{ localStorage.setItem(KEY,JSON.stringify(pos)); }catch(_){} }
       noClickUntil=Date.now()+500; if(e&&e.cancelable) e.preventDefault();
     }
   }
@@ -8287,27 +8392,43 @@ setTimeout(aiProcessQueue,6000);
   }
   window.saveRecentSearch=function(inputId,term){ save(inputId,term); };
   function hide(){ if(box){ box.remove(); box=null; } curInput=null; }
+  // Google-style: empty box -> your latest searches; as you type -> the past searches that match
+  // (not in the New Bill boxes, which already show live medicine results while typing).
   function show(el){
-    hide(); const list=readAll()[keyOf(el)]||[]; if(!list.length) return;
+    hide(); const key=keyOf(el); const all=readAll(); let list=all[key]||[];
+    const q=String(el.value||"").trim().toLowerCase();
+    if(q){
+      if(key==="billQueryInput" || key==="billSpecialQueryInput") return;
+      list=list.filter(t=>t.toLowerCase().includes(q) && t.toLowerCase()!==q).slice(0,5);
+    }
+    if(!list.length) return;
     curInput=el; const r=el.getBoundingClientRect();
     box=document.createElement("div"); box.className="recent-box";
     box.style.left=r.left+"px"; box.style.top=(r.bottom+4)+"px"; box.style.width=r.width+"px";
     box.addEventListener("mousedown",e=>e.preventDefault());
     const head=document.createElement("div"); head.className="recent-head";
-    head.innerHTML='<span>Recent searches</span>'; const clr=document.createElement("button"); clr.type="button"; clr.textContent="Clear";
-    clr.onclick=function(){ const all=readAll(); delete all[keyOf(el)]; writeAll(all); hide(); };
+    head.innerHTML='<span>Recent searches</span>'; const clr=document.createElement("button"); clr.type="button"; clr.textContent="Clear all";
+    clr.onclick=function(){ const a2=readAll(); delete a2[key]; writeAll(a2); hide(); };
     head.appendChild(clr); box.appendChild(head);
     list.forEach(term=>{
-      const b=document.createElement("button"); b.type="button"; b.className="recent-row";
+      const row=document.createElement("div"); row.className="recent-row"; row.style.padding="0";
+      const main=document.createElement("button"); main.type="button";
+      main.style.cssText="flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:none;border:none;padding:11px 0 11px 12px;font-size:14px;color:var(--text);text-align:left;cursor:pointer;";
       const ic=document.createElement("span"); ic.textContent="🕘"; const tx=document.createElement("span"); tx.className="rt"; tx.textContent=term;
-      b.appendChild(ic); b.appendChild(tx);
-      b.onclick=function(){ el.value=term; hide(); el.dispatchEvent(new Event("input",{bubbles:true})); el.focus(); };
-      box.appendChild(b);
+      main.appendChild(ic); main.appendChild(tx);
+      main.onclick=function(){ el.value=term; hide(); el.dispatchEvent(new Event("input",{bubbles:true})); el.focus(); };
+      const fill=document.createElement("button"); fill.type="button"; fill.textContent="↖"; fill.title="Put in the box to edit";
+      fill.style.cssText="background:none;border:none;padding:11px 10px;font-size:16px;color:var(--muted);cursor:pointer;";
+      fill.onclick=function(){ el.value=term; el.focus(); try{ el.setSelectionRange(term.length,term.length); }catch(_){} hide(); el.dispatchEvent(new Event("input",{bubbles:true})); };
+      const del=document.createElement("button"); del.type="button"; del.textContent="✕"; del.title="Remove from history";
+      del.style.cssText="background:none;border:none;padding:11px 12px;font-size:14px;color:var(--faint);cursor:pointer;";
+      del.onclick=function(){ const a2=readAll(); a2[key]=(a2[key]||[]).filter(x=>x!==term); writeAll(a2); show(el); };
+      row.appendChild(main); row.appendChild(fill); row.appendChild(del); box.appendChild(row);
     });
     document.body.appendChild(box);
   }
-  document.addEventListener("focusin",e=>{ const el=e.target; if(isSearch(el) && !el.value) show(el); });
-  document.addEventListener("input",e=>{ if(box && e.target===curInput) hide(); });
+  document.addEventListener("focusin",e=>{ const el=e.target; if(isSearch(el)) show(el); });
+  document.addEventListener("input",e=>{ const el=e.target; if(isSearch(el)) show(el); });
   document.addEventListener("focusout",e=>{
     const el=e.target; if(!isSearch(el)) return;
     const key=keyOf(el);
@@ -8336,6 +8457,90 @@ setTimeout(aiProcessQueue,6000);
     if(acc>14) bar.classList.add("hide"); else if(acc<-8) bar.classList.remove("hide");
   },{passive:true});
 })();
+
+/* ===================== STORAGE & HEALTH (read-only) =====================
+   Measures how full the cloud document and the phone's storage are, how fast saving is on this phone,
+   and checks the data for inconsistencies. It only READS — nothing is changed or deleted by it. */
+const CLOUD_DOC_LIMIT = 1048576; // Firestore's hard limit per document (1 MiB)
+function _hBytes(v){ try{ const t=JSON.stringify(v); return (typeof TextEncoder!=="undefined") ? new TextEncoder().encode(t).length : t.length; }catch(e){ return 0; } }
+function _hKB(b){ return (b/1024).toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1})+" KB"; }
+function _hTime(fn){ const t0=performance.now(); try{ fn(); }catch(e){} return Math.max(0.1, performance.now()-t0).toFixed(1)+" ms"; }
+function cloudPayloadStats(){
+  const payload = sanitizeForFirestore(buildFullStatePayload());
+  const total = _hBytes(payload), parts = [];
+  Object.keys(payload).forEach(k=>parts.push([k,_hBytes(payload[k])]));
+  parts.sort((a,b)=>b[1]-a[1]);
+  const nTx = (transactions||[]).length, txBytes = _hBytes(transactions);
+  const since = Date.now()-30*86400000, recent = (transactions||[]).filter(t=>(t.timestamp||0)>=since).length;
+  const perDay = recent/30, perBill = nTx ? txBytes/nTx : 0;
+  const room = Math.max(0, CLOUD_DOC_LIMIT-total);
+  const daysLeft = (perDay>0 && perBill>0) ? Math.floor(room/(perDay*perBill)) : null;
+  return { total, pct: total/CLOUD_DOC_LIMIT*100, parts, nTx, perDay, perBill, daysLeft };
+}
+function dataIntegrityIssues(){
+  const out = [], meds = (inventory||[]).filter(m=>!m.deleted);
+  const gt = {};
+  meds.forEach(m=>{
+    const label = m.name+(m.mg?" "+m.mg:"");
+    const sum = (m.batches||[]).filter(b=>!b.disposed && b.pillsRemaining>0).reduce((s,b)=>s+b.pillsRemaining,0);
+    if(Number(m.stockPills)!==sum) out.push(`Stock mismatch — ${label}: shows ${m.stockPills}, batches add up to ${sum}`);
+    if(!(Number(m.stockPills)>=0)) out.push(`Invalid stock — ${label}: ${m.stockPills}`);
+    if(!(Number(m.mrpPerBox)>0)) out.push(`No valid price — ${label}`);
+    if(!(Number(m.pillsPerBox)>0)) out.push(`No valid medicine-per-box — ${label}`);
+    (m.batches||[]).forEach(b=>{ if(!b.disposed && b.pillsRemaining<0) out.push(`Negative batch quantity — ${label}`); });
+    if(m.gtin){ (gt[m.gtin]=gt[m.gtin]||[]).push(label); }
+  });
+  Object.keys(gt).forEach(g=>{ if(gt[g].length>1) out.push(`Same barcode on ${gt[g].length} medicines: ${gt[g].join(" / ")}`); });
+  const seen = {};
+  meds.forEach(m=>{
+    const k=[m.name,m.category||m.specialCategory,m.formula,m.mg,m.mrpPerBox,m.pillsPerBox].map(x=>String(x==null?"":x).trim().toLowerCase()).join("|");
+    (seen[k]=seen[k]||[]).push(m);
+  });
+  Object.keys(seen).forEach(k=>{ if(seen[k].length>1) out.push(`Exact duplicate medicine: ${seen[k][0].name} (${seen[k].length} copies)`); });
+  const now=Date.now();
+  let badTx=0, future=0;
+  (transactions||[]).forEach(t=>{ if(!t || !(t.timestamp>0) || !isFinite(Number(t.grandTotal))) badTx++; else if(t.timestamp>now+86400000) future++; });
+  if(badTx) out.push(`${badTx} bill(s) with a missing date or total`);
+  if(future) out.push(`${future} bill(s) dated in the future (check the phone's clock)`);
+  return out;
+}
+function showStorageHealth(){
+  const L=[]; const st=cloudPayloadStats();
+  L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Counter Book ${APP_VERSION}`, ``);
+  L.push(`☁️ CLOUD (one shared document, limit 1,024 KB)`);
+  L.push(`Size now: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full${st.pct>=70?"  ⚠ getting full":""}`);
+  L.push(`Biggest parts: `+st.parts.slice(0,5).map(p=>`${p[0]} ${_hKB(p[1])}`).join(" · "));
+  L.push(`Bills: ${st.nTx.toLocaleString("en-US")} saved, about ${st.perDay.toFixed(1)}/day over the last 30 days, ~${(st.perBill/1024).toFixed(2)} KB each`);
+  L.push(st.daysLeft==null ? `Time until full: not enough recent bills to estimate` : `At this pace the document fills in about ${st.daysLeft.toLocaleString("en-US")} days (~${(st.daysLeft/365).toFixed(1)} years)`);
+  L.push(``, `📱 THIS PHONE'S APP STORAGE (limit about 5,000 KB)`);
+  let tot=0; const keys=[];
+  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(!k) continue; const b=(k.length+String(localStorage.getItem(k)||"").length)*2; tot+=b; keys.push([k,b]); } }catch(e){}
+  keys.sort((a,b)=>b[1]-a[1]);
+  L.push(`Used: ${_hKB(tot)} — ${(tot/5242880*100).toFixed(1)}%`);
+  L.push(`Biggest: `+keys.slice(0,4).map(p=>`${p[0].replace(/^clinic_/,"")} ${_hKB(p[1])}`).join(" · "));
+  const meds=(inventory||[]).filter(m=>!m.deleted); const nb=meds.reduce((s,m)=>s+(m.batches||[]).length,0);
+  const yearAgo=Date.now()-365*86400000, old=(transactions||[]).filter(t=>(t.timestamp||0)<yearAgo).length;
+  L.push(``, `📦 COUNTS`, `${meds.length.toLocaleString("en-US")} medicines · ${nb.toLocaleString("en-US")} batches · ${st.nTx.toLocaleString("en-US")} bills (${old.toLocaleString("en-US")} older than 1 year)`);
+  L.push(``, `⚡ SPEED ON THIS PHONE (right now)`);
+  L.push(`Save medicines: ${_hTime(()=>JSON.stringify(inventory))} · save bills: ${_hTime(()=>JSON.stringify(transactions))} · build cloud copy: ${_hTime(()=>sanitizeForFirestore(buildFullStatePayload()))}`);
+  if(window.__bootMs) L.push(`App start-up took about ${Math.round(window.__bootMs)} ms`);
+  const issues=dataIntegrityIssues();
+  L.push(``, `🩺 DATA CHECK (read-only — nothing was changed)`);
+  if(!issues.length) L.push(`✓ No problems found`);
+  else { L.push(`${issues.length} thing(s) to look at:`); issues.slice(0,40).forEach(x=>L.push("• "+x)); if(issues.length>40) L.push(`…and ${issues.length-40} more`); }
+  openShare(L.join("\n"));
+}
+// Once a day, quietly warn if the shared cloud document is getting close to its size limit.
+function checkCloudHeadroom(){
+  try{
+    if(!currentProfileId || !sessionAuthed) return;
+    const day=localDateStr(); if(localStorage.getItem("clinic_headroom_checked")===day) return;
+    localStorage.setItem("clinic_headroom_checked",day);
+    const st=cloudPayloadStats();
+    if(st.pct>=70) showToast(`⚠ Cloud data is ${Math.round(st.pct)}% full — open Settings › Storage & health`);
+  }catch(e){}
+}
+window.addEventListener("load",()=>{ window.__bootMs = performance.now(); setTimeout(checkCloudHeadroom, 15000); });
 function aiLoadTesseract(){
   return new Promise((resolve,reject)=>{
     if(window.Tesseract) return resolve();
@@ -8406,8 +8611,7 @@ async function aiHandleFile(file){
   try{
     let text;
     if(aiUi.mode==="print"||aiUi.mode==="box"){
-      await aiLoadTesseract();
-      const r=await window.Tesseract.recognize(file,"eng");
+      const r=await aiOcrRotated(file);
       let lines=String((r&&r.data&&r.data.text)||"").split("\n").map(l=>l.trim()).filter(l=>l.length>2);
       // Medicine boxes also carry batch/date/price/barcode lines — those are never part of the name.
       if(aiUi.mode==="box") lines=lines.filter(l=>!/gtin|mfg|mfd|exp|b\.?\s*no|sr\.?\s*no|m\.?\s*r\.?\s*p|batch|\brs\b|licen|\bmrp\b|\d{9,}/i.test(l)).slice(0,6);
