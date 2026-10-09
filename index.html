@@ -308,6 +308,31 @@
   #invStickyBar .search-wrap input{background:#fff !important;border:1px solid #CBD5E1 !important;box-shadow:0 2px 6px rgba(15,23,30,.10);}
   #invStickyBar .pill-badge{box-shadow:0 1px 3px rgba(15,23,30,.20);border:1px solid rgba(15,23,30,.07) !important;}
   body.kb-open #invFab:not([data-moved]){bottom:16px !important;}
+  .chip-row{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 2px 6px;margin:0 -2px;scrollbar-width:none;}
+  .chip-row::-webkit-scrollbar{display:none;}
+  .chip{flex:none;border:1px solid var(--border);background:#fff;color:var(--muted);border-radius:999px;padding:7px 15px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;}
+  .chip.sm{padding:9px 0;min-width:0;font-size:13px;}
+  /* "Medicine per box" field: the typing area comes first, the quick picks scroll sideways inside the same box */
+  /* the two-box rows in the medicine forms: always two equal-width, equal-height boxes */
+  .row2{display:grid !important;grid-template-columns:repeat(2,minmax(0,1fr));}
+  .ppb-box{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;background-color:#EEF3F2;border:1px solid transparent;border-radius:12px;padding:3px;}
+  .ppb-box::-webkit-scrollbar{display:none;}
+  .ppb-box:focus-within{background-color:#fff;outline:2px solid var(--primary);outline-offset:-1px;}
+  .ppb-box > input{flex:none;width:104px;border:none !important;background:transparent !important;outline:none !important;box-shadow:none;padding:7px 8px;border-radius:8px;position:sticky;left:0;z-index:1;}
+  .ppb-box:focus-within > input{background:#fff !important;}
+  .ppb-chips{display:flex;gap:6px;flex:none;}
+  .ppb-chip{flex:none;min-width:40px;height:35px;border:none;border-radius:8px;background:var(--primarySoft);color:var(--primary);font-size:14px;font-weight:700;font-family:inherit;padding:0 10px;cursor:pointer;}
+  .ppb-chip.on{background:var(--primary);color:#fff;}
+  .chip.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .chip.red{color:var(--danger);border-color:var(--danger);}
+  .chip.red.on{background:var(--danger);border-color:var(--danger);color:#fff;}
+  [data-hold]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;}
+  .hold-menu{position:fixed;z-index:90;display:flex;background:#2B3440;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.32);overflow:hidden;}
+  .hold-menu button{background:none;border:none;border-right:1px solid rgba(255,255,255,.16);color:#fff;font-size:15px;font-weight:700;padding:12px 20px;font-family:inherit;cursor:pointer;}
+  .hold-menu button:last-child{border-right:none;}
+  .seg{display:flex;flex:none;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#fff;}
+  .seg button{border:none;background:none;padding:8px 14px;font-size:13px;font-weight:700;color:var(--muted);font-family:inherit;cursor:pointer;}
+  .seg button.on{background:var(--primary);color:#fff;}
   #invCardsList > div{content-visibility:auto;contain-intrinsic-size:auto 300px;}
   #invStickyBar{position:sticky;top:0;z-index:25;background:var(--page);margin:0 -12px 4px;padding:8px 12px 2px;transition:transform .22s ease;will-change:transform;}
   #invStickyBar.hide{transform:translateY(-115%);}
@@ -449,7 +474,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v63";
+const APP_VERSION = "v66";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -528,7 +553,7 @@ let newTestPriceDraft = ""; // transient: price input for adding a new test in t
 /* transient (not persisted) UI state */
 function newBillState(){
   return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", medsDiscount:"", selectedMedId:null, qtyMode:billModePrefs.qtyMode, daysMode:billModePrefs.daysMode, perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
-    tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", feeEditing:false, feeDiscountEditing:false, medsDiscountEditing:false, testsMenuOpen:false, feeIncluded:false,
+    tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", totDisc:"", totDiscMode:"rs", fixedMode:false, feeEditing:false, feeDiscountEditing:false, medsDiscountEditing:false, testsMenuOpen:false, feeIncluded:false,
     paymentMode:"Cash", remarks: defaultDoctorName || "",
     // Special-category medicines: a second, separate search/add flow (see specialMatches()
     // in renderBill) for medicines flagged with a specialCategory, which are deliberately
@@ -2063,14 +2088,37 @@ function renderConfirmModal(){
 
 /* ===================== NEW BILL TAB ===================== */
 function billMedTotal(){ return r2(bill.items.reduce((s,it)=>s+(Number(it.subtotal)||0),0)); }
-function billMedDiscount(){ return r2(Math.min(Math.max(Number(bill.medsDiscount)||0,0), billMedTotal())); }
+function billManualMedDisc(){ return r2(Math.min(Math.max(Number(bill.medsDiscount)||0,0), billMedTotal())); }
+// "Total discount" (Rs or %) is split across medicines / tests / doctor fee in proportion to what each costs,
+// and the result flows through the existing per-section discounts — so records, receipts, reports and edits
+// all keep working without knowing about it. Others (dressing, transport…) are never discounted.
+function billTotDiscShares(){
+  const zero={med:0,tests:0,fee:0,total:0}, v=Number(bill.totDisc)||0;
+  if(!(v>0)) return zero;
+  const m=r2(billMedTotal()-billManualMedDisc()), t=r2(billTestsGross()-billManualTestsDisc()), f=bill.feeIncluded ? r2(billFeeGross()-billManualFeeDisc()) : 0;
+  const cap=r2(m+t+f); if(cap<=0) return zero;
+  const base=r2(cap+billExtrasTotal());
+  let D = (bill.totDiscMode==='pct') ? r2(base*Math.min(v,100)/100) : r2(v);
+  D = Math.min(D, cap);
+  let sm=Math.min(m,r2(D*m/cap)), st=Math.min(t,r2(D*t/cap)), sf=Math.min(f,r2(D*f/cap));
+  const rem=r2(D-sm-st-sf);
+  if(rem!==0){
+    if(m>=t && m>=f) sm=Math.min(m,r2(sm+rem)); else if(t>=f) st=Math.min(t,r2(st+rem)); else sf=Math.min(f,r2(sf+rem));
+  }
+  return {med:sm,tests:st,fee:sf,total:r2(sm+st+sf)};
+}
+function billMedDiscount(){ return r2(billManualMedDisc()+billTotDiscShares().med); }
+function onBillTotDisc(v){ bill.totDisc=v; scheduleRender(); }
+function setBillTotDiscMode(m){ bill.totDiscMode=m; render(); }
 function billMedNet(){ return r2(billMedTotal() - billMedDiscount()); }
 function billExtrasTotal(){ return r2(bill.extras.reduce((s,it)=>s+(Number(it.amount)||0),0)); }
 function billTestsGross(){ return r2(bill.tests.reduce((s,t)=>s+(Number(t.amount)||0),0)); }
-function billTestsDiscount(){ return r2(Math.min(Math.max(Number(bill.testsDiscount)||0,0), billTestsGross())); }
+function billManualTestsDisc(){ return r2(Math.min(Math.max(Number(bill.testsDiscount)||0,0), billTestsGross())); }
+function billTestsDiscount(){ return r2(billManualTestsDisc()+billTotDiscShares().tests); }
 function billTestsTotal(){ return r2(billTestsGross() - billTestsDiscount()); }
 function billFeeGross(){ return r2(Math.max(Number(bill.fee)||0,0)); }
-function billFeeDiscount(){ return r2(Math.min(Math.max(Number(bill.feeDiscount)||0,0), billFeeGross())); }
+function billManualFeeDisc(){ return r2(Math.min(Math.max(Number(bill.feeDiscount)||0,0), billFeeGross())); }
+function billFeeDiscount(){ return r2(billManualFeeDisc()+billTotDiscShares().fee); }
 function billFeeNet(){ return r2(billFeeGross() - billFeeDiscount()); }
 function billFeeContribution(){ return bill.feeIncluded ? billFeeNet() : 0; }
 function billGrandTotal(){ return r2(billMedNet() + billExtrasTotal() + billTestsTotal() + billFeeContribution()); }
@@ -2262,7 +2310,55 @@ function saveDefaultDoctorName(){
   render();
 }
 function onBillPerDay(v){ bill.perDay=v; scheduleRender(); }
-function setBillPerDayQuick(n){ bill.perDay=String(n); render(); }
+function setBillPerDayQuick(n){ bill.perDay=String(n); bill.fixedMode=false; render(); }
+function setBillDaysQuick(n){ bill.days=String(n); render(); }
+function setBillGlobalDaysQuick(n){ onGlobalDays(String(n)); render(); }
+// Red "1" button: add an exact TOTAL quantity of the chosen medicine, ignoring per-day x days.
+// Tap = select it (type any number in the box to change it). Hold = add one full box straight away.
+function toggleBillFixed(){ bill.fixedMode = !bill.fixedMode; bill.perDay=""; render(); }
+function addFixedBillItem(pills, toastMsg){
+  const med = inventory.find(m=>m.id===bill.selectedMedId);
+  pills = Number(pills)||0;
+  if(!med || pills<=0) return;
+  bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note:"", perDay:null, linkedToGlobalDays:false});
+  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days=""; bill.fixedMode=false;
+  render();
+  if(toastMsg) showToast(toastMsg);
+}
+function holdFullBox(){
+  const med = inventory.find(m=>m.id===bill.selectedMedId); if(!med) return;
+  const n = Number(med.pillsPerBox)||0; if(n<=0){ showToast("This medicine has no box size set"); return; }
+  addFixedBillItem(n, `✓ Added a full box — ${fmtInt(n)} ${med.name}`);
+}
+function holdMenuPick(kind, v){
+  if(kind==='perDay'){ bill.perDay=String(v); bill.fixedMode=false; render(); }
+  else if(kind==='days'){ bill.days=String(v); render(); }
+  else if(kind==='gdays'){ onGlobalDays(String(v)); render(); }
+}
+function redOneBtnHtml(sm){
+  const on = !!bill.fixedMode;
+  return `<button type="button" class="chip red ${on?'on':''} ${sm?'sm':''}" style="flex:1;" data-hold="full" onclick="toggleBillFixed()">${on ? esc(String(Number(bill.perDay)||1)) : "1"}</button>`;
+}
+function qChip(label, active, onclick, hold, sm){
+  return `<button type="button" class="chip ${active?'on':''} ${sm?'sm':''}" style="flex:1;" ${hold?`data-hold="menu:${hold}"`:""} onclick="${onclick}">${label}</button>`;
+}
+function perDayChipsHtml(sm){
+  const pd = Number(bill.perDay), f = !!bill.fixedMode;
+  return `<div class="flex ${sm?'':'gap2 '}mb2" ${sm?'style="gap:4px;"':''}>`
+    + qChip(1, !f&&pd===1, "setBillPerDayQuick(1)", "", sm)
+    + qChip(2, !f&&pd===2, "setBillPerDayQuick(2)", "perDay:4,6,8", sm)
+    + qChip(3, !f&&pd===3, "setBillPerDayQuick(3)", "perDay:6,9,12", sm)
+    + redOneBtnHtml(sm) + `</div>`;
+}
+function daysChipsHtml(kind, withRed, sm){
+  const cur = Number(kind==='gdays' ? bill.globalDays : bill.days);
+  const fn = kind==='gdays' ? "setBillGlobalDaysQuick" : "setBillDaysQuick";
+  return `<div class="flex ${sm?'':'gap2 '}mb2" ${sm?'style="gap:4px;"':''}>`
+    + qChip(3, cur===3, `${fn}(3)`, `${kind}:6,9,12`, sm)
+    + qChip(7, cur===7, `${fn}(7)`, `${kind}:14,21,28`, sm)
+    + qChip(14, cur===14, `${fn}(14)`, `${kind}:28,42,56`, sm)
+    + (withRed ? redOneBtnHtml(sm) : "") + `</div>`;
+}
 function onBillDays(v){ bill.days=v; scheduleRender(); }
 function setBillQtyMode(mode){ bill.qtyMode=mode; billModePrefs.qtyMode=mode; saveBillModePrefs(); render(); }
 function setBillDaysMode(mode){ bill.daysMode=mode; billModePrefs.daysMode=mode; saveBillModePrefs(); render(); }
@@ -2279,6 +2375,7 @@ function onGlobalDays(v){
   scheduleRender();
 }
 function billComputedPills(){
+  if(bill.qtyMode==="dose" && bill.fixedMode) return Number(bill.perDay)||1;   // red button: exact total quantity
   if(bill.qtyMode==="dose"){
     const perDay = Number(bill.perDay);
     if(!perDay || perDay<=0) return 0;
@@ -2290,6 +2387,7 @@ function billComputedPills(){
 }
 function canAddBillItem(){
   if(!bill.selectedMedId) return false;
+  if(bill.qtyMode==="dose" && bill.fixedMode) return (Number(bill.perDay)||1)>0;
   if(bill.qtyMode==="total") return Number(bill.pills)>0;
   const perDay = Number(bill.perDay);
   if(!perDay || perDay<=0) return false;
@@ -2303,6 +2401,7 @@ function addBillItem(){
   const med = inventory.find(m=>m.id===bill.selectedMedId);
   if(!med || !canAddBillItem()) return;
   const pricePerPill = nextBatchUnitPrice(med);
+  if(bill.qtyMode==="dose" && bill.fixedMode){ addFixedBillItem(Number(bill.perDay)||1); return; }
   if(bill.qtyMode==="total"){
     const pills = Number(bill.pills)||0;
     bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note:"", perDay:null, linkedToGlobalDays:false});
@@ -2319,7 +2418,7 @@ function addBillItem(){
     const note = `${perDay}/day × ${days}d`;
     bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note, perDay, linkedToGlobalDays:false});
   }
-  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days="";
+  bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days=""; bill.fixedMode=false;
   render();
 }
 function removeBillItem(idx){
@@ -3500,6 +3599,7 @@ function renderBill(){
       <div class="mt2 divider-top8">
         <p class="small" style="margin-bottom:6px;">${bill.items.some(it=>it.linkedToGlobalDays && it.pills<=0) ? "Set the days for this bill to fill in medicine &amp; price for the medicines waiting on it." : "Days for this bill — change it anytime and every linked medicine recalculates."}</p>
         <label class="field-label">Days (applies to every linked medicine)</label>
+        ${daysChipsHtml('gdays', false)}
         <input ${NOAC} id="billGlobalDaysInput2" type="text" inputmode="numeric" value="${esc(bill.globalDays)}" oninput="onGlobalDays(this.value)" placeholder="e.g. 5">
       </div>` : "") +
       `</div>`;
@@ -3667,23 +3767,28 @@ function renderBill(){
             <button class="btn ${bill.daysMode==='perMed'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setBillDaysMode('perMed')">Set days per medicine</button>
             <button class="btn ${bill.daysMode==='same'?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;font-size:11px;" onclick="setBillDaysMode('same')">Same days for whole bill</button>
           </div>
-          <div class="flex gap2 mt2" style="align-items:flex-end;">
-            <div class="flex1">
-              <label class="field-label">Medicine per day</label>
-              <div class="flex gap2 mb2">
-                <button class="btn ${Number(bill.perDay)===1?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;" onclick="setBillPerDayQuick(1)">1</button>
-                <button class="btn ${Number(bill.perDay)===2?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;" onclick="setBillPerDayQuick(2)">2</button>
-                <button class="btn ${Number(bill.perDay)===3?'btn-primary':'btn-outline'}" style="flex:1;padding:6px;" onclick="setBillPerDayQuick(3)">3</button>
+          <div class="mt2">
+            ${(bill.daysMode==='perMed' && !bill.fixedMode) ? `
+              <div style="display:flex;gap:10px;align-items:flex-start;">
+                <div style="flex:1;min-width:0;"><label class="field-label">Medicine per day</label>${perDayChipsHtml(true)}</div>
+                <div style="flex:1;min-width:0;"><label class="field-label">Number of days</label>${daysChipsHtml('days', true, true)}</div>
               </div>
-              <input ${NOAC} id="billPerDayInput" type="text" inputmode="numeric" value="${esc(bill.perDay)}" oninput="onBillPerDay(this.value)" placeholder="e.g. 2">
-            </div>
-            ${bill.daysMode==='perMed' ? `
+            ` : `
+              <label class="field-label">${bill.fixedMode ? "Total medicine to add (days ignored)" : "Medicine per day"}</label>
+              ${perDayChipsHtml()}
+            `}
+            <div class="flex gap2" style="align-items:flex-end;">
               <div class="flex1">
-                <label class="field-label">Number of days</label>
-                <input ${NOAC} id="billDaysInput" type="text" inputmode="numeric" value="${esc(bill.days)}" oninput="onBillDays(this.value)" placeholder="e.g. 5">
+                <input ${NOAC} id="billPerDayInput" type="text" inputmode="numeric" value="${esc(bill.perDay)}" oninput="onBillPerDay(this.value)" placeholder="${bill.fixedMode ? 'e.g. 1' : 'e.g. 2'}">
               </div>
-            ` : ""}
-            <button class="btn btn-primary" ${!canAddBillItem()?"disabled":""} onclick="addBillItem()">+ Add</button>
+              ${(bill.daysMode==='perMed' && !bill.fixedMode) ? `
+                <div class="flex1">
+                  <input ${NOAC} id="billDaysInput" type="text" inputmode="numeric" value="${esc(bill.days)}" oninput="onBillDays(this.value)" placeholder="days, e.g. 5">
+                </div>
+              ` : ""}
+              <button class="btn btn-primary" ${!canAddBillItem()?"disabled":""} onclick="addBillItem()">+ Add</button>
+            </div>
+            ${bill.fixedMode ? `<p class="small mt2" style="margin-bottom:0;">Red 1: adds exactly this many in total. Hold it to add one full box.</p>` : ""}
           </div>
           ${bill.daysMode==='same' && !Number(bill.globalDays) ? `<p class="small mt2">Days not set yet — you can add medicines now and set the days once, any time. Medicine/price fill in for all of them as soon as you do.</p>` : ""}
           ${billComputedPills()>0 ? `<p class="small mt2">= ${billComputedPills()} medicine total</p>` : ""}
@@ -3698,20 +3803,18 @@ function renderBill(){
       <div class="card" style="border:1px solid var(--primarySoft);">
         <p class="small" style="margin-bottom:6px;">${bill.items.some(it=>it.linkedToGlobalDays && it.pills<=0) ? "Set the days for this bill to fill in medicine &amp; price for the medicines waiting on it." : "Days for this bill — change it anytime and every linked medicine recalculates."}</p>
         <label class="field-label">Days (applies to every linked medicine)</label>
+        ${daysChipsHtml('gdays', false)}
         <input ${NOAC} id="billGlobalDaysInput2" type="text" inputmode="numeric" value="${esc(bill.globalDays)}" oninput="onGlobalDays(this.value)" placeholder="e.g. 5">
       </div>
     ` : ""}
 
     ${testsHtml}
 
-    <div class="card">
-      <h3 class="mb2" style="font-size:14px;font-weight:700;">Others (dressing, transport, etc.)</h3>
-      <div class="flex gap2" style="align-items:flex-end;">
-        <div class="flex1">
-          <label class="field-label">Amount</label>
-          <input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="0">
-        </div>
-        <button class="btn btn-primary" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
+    <div class="card" style="padding:12px 14px;">
+      <div class="flex gap2" style="align-items:center;">
+        <span class="small" style="font-weight:700;width:62px;flex:none;color:var(--text);">Others</span>
+        <div class="flex1"><input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="dressing, transport… amount"></div>
+        <button class="btn btn-primary" style="padding:10px 16px;" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
       </div>
       ${bill.extras.length ? bill.extras.map((ex,idx)=>`
         <div class="item-row">
@@ -3721,6 +3824,12 @@ function renderBill(){
             <button onclick="removeExtraItem(${idx})" class="icon-del-btn">🗑</button>
           </div>
         </div>`).join("") : ""}
+      <div class="flex gap2" style="align-items:center;margin-top:10px;">
+        <span class="small" style="font-weight:700;width:62px;flex:none;color:var(--text);">Discount</span>
+        <div class="flex1"><input ${NOAC} id="billTotDiscInput" type="text" inputmode="decimal" value="${esc(bill.totDisc)}" oninput="onBillTotDisc(this.value)" placeholder="total discount"></div>
+        <div class="seg"><button type="button" class="${(bill.totDiscMode||'rs')==='rs'?'on':''}" onclick="setBillTotDiscMode('rs')">Rs</button><button type="button" class="${bill.totDiscMode==='pct'?'on':''}" onclick="setBillTotDiscMode('pct')">%</button></div>
+      </div>
+      ${billTotDiscShares().total>0 ? `<p class="small" style="margin:6px 0 0;">Takes off ${CURRENCY}${money(billTotDiscShares().total)} from medicines, tests and doctor fee${(bill.totDiscMode==='pct'&&billTotDiscShares().total<r2((billMedTotal()-billManualMedDisc()+billTestsGross()-billManualTestsDisc()+(bill.feeIncluded?billFeeGross()-billManualFeeDisc():0)+billExtrasTotal())*Math.min(Number(bill.totDisc)||0,100)/100))?" (Others aren't discounted)":""}</p>` : ""}
     </div>
 
     <div class="card primary">
@@ -4331,6 +4440,25 @@ function handleScanText(raw){
   else if(target && target.kind==="restock") applyScanToRestock(target.medId, parsed);
   else if(target && target.kind==="edit") applyScanToEditForm(target.medId, parsed);
 }
+// ---- Barcode already linked to another medicine: helpers used by all three scan paths ----
+function gtinOwner(gtin, exceptId){ return inventory.find(m=>!m.deleted && m.id!==exceptId && m.gtin && m.gtin===gtin); }
+// Removes the barcode link from a medicine (it stays in inventory, just with no barcode saved).
+function unlinkGtin(m){
+  if(!m) return;
+  m.gtin = ""; m.updatedAt = Date.now();
+  saveInventory();
+  refreshInvCard(m.id);
+}
+// Jumps to the Inventory tab, filtered to that medicine, with its Edit form open (where its barcode
+// link can be checked or removed).
+function openMedicineInInventory(id){
+  const m = inventory.find(x=>x.id===id && !x.deleted); if(!m) return;
+  inv.showForm = false; inv.restockId = null; inv.editId = null; inv.statFilter = null;
+  inv.query = m.name;
+  if(tab!=="inventory") setTab("inventory"); else render();
+  openEdit(id);
+  setTimeout(()=>{ const el=document.getElementById("invCard-"+id); if(el && el.scrollIntoView) el.scrollIntoView({block:"center",behavior:"smooth"}); }, 200);
+}
 function onInvScanInput(v){ inv.scanText=v; }
 function applyInvScan(){
   const text = inv.scanText.trim();
@@ -4355,7 +4483,9 @@ function applyScanToEditForm(medId, parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.id!==medId && m.gtin && m.gtin===parsed.gtin);
     if(existing){
-      showToast(`⚠ This barcode is already linked to "${existing.name}" — not linked here`);
+      askConfirm(`This barcode is already linked to "${existing.name}". Open that medicine (unsaved changes here are lost), or remove the link from it and link it here?`,
+        ()=>openMedicineInInventory(existing.id), "Open that medicine",
+        "Remove link from it & link here", ()=>{ unlinkGtin(existing); applyScanToEditForm(medId, parsed); });
       return;
     }
     inv.editForm.gtin = parsed.gtin;
@@ -4443,7 +4573,12 @@ function parseBoxText(text){
   const t = String(text||"");
   const out = {};
   const g = t.match(/GTIN\D{0,4}(\d{12,14})/i); if(g) out.gtin = g[1];
-  const m = t.match(/M\.?\s*R\.?\s*P\.?\s*(?:Rs\.?|₹|INR)?\s*(\d+(?:\.\d{1,2})?)/i); if(m) out.price = String(Number(m[1]));
+  // MRP / Retail Price / Price Rs. 450 / Rs.450/-  (a bare "Rs 450" is accepted only with the Rs/PKR sign)
+  const m = t.match(/M\.?\s*R\.?\s*P\.?\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i)
+         || t.match(/(?:max(?:imum)?\.?\s*)?retail\s*price\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i)
+         || t.match(/\bprice\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)\s*(\d+(?:\.\d{1,2})?)/i)
+         || t.match(/(?:\bRs\.?|₹|\bPKR)\s*(\d{2,6}(?:\.\d{1,2})?)\s*(?:\/-)?/);
+  if(m && Number(m[1])>0) out.price = String(Number(m[1]));
   const skip = /gtin|mfg|mfd|exp|b\.?\s*no|sr\.?\s*no|m\.?\s*r\.?\s*p|batch|\brs\b|licen|\d{9,}/i;
   const line = t.split("\n").map(l=>l.replace(/\s+/g," ").trim()).find(l=>l.length>=3 && /[A-Za-z]{3}/.test(l) && !skip.test(l));
   if(line) out.productName = line;
@@ -4458,8 +4593,26 @@ function parseBoxTextDetails(text){
   const out = {};
   const formMatch = t.match(/\b(tablets?|capsules?|syrups?|suspensions?|injections?|ointments?|creams?|lotions?|drops?|gels?|powders?|sachets?|sprays?)\b/i);
   if(formMatch) out.form = formMatch[1].toLowerCase().replace(/s$/,"").replace(/^[a-z]/,c=>c.toUpperCase());
-  const pack = t.match(/\b(\d{1,3})\s*[x×]\s*(\d{1,4})\s*(?:tablets?|capsules?|tabs?|caps?)\b/i) || t.match(/\b(\d{1,4})\s*(?:tablets?|capsules?)\s*(?:per\s*(?:box|pack|strip))?\b/i);
-  if(pack) out.perBox = pack[2] ? Number(pack[1])*Number(pack[2]) : Number(pack[1]);
+  // Pack size. "2x10 Tablets" (strips x tablets) is the reliable form. The text reader often turns the
+  // 0 in "10" into O/o and the 1 into I/l, so those are fixed up when they sit right after an "x".
+  const tx = t.replace(/(\d)\s*[xX×*]\s*([0-9OoIl]{1,4})\b/g,(m,a,b)=>a+"x"+b.replace(/[Oo]/g,"0").replace(/[Il]/g,"1"));
+  const pack = tx.match(/\b(\d{1,3})\s*x\s*(\d{1,4})\b(?=[\s\S]{0,25}?(?:tablets?|capsules?|tabs?|caps?|strips?))/i);
+  if(pack){ out.perBox = Number(pack[1])*Number(pack[2]); }
+  else {
+    const apos = tx.match(/\b(\d{1,4})\s*['\u2019]\s*s\b/i);   // "10's"
+    if(apos) out.perBox = Number(apos[1]);
+    else {
+      // A bare "N tablets" is only a pack size when it is NOT part of a dose instruction such as
+      // "Take 1-2 tablets" / "one tablet daily" (that used to be read as a pack of 2).
+      const re = /(?<![\d\-\u2013.])\b(\d{1,4})\s*(?:tablets?|capsules?)\b/gi; let mm;
+      while((mm = re.exec(tx))){
+        const before = tx.slice(Math.max(0,mm.index-18), mm.index);
+        if(/(take|dose|daily|one|upto|up to|to|and|or|every|per|each)\s*[:\-]?\s*$/i.test(before)) continue;
+        if(/(?:^|\n)\s*take[^\n]*$/i.test(tx.slice(0,mm.index))) continue;
+        out.perBox = Number(mm[1]); break;
+      }
+    }
+  }
   const compStart = t.search(/composition/i);
   if(compStart>=0){
     // Pharma labels commonly print COMPOSITION and DOSAGE/INDICATION as side-by-side boxes, not
@@ -4467,7 +4620,7 @@ function parseBoxTextDetails(text){
     // after "composition" on the very same line it scans. Cutting on ANY occurrence of a stop
     // word anywhere in the text threw the whole ingredient list away before it was ever read.
     // Requiring the stop word to actually START a line only matches a genuine new section.
-    const restLines = t.slice(compStart).split("\n");
+    const restLines = t.slice(compStart).split("\n").filter(x=>x.trim());   // blank lines (common in sparse-text reads) must not use up the line cap
     let compEndIdx = restLines.length;
     for(let i=1;i<restLines.length;i++){
       if(/^\s*(indication|dosage|direction|storage|contra|side\s*effect|precaution|warning)\b/i.test(restLines[i])){ compEndIdx=i; break; }
@@ -4478,22 +4631,36 @@ function parseBoxTextDetails(text){
     // starting at its "3"), and the LAST dose-looking number on the line wins — composition
     // lines often have an aside like "(Eq. To 400mg Elemental Calcium)" before the real final
     // dose, and taking the first match would grab the aside's number instead.
-    const doseRe = /(?<![A-Za-z])(\d[\d,]*(?:\.\d+)?)\s*(mg|mcg|µg|gm|g|ml|iu|i\.u\.?|%)\b/gi;
+    const doseRe = /(?<![A-Za-z])(\d[\d,]*(?:\.\d+)?)\s*(mg|mcg|µg|gm|g|ml|[il1|]\.?u\.?|%)(?![A-Za-z])/gi;   // the text reader often turns "I.U" into "1.U", "|.U" or "lU"
     block.split("\n").forEach(raw=>{
       // Dot leaders ("....") are plain punctuation here, not part of any number — strip them
       // before matching so they can't get swallowed into a dose figure.
       let l = raw.replace(/\s+/g," ").replace(/\.{2,}/g," ").trim();
-      if(!l || /composition|^each\b.*contains?:?$/i.test(l)) return;
+      // DOSAGE / INDICATION / STORAGE boxes sit beside COMPOSITION, so their words share this text line
+      l = l.replace(/\b(take|dosage?|dosag|indication|indicat|storage|stor|adults?|children)\b.*$/i,"").trim();
+      // leading border/icon junk such as "/ > >"
+      l = l.replace(/^[^A-Za-z0-9(]+/,"").trim();
+      // "Each Tablet Contains:" (also cut off, e.g. "Each Tablet Cor") is a heading, not an ingredient;
+      // if ingredients follow on the same line ("Each tablet contains Paracetamol 500mg") keep them.
+      l = l.replace(/^each\s+(?:film[- ]?coated\s+|enteric[- ]?coated\s+)?(?:tablet|capsule|caplet|sachet|vial|ampoule|ml|5\s*ml)s?\b\s*(?:contains?:?|con\w*:?)?/i,"").trim();
+      if(!l || /composition/i.test(l)) return;
+      // "(Eq. To 400mg Elemental Calcium)" describes the ingredient, it is not the tablet's strength:
+      // leave such asides out when looking for the dose (a missing dose is better than a wrong one).
+      l = l.replace(/\(\s*(?:eq|equiv|elemental|as\b|i\.?e)[^)]*\)/gi," ").replace(/\s+/g," ").trim();
       const all = [...l.matchAll(doseRe)];
       const dose = all[all.length-1];
       let name = dose ? l.slice(0, dose.index) : l;
-      name = name.replace(/\([^)]*\)/g,"").replace(/[:.\s]+$/,"").trim();
-      if(name && /[A-Za-z]{3}/.test(name)){
-        if(names.length<3){ names.push(name); strengths[names.length-1] = dose ? dose[0].replace(/\s+/g," ").trim().toUpperCase() : undefined; }
+      name = name.replace(/\([^)]*\)/g,"").replace(/\(\s*$/,"").replace(/[:.\s]+$/,"").trim();
+      const niceDose = d=> /^[il1|]\.?u\.?$/i.test(d[2]) ? (d[1]+" IU") : d[0].replace(/\s+/g," ").trim().toUpperCase();
+      name = name.replace(/\bvitamin\s*d\s*[s5]\b/i,"Vitamin D3");
+      const junk = name.length>45 || /(.)\1{2,}/i.test(name) || (name.length>18 && name.indexOf(" ")<0)
+                 || ((name.match(/[A-Za-z]/g)||[]).length / Math.max(1,name.replace(/\s/g,"").length)) < 0.8;
+      if(name && !junk && /[A-Za-z]{3}/.test(name)){
+        if(names.length<3){ names.push(name); strengths[names.length-1] = dose ? niceDose(dose) : undefined; }
       } else if(dose && names.length && strengths[names.length-1]===undefined){
         // A continuation line that's only a parenthetical aside + the real dose, with no
         // ingredient name of its own — attach it to the name from the line just above.
-        strengths[names.length-1] = dose[0].replace(/\s+/g," ").trim().toUpperCase();
+        strengths[names.length-1] = niceDose(dose);
       }
     });
     if(names.length) out.formula = names.join(" + ");
@@ -4547,9 +4714,9 @@ function aiApplyBoxInfo(info){
   showToast(filled.length?("✓ "+filled.join(", ")+" filled"+(filled.includes("MRP")?"":" — no MRP found, include the price side next time")+" — please check"):"⚠ Nothing readable — hold the camera steady, closer, with the box flat");
   render();
 }
-async function aiOcrCanvas(file, deg){ // bigger + grayscale + more contrast helps Tesseract on phone photos; deg turns a sideways photo upright
+async function aiOcrCanvas(file, deg, maxW, maxSc){ // bigger + grayscale + more contrast helps Tesseract on phone photos; deg turns a sideways photo upright
   deg = deg||0;
-  const bmp=await createImageBitmap(file), sc=Math.min(2200/bmp.width,2);
+  const bmp=await createImageBitmap(file), sc=Math.min((maxW||1400)/bmp.width,maxSc||1.5);   // 1400px reads the same text as 2200px but takes about half the time
   const w=Math.round(bmp.width*sc), h=Math.round(bmp.height*sc), swap=(deg===90||deg===270);
   const c=document.createElement("canvas"); c.width=swap?h:w; c.height=swap?w:h;
   const x=c.getContext("2d"); x.translate(c.width/2,c.height/2); x.rotate(deg*Math.PI/180); x.drawImage(bmp,-w/2,-h/2,w,h); x.setTransform(1,0,0,1,0,0);
@@ -4586,8 +4753,10 @@ async function aiOcrRotated(file, worker, knownDeg){
       if(deg===0 && sco>=40) break; // already upright and clearly readable — skip the other turns
     }
   }
-  const result = await run(await aiOcrCanvas(file,best));
+  const cv = await aiOcrCanvas(file,best);
+  const result = await run(cv);
   result.__deg = best; // handed back so the caller can reuse it for the next photo in this batch
+  result.__w = cv.width; result.__h = cv.height; // so line heights can be compared between photos of different sizes
   return result;
 }
 function boxBusyOn(n){
@@ -4596,17 +4765,87 @@ function boxBusyOn(n){
   const o=document.createElement("div"); o.id="boxBusyOverlay";
   o.style.cssText="position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:24px;";
   o.innerHTML='<div style="background:#fff;border-radius:16px;padding:24px 22px;max-width:320px;text-align:center;"><div class="ai-spin"></div>'
-    +'<div style="font-weight:700;font-size:15px;margin-bottom:6px;">Reading '+n+' photo'+(n>1?'s':'')+'…</div>'
+    +'<div id="boxBusyMsg" style="font-weight:700;font-size:15px;margin-bottom:6px;">Reading '+n+' photo'+(n>1?'s':'')+'…</div>'
     +'<div class="small faint">Filling in the new medicine. Please wait — this can take up to a minute.</div>'
     +'<button id="boxBusyStop" style="display:none;margin-top:14px;padding:8px 16px;border:1px solid #d1d5db;border-radius:10px;background:#fff;font-size:13px;">Stop waiting</button></div>';
   document.body.appendChild(o);
   o.querySelector("#boxBusyStop").onclick=()=>boxBusyOff();
   window.__boxBusyTimer=setTimeout(()=>{ const b=document.getElementById("boxBusyStop"); if(b) b.style.display="inline-block"; },45000);
 }
+function boxBusyProgress(i,n){ const el=document.getElementById("boxBusyMsg"); if(el) el.textContent = n>1 ? ("Reading photo "+i+" of "+n+"…") : "Reading photo…"; }
 function boxBusyOff(keepFlag){
   clearTimeout(window.__boxBusyTimer);
   const o=document.getElementById("boxBusyOverlay"); if(o) o.remove();
   if(!keepFlag) window.__boxBusy=false;
+}
+// When the first reading found the ingredients but not every dose (the dotted line between an ingredient
+// and its dose often hides it), look again at just the COMPOSITION box, enlarged, in "sparse text" mode.
+function boxNeedsDoses(m){
+  const names = String(m.formula||"").split("+").map(x=>x.trim()).filter(Boolean).length;
+  const doses = String(m.strength||"").split("+").map(x=>x.trim()).filter(Boolean).length;
+  return names>0 && doses<names;
+}
+async function boxCompositionSecondLook(reads, files, deg, worker){
+  if(!worker) return null;
+  const k = reads.findIndex(r=>r && r.data && /composition/i.test(r.data.text||"") && r.__w);
+  if(k<0) return null;
+  const r = reads[k], lines = r.data.lines||[], words = r.data.words||[];
+  const head = lines.find(l=>/composition/i.test(l.text));
+  if(!head) return null;
+  const stop = lines.find(l=>l.bbox.y0>head.bbox.y1+20 && /indicat|storage|stor\b/i.test(l.text));
+  const side = words.find(w=>/^dosag/i.test(w.text) && w.bbox.x0>head.bbox.x0);
+  const x0 = Math.max(0, head.bbox.x0-25), x1 = Math.min(r.__w, side ? side.bbox.x0-10 : r.__w);
+  const y0 = Math.max(0, head.bbox.y1-5), y1 = Math.min(r.__h, stop ? stop.bbox.y0-5 : head.bbox.y1+0.34*r.__h);   // INDICATION is often cut off at the photo edge, so allow a generous height
+  if(x1-x0<150 || y1-y0<60) return null;
+  const up = 1.4;
+  const big = await aiOcrCanvas(files[k], deg, Math.round(1400*up), 1.5*up);
+  const f = big.width / r.__w;
+  const c = document.createElement("canvas"); c.width=Math.round((x1-x0)*f); c.height=Math.round((y1-y0)*f);
+  c.getContext("2d").drawImage(big, x0*f, y0*f, (x1-x0)*f, (y1-y0)*f, 0, 0, c.width, c.height);
+  try{ await worker.setParameters({ tessedit_pageseg_mode:"11" }); }catch(e){}
+  const res = await worker.recognize(c);
+  try{ await worker.setParameters({ tessedit_pageseg_mode:"3" }); }catch(e){}
+  return parseBoxTextDetails("COMPOSITION:\n"+((res&&res.data&&res.data.text)||"")+"\nINDICATION:");
+}
+// Combines the text-reader results of all photos of one box into a single set of form values.
+// A field is taken from the first photo that shows it. The brand name is the biggest sensible line of
+// text across ALL photos (never a section heading, an ingredient or the maker's name).
+function mergeBoxReads(reads){
+  const infos = (reads||[]).filter(Boolean).map(r=>{
+    const text = (r.data && r.data.text) || "";
+    return { r, p: Object.assign(parseBoxText(text), parseBoxTextDetails(text)) };
+  });
+  const merged = {};
+  ["gtin","price","form","perBox","formula","strength"].forEach(k=>{
+    const hit = infos.find(x=>x.p[k]!=null && x.p[k]!=="");
+    if(hit) merged[k] = hit.p[k];
+  });
+  const ingredients = String(merged.formula||"").toLowerCase().split("+").map(x=>x.trim()).filter(Boolean);
+  const notAName = /\b(with|vitamin|contains?|composition|indication|dosage?|storage|manufactured|pharma|pharmaceuticals?|laborator\w*|pvt|ltd|limited|osteoporosis|prevent|help|tablets?|capsules?|syrup|each|batch|mfg|exp|price|take|strips?)\b/i;
+  const cands = [];
+  infos.forEach(x=>{
+    const H = x.r.__h || 1;
+    ((x.r.data && x.r.data.lines) || []).forEach(l=>{
+      const clean = String(l.text||"").replace(/[^A-Za-z0-9 \-]+/g," ").replace(/\s+/g," ").trim();
+      const letters = (clean.match(/[A-Za-z]/g)||[]).length;
+      if(letters<4 || clean.split(" ").length>3 || !(l.confidence>=35)) return;
+      if(letters/clean.replace(/\s/g,"").length < 0.7) return;
+      if(notAName.test(clean) || /gtin|m\.?r\.?p|\d{6,}/i.test(clean)) return;
+      const lo = clean.toLowerCase();
+      if(ingredients.some(n=>n===lo || n.includes(lo) || lo.includes(n))) return;
+      cands.push({ text:clean, h:(l.bbox.y1-l.bbox.y0)/H, conf:l.confidence, letters });
+    });
+  });
+  if(cands.length){
+    const maxH = Math.max(...cands.map(c=>c.h));
+    // the logo is the tallest text; among lines nearly that tall prefer the most complete one
+    // (a photo that cuts the logo off reads only "ORSUP", the front photo reads "ORSUP D")
+    const pool = cands.filter(c=>c.h >= 0.7*maxH).sort((a,b)=>(b.letters-a.letters) || (b.conf-a.conf));
+    let name = pool[0].text;
+    if(name === name.toUpperCase()) name = name.toLowerCase().replace(/\b([a-z])([a-z]+)/g,(m,a,b)=>a.toUpperCase()+b).replace(/\b([a-z])\b/g,c=>c.toUpperCase());
+    merged.productName = name;
+  }
+  return merged;
 }
 async function processBoxPhotos(files, forceOffline){
   boxBusyOn(files.length);
@@ -4626,41 +4865,42 @@ async function processBoxPhotosInner(files, forceOffline){
         }catch(e){ showToast("Online reader failed — using the offline reader"); }
       }
       await aiLoadTesseract();
-      // One worker and one orientation guess for the whole batch (see aiOcrRotated) — this used
-      // to spin up a fresh engine and re-probe all 4 rotations for every single photo, which was
-      // most of what made this slow with 3 photos per scan.
-      let worker=null; try{ worker=await window.Tesseract.createWorker("eng"); }catch(e){ worker=null; }
-      let sharedDeg=null;
+      // The first photo is read alone (it also finds how the box was held); the remaining photos are then
+      // read two at a time on two engines. Everything is merged ONCE at the end (see mergeBoxReads), so a
+      // field is filled from whichever photo actually shows it, instead of whichever photo came first.
+      const mkWorker = async ()=>{ try{ return await window.Tesseract.createWorker("eng"); }catch(e){ return null; } };
+      const w1p = mkWorker(), w2p = files.length>2 ? mkWorker() : Promise.resolve(null);
+      const w1 = await w1p; let w2 = null;
+      const reads = []; let parsed = {};
       try{
-        for(const file of files){   // offline: read each photo; every one only fills the boxes still empty
-          const r=await aiOcrRotated(file, worker, sharedDeg);
-          if(sharedDeg==null) sharedDeg=r.__deg;
-          const parsed=Object.assign(parseBoxText(r&&r.data&&r.data.text), parseBoxTextDetails(r&&r.data&&r.data.text));
-          // Only trust a name line that is mostly real letters (rejects scribbles like "< BEL =").
-          const real=l=>{ const letters=(l.text.match(/[A-Za-z]/g)||[]).length, all=l.text.replace(/\s/g,"").length; return letters>=3 && all>0 && letters/all>=0.75; };
-          // Brand names on a box front are 1-3 words ("ORSUP D", "Panadol Extra") — a big bold
-          // banner line like "HELP TO PREVENT OSTEOPOROSIS" is taller than the actual name here
-          // but is a full sentence, so it's excluded from the race even though it's the tallest.
-          // The dosage form word on its own ("Tablet", "2x10 Tablets") is excluded too — that's
-          // what Category is for, and a small "Tablets" in a pack-size line can otherwise end up
-          // measured as "taller" than a brand name mangled by a logo/icon glyph next to it.
-          const formWordOnly = /^(\d+\s*[x×]\s*\d+\s*)?(tablets?|capsules?|syrups?|suspensions?|injections?|ointments?|creams?|lotions?|drops?|gels?|powders?|sachets?|sprays?)$/i;
-          const candidates=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text) && l.text.trim().split(/\s+/).length<=3 && !formWordOnly.test(l.text.trim()));
-          // The brand name is always near the top of the box front — prefer whichever of the
-          // surviving candidates sits in the upper half of the readable text, tallest first,
-          // rather than letting something from the bottom corner (pack size, barcode caption)
-          // win just because the logo mangled the real name's line height.
-          let big=null;
-          if(candidates.length){
-            const maxY=Math.max(...candidates.map(l=>l.bbox.y1));
-            const topHalf=candidates.filter(l=>l.bbox.y0 < maxY*0.5);
-            big=(topHalf.length?topHalf:candidates).sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
-          }
-          parsed.productName = big ? big.text.replace(/\s+/g," ").trim() : null; // never keep an unchecked guess
-          if(parsed.productName || parsed.price || parsed.gtin || parsed.formula || parsed.form || parsed.perBox) applyScanToNewMedForm(parsed);
-          else showToast("⚠ Couldn't read this photo — try again with the box upright and well lit");
+        boxBusyProgress(1, files.length);
+        const r0 = await aiOcrRotated(files[0], w1, null);
+        reads[0] = r0;
+        const deg = r0.__deg;
+        w2 = await w2p;
+        if(w1 && w2){
+          await Promise.all([w1,w2].map(async (w,lane)=>{
+            for(let k=1+lane; k<files.length; k+=2){ boxBusyProgress(k+1, files.length); reads[k] = await aiOcrRotated(files[k], w, deg); }
+          }));
+        } else {
+          for(let k=1;k<files.length;k++){ boxBusyProgress(k+1, files.length); reads[k] = await aiOcrRotated(files[k], w1, deg); }
         }
-      } finally { if(worker){ try{ await worker.terminate(); }catch(e){} } }
+        parsed = mergeBoxReads(reads);
+        if(boxNeedsDoses(parsed)){
+          try{
+            showToast("🔎 Looking closer at the composition…");
+            const p2 = await boxCompositionSecondLook(reads, files, deg, w1);
+            if(p2){
+              const n2 = String(p2.strength||"").split("+").filter(x=>x.trim()).length, n1 = String(parsed.strength||"").split("+").filter(x=>x.trim()).length;
+              if(n2>n1){ parsed.strength = p2.strength; if(p2.formula) parsed.formula = p2.formula; }
+            }
+          }catch(e){ /* the first reading is still used */ }
+        }
+      } finally {
+        for(const w of [w1,w2]) if(w){ try{ await w.terminate(); }catch(e){} }
+      }
+      if(parsed.productName || parsed.price || parsed.gtin || parsed.formula || parsed.form || parsed.perBox) applyScanToNewMedForm(parsed);
+      else showToast("⚠ Couldn't read these photos — try again with the box upright and well lit");
     }catch(e){ showToast("⚠ "+(e&&e.message?e.message:"Couldn't read the box")); }
   }
 }
@@ -4669,10 +4909,9 @@ function applyScanToNewMedForm(parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.gtin && m.gtin===parsed.gtin);
     if(existing){
-      askConfirm(`This barcode is already saved against "${existing.name}". Close this form and restock that medicine instead?`, ()=>{
-        inv.showForm = false;
-        toggleRestock(existing.id);
-      });
+      askConfirm(`This barcode is already linked to "${existing.name}". Open that medicine (this form will close), or remove the link from it and use the barcode for this new medicine?`,
+        ()=>openMedicineInInventory(existing.id), "Open that medicine",
+        "Remove link from it & use here", ()=>{ unlinkGtin(existing); applyScanToNewMedForm(parsed); });
       return;
     }
     inv.form.gtin = parsed.gtin;
@@ -4734,7 +4973,12 @@ function applyScanToRestock(medId, parsed){
     else showToast("Nothing to fill in — that code has no batch, expiry or MRP", revealLastScan);
     render();
   };
-  if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
+  const owner = parsed.gtin ? gtinOwner(parsed.gtin, medId) : null;
+  if(owner){
+    askConfirm(`This barcode is linked to "${owner.name}", not "${m.name}". Open "${owner.name}", or remove the link from it and link the barcode to "${m.name}"?`,
+      ()=>openMedicineInInventory(owner.id), "Open that medicine",
+      `Remove link from it & link here`, ()=>{ unlinkGtin(owner); m.gtin = parsed.gtin; m.updatedAt = Date.now(); saveInventory(); proceed(); });
+  } else if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
     askConfirm(`This barcode doesn't match ${m.name}'s saved barcode. Use the scanned batch/expiry anyway?`, proceed);
   } else {
     proceed();
@@ -4767,6 +5011,22 @@ function searchBillSpecialByFormula(formula){
   if(el){ el.focus(); }
 }
 function onInvForm(field,v){ inv.form[field]=v; }
+// ---- Medicine-per-box quick picks (scroll sideways; ✎ jumps to typing it yourself) ----
+const PPB_QUICK = [1,2,7,10,14,20,30,50,100];
+function ppbChipsHtml(kind,id){
+  const cur = Number(kind==='new' ? inv.form.pillsPerBox : inv.editForm.pillsPerBox);
+  return PPB_QUICK.map(n=>`<button type="button" class="ppb-chip ${cur===n?'on':''}" onclick="setPpbQuick('${kind}','${id}',${n})">${n}</button>`).join("");
+}
+function ppbInputEl(kind,id){ return document.getElementById(kind==='new' ? 'invPpb' : 'editPpb-'+id); }
+function refreshPpbChips(kind,id){ const c=document.getElementById(kind==='new' ? 'ppbChips-new' : 'ppbChips-'+id); if(c) c.innerHTML=ppbChipsHtml(kind,id); }
+function onPpbTyped(kind,id,v){ if(kind==='new') inv.form.pillsPerBox=v; else inv.editForm.pillsPerBox=v; refreshPpbChips(kind,id); }
+function setPpbQuick(kind,id,n){
+  if(kind==='new') inv.form.pillsPerBox=String(n); else inv.editForm.pillsPerBox=String(n);
+  const el=ppbInputEl(kind,id); if(el) el.value=String(n);
+  refreshPpbChips(kind,id);
+}
+function ppbFocus(kind,id){ const el=ppbInputEl(kind,id); if(el){ el.focus(); try{ el.select(); }catch(e){} } }
+
 // The merged picker is one <select> covering both lists (see mergedCategoryOptionsHtml), so
 // picking a value has to decide which of the two underlying fields it belongs to — a medicine
 // can only be in ONE of the two right now, so the other is always cleared alongside it.
@@ -5197,14 +5457,17 @@ function buildInvCard(m){
     extra = `
       <div class="mt2 divider-top8">
         ${nameCategoryRowsHtml({ nameId:"editName-"+m.id, name:f.name, nameOnInput:"onEditForm('name',this.value)", sToggle:"toggleEditSTag()", sTag:f.sTag, sTitle:f.category||f.specialCategory, selectId:"editCategory-"+m.id, selectOnchange:"onEditCategoryPicked(this.value)", category:f.category, specialCategory:f.specialCategory })}
-        <div class="flex gap2 mb2">
-          <input ${NOAC} id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onFormulaTyped('edit','${m.id}',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('edit','${m.id}'),200)" placeholder="Formula / composition">
-          <input ${NOAC} id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
+        <div class="flex gap2 mb2 row2">
+          <input ${NOAC} style="flex:1;min-width:0;" id="editFormula-${m.id}" value="${esc(f.formula)}" oninput="onFormulaTyped('edit','${m.id}',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('edit','${m.id}'),200)" placeholder="Formula / composition">
+          <input ${NOAC} style="flex:1;min-width:0;" id="editMg-${m.id}" value="${esc(f.mg)}" oninput="onEditForm('mg',this.value)" placeholder="Strength (mg)">
         </div>
         <div id="formulaSug-${m.id}"></div>
-        <div class="flex gap2 mb2">
-          <input ${NOAC} id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
-          <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onEditForm('pillsPerBox',this.value)" placeholder="Medicine per box">
+        <div class="flex gap2 mb2 row2">
+          <input ${NOAC} style="flex:1;min-width:0;" id="editMrp-${m.id}" type="text" inputmode="decimal" value="${esc(f.mrp)}" oninput="onEditForm('mrp',this.value)" placeholder="MRP per box">
+          <div class="ppb-box" style="flex:1;min-width:0;">
+            <input ${NOAC} id="editPpb-${m.id}" type="text" inputmode="numeric" value="${esc(f.pillsPerBox)}" oninput="onPpbTyped('edit','${m.id}',this.value)" placeholder="Per box">
+            <div class="ppb-chips" id="ppbChips-${m.id}">${ppbChipsHtml('edit',m.id)}</div>
+          </div>
         </div>
         <label class="small" style="color:var(--danger);">Current stock (medicine) — correct for expired, damaged, or missing medicine</label>
         <input ${NOAC} id="editStock-${m.id}" type="text" inputmode="numeric" value="${esc(f.stockPills)}" oninput="onEditForm('stockPills',this.value)" style="border-color:var(--danger);" class="mb2">
@@ -5408,14 +5671,17 @@ function renderInvFormModal(){
         </div>
         <div style="padding:14px 16px;overflow-y:auto;">
           ${nameCategoryRowsHtml({ nameId:"invName", name:inv.form.name, nameOnInput:"onInvForm('name',this.value)", sToggle:"toggleInvSTag()", sTag:inv.form.sTag, sTitle:inv.form.category||inv.form.specialCategory, selectId:"invCategory", selectOnchange:"onInvCategoryPicked(this.value)", category:inv.form.category, specialCategory:inv.form.specialCategory })}
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="invFormula" value="${esc(inv.form.formula)}" oninput="onFormulaTyped('new','',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('new',''),200)" placeholder="Formula / composition">
-            <input ${NOAC} id="invMg" value="${esc(inv.form.mg)}" oninput="onInvForm('mg',this.value)" placeholder="Strength (mg)">
+          <div class="flex gap2 mb2 row2">
+            <input ${NOAC} style="flex:1;min-width:0;" id="invFormula" value="${esc(inv.form.formula)}" oninput="onFormulaTyped('new','',this.value)" onfocus="_fsEnsureIndex()" onblur="setTimeout(()=>hideFormulaSug('new',''),200)" placeholder="Formula / composition">
+            <input ${NOAC} style="flex:1;min-width:0;" id="invMg" value="${esc(inv.form.mg)}" oninput="onInvForm('mg',this.value)" placeholder="Strength (mg)">
           </div>
           <div id="formulaSug-new"></div>
-          <div class="flex gap2 mb2">
-            <input ${NOAC} id="invMrp" type="text" inputmode="decimal" value="${esc(inv.form.mrp)}" oninput="onInvForm('mrp',this.value)" placeholder="MRP per box (${CURRENCY.trim()})">
-            <input ${NOAC} id="invPpb" type="text" inputmode="numeric" value="${esc(inv.form.pillsPerBox)}" oninput="onInvForm('pillsPerBox',this.value)" placeholder="Medicine per box">
+          <div class="flex gap2 mb2 row2">
+            <input ${NOAC} style="flex:1;min-width:0;" id="invMrp" type="text" inputmode="decimal" value="${esc(inv.form.mrp)}" oninput="onInvForm('mrp',this.value)" placeholder="MRP per box (${CURRENCY.trim()})">
+            <div class="ppb-box" style="flex:1;min-width:0;">
+              <input ${NOAC} id="invPpb" type="text" inputmode="numeric" value="${esc(inv.form.pillsPerBox)}" oninput="onPpbTyped('new','',this.value)" placeholder="Per box">
+              <div class="ppb-chips" id="ppbChips-new">${ppbChipsHtml('new','')}</div>
+            </div>
           </div>
           <label class="small">Warn me when stock falls to (medicine)</label>
           <input ${NOAC} id="invLow" type="text" inputmode="numeric" value="${esc(inv.form.lowStockAt)}" oninput="onInvForm('lowStockAt',this.value)" class="mb2">
@@ -8856,6 +9122,46 @@ function checkCloudHeadroom(){
   }catch(e){}
 }
 window.addEventListener("load",()=>{ window.__bootMs = performance.now(); setTimeout(checkCloudHeadroom, 15000); });
+
+/* ---- Press-and-hold menus (like the phone's copy/paste bar): data-hold="menu:<kind>:a,b,c" opens a small
+   bar of choices; data-hold="full" runs holdFullBox(). A quick tap still does the normal tap action. ---- */
+(function(){
+  let timer=null, menu=null, suppressUntil=0, sx=0, sy=0;
+  function closeMenu(){ if(menu){ menu.remove(); menu=null; } }
+  function openMenu(el, vals, kind){
+    closeMenu();
+    const r=el.getBoundingClientRect();
+    menu=document.createElement("div"); menu.className="hold-menu";
+    vals.forEach(v=>{ const b=document.createElement("button"); b.type="button"; b.textContent=String(v);
+      b.onclick=function(e){ e.stopPropagation(); closeMenu(); holdMenuPick(kind,v); }; menu.appendChild(b); });
+    document.body.appendChild(menu);
+    const mw=menu.offsetWidth, mh=menu.offsetHeight;
+    const left=Math.min(Math.max(8, r.left+r.width/2-mw/2), innerWidth-mw-8);
+    let top=r.top-mh-10; if(top<8) top=r.bottom+10;
+    menu.style.left=left+"px"; menu.style.top=top+"px";
+  }
+  document.addEventListener("pointerdown",e=>{
+    const t=e.target;
+    if(menu && !(t.closest && t.closest(".hold-menu"))) closeMenu();
+    const el=t.closest && t.closest("[data-hold]"); if(!el) return;
+    sx=e.clientX; sy=e.clientY; clearTimeout(timer);
+    timer=setTimeout(()=>{
+      timer=null; suppressUntil=Date.now()+800;
+      try{ navigator.vibrate && navigator.vibrate(25); }catch(_){}
+      const spec=el.getAttribute("data-hold")||"";
+      if(spec==="full") holdFullBox();
+      else { const p=spec.split(":"); openMenu(el, (p[2]||"").split(",").map(Number).filter(Boolean), p[1]); }
+    },420);
+  },true);
+  document.addEventListener("pointermove",e=>{ if(timer && Math.hypot(e.clientX-sx,e.clientY-sy)>12){ clearTimeout(timer); timer=null; } },true);
+  ["pointerup","pointercancel"].forEach(ev=>document.addEventListener(ev,()=>{ clearTimeout(timer); timer=null; },true));
+  document.addEventListener("click",e=>{
+    if(Date.now()<suppressUntil && e.target.closest && e.target.closest("[data-hold]")){ e.stopImmediatePropagation(); e.preventDefault(); }
+  },true);
+  document.addEventListener("contextmenu",e=>{ if(e.target.closest && e.target.closest("[data-hold]")) e.preventDefault(); },true);
+  const app=document.getElementById("app"); if(app) app.addEventListener("scroll",closeMenu,{passive:true});
+  window.closeHoldMenu=closeMenu;
+})();
 function aiLoadTesseract(){
   return new Promise((resolve,reject)=>{
     if(window.Tesseract) return resolve();
