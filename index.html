@@ -227,6 +227,7 @@
   .hidden{display:none !important;}
   #toast{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);background:#1B2430;color:#fff;
     padding:10px 18px;border-radius:999px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 4px 16px rgba(0,0,0,.25);}
+  #toast.tappable{cursor:pointer;text-decoration:underline;text-underline-offset:3px;}
   a.silent{color:inherit;text-decoration:none;}
   ::placeholder{color:var(--faint);}
   #invFab{position:fixed;right:16px;bottom:calc(70px + env(safe-area-inset-bottom));width:54px;height:54px;border-radius:50%;
@@ -448,7 +449,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v52";
+const APP_VERSION = "v63";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -650,11 +651,14 @@ function genRecoveryCode(){
 // Thousands separators for everything shown on screen: 1234567.5 -> 1,234,567.5
 // NUM_GROUP_FROM_LEFT = true -> commas after every 3 digits counting from the LEFT (555,558,85).
 // Set it to false to go back to the usual way, counting from the right (55,555,885).
-const NUM_GROUP_FROM_LEFT = true;
+const NUM_GROUP_FROM_LEFT = false;
 function commaInt(str){
   const t=String(str);
   return NUM_GROUP_FROM_LEFT ? t.replace(/(\d{3})(?=\d)/g,"$1,") : t.replace(/\B(?=(\d{3})+(?!\d))/g,",");
 }
+// All money is kept to whole paisa so that what is shown, what is saved and what every report adds up
+// can never drift apart by floating-point dust (e.g. 12.333333 x 7).
+function r2(n){ return Math.round(((Number(n)||0)+Number.EPSILON)*100)/100; }
 function money(n){
   const v=Number(n)||0, t=v.toFixed(2).replace(/\.00$/,""), neg=t.charAt(0)==="-", parts=t.replace("-","").split(".");
   return (neg?"-":"")+commaInt(parts[0])+(parts[1]?"."+parts[1]:"");
@@ -1226,7 +1230,9 @@ function deleteSpecialCategoryFromEditor(name){
    sold, pills are drawn from the batch with the nearest expiry date first (FEFO —
    first-expiry-first-out). m.stockPills is always kept as the sum of active batches. */
 function activeBatches(m){ return (m.batches||[]).filter(b=>!b.disposed && b.pillsRemaining>0); }
-function recomputeStock(m){ m.stockPills = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0); }
+// q6: rounds away tiny floating-point leftovers (e.g. 0.30000000000000004) from half-tablet doses
+function q6(n){ return Math.round((Number(n)||0)*1e6)/1e6; }
+function recomputeStock(m){ m.stockPills = q6(activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0)); }
 function fefoOrder(m, precomputedBatches){
   return (precomputedBatches || activeBatches(m)).slice().sort((a,b)=>{
     const ea = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
@@ -1239,10 +1245,66 @@ function fefoOrder(m, precomputedBatches){
    Each batch may carry its own mrpPerBox (set at restock time). If a batch has no
    mrpPerBox recorded (left blank at restock, or an old batch from before this existed),
    it falls back to the medicine's current mrpPerBox — i.e. "use the older/current price". */
+// SWITCH: false = every medicine is sold at its latest price (the medicine's own MRP / pills per box),
+// whatever batch the tablets come from. Set to true to bring back per-batch prices (the batch MRPs
+// entered at restock are still stored, so nothing is lost by leaving this off).
+const USE_BATCH_PRICES = false;
 function batchPricePerPill(m, b){
-  const mrp = (b && b.mrpPerBox!=null && b.mrpPerBox>0) ? b.mrpPerBox : m.mrpPerBox;
+  const mrp = (USE_BATCH_PRICES && b && b.mrpPerBox!=null && b.mrpPerBox>0) ? b.mrpPerBox : m.mrpPerBox;
   return (Number(mrp)||0) / (Number(m.pillsPerBox)||1);
 }
+// Price for `pills` taken in the same order stock is deducted (nearest expiry first), each batch at its own
+// price. `skip` = pills of this medicine already on the bill, so a second line continues after the first.
+function priceForPills(m, pills, skip){
+  pills = Number(pills)||0; if(pills<=0) return 0;
+  const ppb = Number(m.pillsPerBox)||1;
+  const segs = [];                                    // [pills taken from this batch, that batch's MRP per box]
+  let toSkip = Number(skip)||0, remaining = pills;
+  for(const b of fefoOrder(m)){
+    let avail = Number(b.pillsRemaining)||0;
+    if(toSkip>0){ const sk = Math.min(avail,toSkip); avail -= sk; toSkip -= sk; }
+    if(avail<=0) continue;
+    if(remaining<=0) break;
+    const take = Math.min(avail, remaining);
+    const mrp = (USE_BATCH_PRICES && b && b.mrpPerBox!=null && b.mrpPerBox>0) ? b.mrpPerBox : m.mrpPerBox;
+    segs.push([take, Number(mrp)||0]); remaining -= take;
+  }
+  if(remaining>0) segs.push([remaining, Number(m.mrpPerBox)||0]); // beyond recorded stock: base price
+  return exactLineTotal(segs, ppb);
+}
+// Adds up (pills x box price / pills-per-box) without floating-point drift. When pill counts are whole
+// numbers and prices have at most 2 decimals (the normal case) the maths is done in whole paisas and
+// rounded half-up once, so a total like 16.885 can never turn into 16.88 by accident.
+function exactLineTotal(segs, ppb){
+  const exactOk = Number.isInteger(ppb) && ppb>0 && segs.every(([t,mrp])=> Number.isInteger(t) && Math.abs(mrp*100-Math.round(mrp*100))<1e-6);
+  if(exactOk){
+    let num = 0; segs.forEach(([t,mrp])=>{ num += t*Math.round(mrp*100); });   // = total paisas x pills-per-box
+    if(Number.isSafeInteger(2*num+ppb)) return Math.floor((2*num+ppb)/(2*ppb))/100;
+  }
+  let total = 0; segs.forEach(([t,mrp])=>{ total += t*(mrp/ppb); });
+  return r2(total);
+}
+function lineCalc(m, pills, skip){
+  const subtotal = priceForPills(m, pills, skip);
+  return { pricePerPill: (Number(pills)>0) ? subtotal/Number(pills) : nextBatchUnitPrice(m), subtotal };
+}
+// Re-prices every line of the current bill from scratch, in order, following exactly the same
+// batch order stock will be deducted in. Run after any line is removed/edited or days change, so a
+// line can never keep a price that assumed another line (now gone) was taken first.
+function repriceBillItems(){
+  const taken = {};
+  bill.items.forEach(it=>{
+    const med = inventory.find(m=>m.id===it.medId);
+    const skip = taken[it.medId]||0;
+    taken[it.medId] = skip + (Number(it.pills)||0);
+    if(!med) return;                                   // medicine was deleted: keep the saved price
+    const lc = lineCalc(med, it.pills, skip);
+    it.pricePerPill = lc.pricePerPill;
+    if(it.special){ it.baseSubtotal = lc.subtotal; it.subtotal = r2(lc.subtotal + (Number(it.appliedFee)||0)); }
+    else it.subtotal = lc.subtotal;
+  });
+}
+function billPendingSkip(medId){ return bill.items.filter(x=>x.medId===medId).reduce((s,x)=>s+(Number(x.pills)||0),0); }
 function nextBatchUnitPrice(m){
   // The price that will actually be charged for the next pill sold, following the same
   // FEFO order stock is drawn from — so billing price always matches the batch being dispensed.
@@ -1250,22 +1312,30 @@ function nextBatchUnitPrice(m){
   if(order.length) return batchPricePerPill(m, order[0]);
   return (Number(m.mrpPerBox)||0) / (Number(m.pillsPerBox)||1);
 }
+// Overselling is allowed (stock may exist on the shelf without being entered in the app): stock simply
+// stops at 0. Returns how many pills were REALLY taken out of stock, so a later delete/edit of the bill
+// gives back only that much and never creates phantom stock.
 function deductStock(m, pills){
-  let remaining = pills;
+  let remaining = Number(pills)||0, taken = 0;
   for(const b of fefoOrder(m)){
     if(remaining<=0) break;
     const take = Math.min(b.pillsRemaining, remaining);
-    b.pillsRemaining -= take;
-    remaining -= take;
+    b.pillsRemaining = q6(b.pillsRemaining - take);
+    remaining = q6(remaining - take);
+    taken = q6(taken + take);
     b.updatedAt = Date.now();
   }
   recomputeStock(m);
+  return taken;
 }
+// How many pills of a saved bill line were actually deducted from stock (older bills: the full quantity).
+function stockBack(it){ return (it && it.ded!=null) ? (Number(it.ded)||0) : (Number(it && it.pills)||0); }
 function returnStock(m, pills){
   // Used when an old bill is edited/undone — put pills back into the batch nearest
   // to expiry (the one most likely to have been sold from), or a fresh undated batch.
+  pills = Number(pills)||0; if(pills<=0) return;
   const batches = fefoOrder(m);
-  if(batches.length){ batches[0].pillsRemaining += pills; batches[0].updatedAt = Date.now(); }
+  if(batches.length){ batches[0].pillsRemaining = q6(batches[0].pillsRemaining + pills); batches[0].updatedAt = Date.now(); }
   else {
     m.batches = m.batches||[];
     m.batches.push({ id:uid(), boxes:null, pillsRemaining:pills, originalPills:pills, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
@@ -1379,6 +1449,7 @@ function pickDatePickerDay(d){
 // these two — still need the real full render() once the modal itself is closed.
 function applyDatePickerResult(value){
   const kind = datePickerUi.targetKind, args = datePickerUi.targetArgs;
+  document.body.classList.remove("dp-open");
   datePickerUi.open = false;
   document.body.classList.remove("dp-open");
   if(kind==="report"){ toolsUi.date = value||""; renderDatePickerModal(); renderOverlays(); syncMenuHistory(); }
@@ -1955,10 +2026,16 @@ function renderShareModal(){
    false with no dialog shown), which made delete buttons look broken.
    This custom modal replaces confirm() everywhere so it always works. */
 let confirmState = null; // { message, onYes, confirmLabel }
-function askConfirm(message, onYes, confirmLabel){ confirmState = { message, onYes, confirmLabel }; renderConfirmModal(); }
+function askConfirm(message, onYes, confirmLabel, altLabel, onAlt){ confirmState = { message, onYes, confirmLabel, altLabel, onAlt }; renderConfirmModal(); }
 function cancelConfirm(){ confirmState = null; renderConfirmModal(); }
 function proceedConfirm(){
   const fn = confirmState && confirmState.onYes;
+  confirmState = null;
+  renderConfirmModal();
+  if(fn) fn();
+}
+function proceedConfirmAlt(){
+  const fn = confirmState && confirmState.onAlt;
   confirmState = null;
   renderConfirmModal();
   if(fn) fn();
@@ -1972,31 +2049,35 @@ function renderConfirmModal(){
       <div class="modal">
         <div class="modal-head"><strong>Please confirm</strong></div>
         <div class="modal-body">${esc(confirmState.message)}</div>
-        <div class="modal-actions">
+        ${confirmState.altLabel ? `<div class="modal-actions" style="flex-direction:column;">
+          <button class="btn btn-primary" onclick="proceedConfirm()">${esc(confirmState.confirmLabel || "OK")}</button>
+          <button class="btn btn-outline" onclick="proceedConfirmAlt()">${esc(confirmState.altLabel)}</button>
+          <button class="btn btn-outline" onclick="cancelConfirm()">Cancel</button>
+        </div>` : `<div class="modal-actions">
           <button class="btn btn-outline flex1" onclick="cancelConfirm()">Cancel</button>
           <button class="btn flex1" style="background:var(--danger);color:#fff;" onclick="proceedConfirm()">${esc(confirmState.confirmLabel || "Delete")}</button>
-        </div>
+        </div>`}
       </div>
     </div>`;
 }
 
 /* ===================== NEW BILL TAB ===================== */
-function billMedTotal(){ return bill.items.reduce((s,it)=>s+it.subtotal,0); }
-function billMedDiscount(){ return Math.min(Number(bill.medsDiscount)||0, billMedTotal()); }
-function billMedNet(){ return billMedTotal() - billMedDiscount(); }
-function billExtrasTotal(){ return bill.extras.reduce((s,it)=>s+it.amount,0); }
-function billTestsGross(){ return bill.tests.reduce((s,t)=>s+t.amount,0); }
-function billTestsDiscount(){ return Math.min(Number(bill.testsDiscount)||0, billTestsGross()); }
-function billTestsTotal(){ return billTestsGross() - billTestsDiscount(); }
-function billFeeGross(){ return Number(bill.fee)||0; }
-function billFeeDiscount(){ return Math.min(Number(bill.feeDiscount)||0, billFeeGross()); }
-function billFeeNet(){ return billFeeGross() - billFeeDiscount(); }
+function billMedTotal(){ return r2(bill.items.reduce((s,it)=>s+(Number(it.subtotal)||0),0)); }
+function billMedDiscount(){ return r2(Math.min(Math.max(Number(bill.medsDiscount)||0,0), billMedTotal())); }
+function billMedNet(){ return r2(billMedTotal() - billMedDiscount()); }
+function billExtrasTotal(){ return r2(bill.extras.reduce((s,it)=>s+(Number(it.amount)||0),0)); }
+function billTestsGross(){ return r2(bill.tests.reduce((s,t)=>s+(Number(t.amount)||0),0)); }
+function billTestsDiscount(){ return r2(Math.min(Math.max(Number(bill.testsDiscount)||0,0), billTestsGross())); }
+function billTestsTotal(){ return r2(billTestsGross() - billTestsDiscount()); }
+function billFeeGross(){ return r2(Math.max(Number(bill.fee)||0,0)); }
+function billFeeDiscount(){ return r2(Math.min(Math.max(Number(bill.feeDiscount)||0,0), billFeeGross())); }
+function billFeeNet(){ return r2(billFeeGross() - billFeeDiscount()); }
 function billFeeContribution(){ return bill.feeIncluded ? billFeeNet() : 0; }
-function billGrandTotal(){ return billMedNet() + billExtrasTotal() + billTestsTotal() + billFeeContribution(); }
+function billGrandTotal(){ return r2(billMedNet() + billExtrasTotal() + billTestsTotal() + billFeeContribution()); }
 function onBillMedsDiscount(v){ bill.medsDiscount=v; scheduleRender(); }
 function onExtraAmount(v){ bill.extraAmount=v; scheduleRender(); }
 function addExtraItem(){
-  const amount = Number(bill.extraAmount);
+  const amount = r2(Number(bill.extraAmount));
   if(!amount || amount<=0) return;
   bill.extras.push({ id:uid(), amount });
   bill.extraAmount="";
@@ -2015,14 +2096,14 @@ function addSelectedBillTests(){
   bill.selectedTestIds.forEach(id=>{
     const test = allTests().find(t=>t.id===id);
     if(!test) return;
-    const amount = Number(testPrices[id])||0;
+    const amount = r2(Number(testPrices[id])||0);
     bill.tests.push({ id:uid(), testId:test.id, name:test.name, amount });
   });
   bill.selectedTestIds = [];
   render();
 }
 function onBillTestItemAmount(idx, v){
-  if(bill.tests[idx]) bill.tests[idx].amount = Number(v)||0;
+  if(bill.tests[idx]) bill.tests[idx].amount = r2(Math.max(0, Number(v)||0));
   scheduleRender();
 }
 function removeBillTest(idx){ bill.tests.splice(idx,1); render(); }
@@ -2191,10 +2272,10 @@ function onGlobalDays(v){
   bill.items.forEach(it=>{
     if(it.linkedToGlobalDays){
       it.pills = (it.perDay||0)*days;
-      it.subtotal = it.pricePerPill*it.pills;
       it.note = days>0 ? `${it.perDay}/day × ${days}d` : `${it.perDay}/day × (set days below)`;
     }
   });
+  repriceBillItems();   // new quantity => price it batch by batch and round to 2 decimals
   scheduleRender();
 }
 function billComputedPills(){
@@ -2224,25 +2305,26 @@ function addBillItem(){
   const pricePerPill = nextBatchUnitPrice(med);
   if(bill.qtyMode==="total"){
     const pills = Number(bill.pills)||0;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note:"", perDay:null, linkedToGlobalDays:false});
+    bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note:"", perDay:null, linkedToGlobalDays:false});
   } else if(bill.daysMode==="same"){
     const perDay = Number(bill.perDay)||0;
     const days = Number(bill.globalDays)||0;
     const pills = perDay*days;
     const note = days>0 ? `${perDay}/day × ${days}d` : `${perDay}/day × (set days below)`;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:true});
+    bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note, perDay, linkedToGlobalDays:true});
   } else {
     const perDay = Number(bill.perDay)||0;
     const days = Number(bill.days)||0;
     const pills = perDay*days;
     const note = `${perDay}/day × ${days}d`;
-    bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills, note, perDay, linkedToGlobalDays:false});
+    bill.items.push({medId:med.id, name:med.name, pills, ...lineCalc(med,pills,billPendingSkip(med.id)), note, perDay, linkedToGlobalDays:false});
   }
   bill.selectedMedId=null; bill.query=""; bill.pills=""; bill.perDay=""; bill.days="";
   render();
 }
 function removeBillItem(idx){
   bill.items.splice(idx,1);
+  repriceBillItems();
   if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee(); // the removed item may have held the whole-bill fee, or been the "last" one it should move to
   render();
 }
@@ -2250,6 +2332,7 @@ function editBillItem(idx){
   const it = bill.items[idx];
   if(!it) return;
   bill.items.splice(idx,1);
+  repriceBillItems();
   if(it.special){
     // Route special-medicine items back through the special add flow (not the normal one)
     // so re-adding them keeps their specialCategory/applying-fee handling intact.
@@ -2278,14 +2361,14 @@ function pendingBillSubtotal(){
   const med = inventory.find(m=>m.id===bill.selectedMedId);
   const pills = billComputedPills();
   if(!med || !pills || pills<=0) return 0;
-  return nextBatchUnitPrice(med)*pills;
+  return priceForPills(med, pills, billPendingSkip(med.id));
 }
 function pendingSpecialBillSubtotal(){
   const med = inventory.find(m=>m.id===bill.selectedSpecialMedId);
   const pills = billComputedSpecialPills();
   if(!med || !pills || pills<=0) return 0;
   const fee = bill.applyingFeeMode==='perItem' ? (Number(bill.applyingFeeDraft)||0) : 0;
-  return nextBatchUnitPrice(med)*pills + fee;
+  return r2(priceForPills(med, pills, billPendingSkip(med.id)) + fee);
 }
 
 /* ---- Special-category medicines: separate search/add flow, see specialMatches() in
@@ -2324,7 +2407,7 @@ function recomputeWholeApplyingFee(){
     const last = specials[specials.length-1];
     last.feeMode = 'whole';
     last.appliedFee = fee;
-    last.subtotal = last.baseSubtotal + fee;
+    last.subtotal = r2(last.baseSubtotal + fee);
     last.note = fee>0 ? `${last.baseNote?last.baseNote+" · ":""}+applying fee ${CURRENCY}${money(fee)}` : (last.baseNote||"");
   }
 }
@@ -2332,15 +2415,16 @@ function addSpecialBillItem(){
   const med = inventory.find(m=>m.id===bill.selectedSpecialMedId);
   if(!med || !canAddSpecialBillItem()) return;
   const pills = billComputedSpecialPills();
-  const pricePerPill = nextBatchUnitPrice(med);
-  const baseSubtotal = pricePerPill*pills;
+  const lc = lineCalc(med, pills, billPendingSkip(med.id));
+  const pricePerPill = lc.pricePerPill;
+  const baseSubtotal = lc.subtotal;
   const item = { medId:med.id, name:med.name, pills, pricePerPill, subtotal:baseSubtotal, note:"", perDay:null, linkedToGlobalDays:false,
     special:true, specialCategory:med.specialCategory||"", baseSubtotal, baseNote:"", appliedFee:0, feeMode:null };
   if(bill.applyingFeeMode==='perItem'){
     const fee = Number(bill.applyingFeeDraft)||0;
     item.feeMode = 'perItem';
     item.appliedFee = fee;
-    item.subtotal = baseSubtotal + fee;
+    item.subtotal = r2(baseSubtotal + fee);
     item.note = fee>0 ? `+applying fee ${CURRENCY}${money(fee)}` : "";
   }
   bill.items.push(item);
@@ -2353,12 +2437,26 @@ function canCompleteBill(){ return bill.patient.trim() && (bill.items.length>0 |
 
 /* ===================== TOAST ===================== */
 let toastTimer = null;
-function showToast(msg){
+// onTap (optional): makes the toast itself tappable — underlined, and left up longer (a plain
+// toast reads in under 1.8s; one worth tapping needs more time than that to actually be tapped).
+// Tapping it calls onTap and dismisses the toast; it also still auto-hides either way.
+function showToast(msg, onTap){
   const el = document.getElementById("toast");
   el.textContent = msg;
   el.classList.remove("hidden");
+  el.classList.toggle("tappable", !!onTap);
+  el.onclick = onTap ? ()=>{ el.classList.add("hidden"); clearTimeout(toastTimer); onTap(); } : null;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>{ el.classList.add("hidden"); }, 1800);
+  toastTimer = setTimeout(()=>{ el.classList.add("hidden"); }, onTap ? 5000 : 1800);
+}
+// Shows exactly what the last scanned barcode/QR code contained, even when nothing in it could
+// be used to fill the form — so a scan that "did nothing" is never just a dead end. Reuses the
+// same raw-text + hex display already used for a code that doesn't parse as GS1 at all.
+function revealLastScan(){
+  const s = window.__lastScan;
+  if(!s || !s.text) return;
+  const hex = Array.from(s.text.slice(0,24)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
+  openShare("Scanned text (" + s.text.length + " characters):\n" + visibleScanText(s.text) + "\n\nFirst bytes (hex): " + hex);
 }
 
 function completeBill(){
@@ -2366,7 +2464,7 @@ function completeBill(){
   const _undoSnap = captureUndoSnap();
   bill.items.forEach(it=>{
     const med = inventory.find(m=>m.id===it.medId);
-    if(med) deductStock(med, it.pills);
+    if(med) it.ded = deductStock(med, it.pills);   // remember what really left stock (overselling allowed)
   });
   saveInventory();
   const tx = { id:uid(), timestamp:Date.now(), updatedAt:Date.now(), patientName:bill.patient.trim(),
@@ -2390,7 +2488,7 @@ function buildBillText(tx){
   lines.push(``);
   if(tx.items.length){
     lines.push(`Medicines:`);
-    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.pricePerPill*it.pills)}`));
+    tx.items.forEach((it,i)=> lines.push(`${i+1}. ${it.name} — ${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} — ${CURRENCY}${money(it.subtotal!=null ? it.subtotal : it.pricePerPill*it.pills)}`));
     if(tx.medsDiscount) lines.push(`Medicines discount: -${CURRENCY}${money(tx.medsDiscount)}`);
     lines.push(``);
   }
@@ -2512,8 +2610,8 @@ function closeTools(){ toolsUi.open=false; renderOverlays(); }
 const fmtMoney = v => `${CURRENCY}${money(v)}`;
 function localDateStr(ts){ const d=new Date(ts||Date.now()); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function dayStartTs(ts){ const d=new Date(ts); d.setHours(0,0,0,0); return d.getTime(); }
-function netParts(t){ return { meds:(t.medTotal||0)-(t.medsDiscount||0), tests:(t.testsTotal||0)-(t.testsDiscount||0), extras:t.extrasTotal||0,
-  fee:(t.doctorFee||0)-(t.feeDiscount||0), disc:(t.medsDiscount||0)+(t.testsDiscount||0)+(t.feeDiscount||0), total:t.grandTotal||0 }; }
+function netParts(t){ return { meds:r2((t.medTotal||0)-(t.medsDiscount||0)), tests:r2((t.testsTotal||0)-(t.testsDiscount||0)), extras:r2(t.extrasTotal||0),
+  fee:r2((t.doctorFee||0)-(t.feeDiscount||0)), disc:r2((t.medsDiscount||0)+(t.testsDiscount||0)+(t.feeDiscount||0)), total:r2(t.grandTotal||0) }; }
 function txBetween(a,b){ return visibleTransactions().filter(t=>t.timestamp>=a && t.timestamp<b); }
 
 // ---- 1. Repeat a bill + patient history ----
@@ -2524,15 +2622,15 @@ function repeatBillFromTx(id){
     let skipped=0, capped=0;
     (t.items||[]).forEach(it=>{
       const med = inventory.find(m=>m.id===it.medId);
-      if(!med || med.deleted || it.special || !(med.stockPills>0)){ skipped++; return; }
-      let pills = it.pills; if(pills>med.stockPills){ pills=med.stockPills; capped++; }
-      const price = nextBatchUnitPrice(med);
-      nb.items.push({ medId:med.id, name:med.name, pills, pricePerPill:price, subtotal:price*pills, note:it.note||"", perDay:it.perDay==null?null:it.perDay, linkedToGlobalDays:false });
+      if(!med || med.deleted || it.special){ skipped++; return; }
+      const pills = it.pills;
+      const lc = lineCalc(med, pills, nb.items.filter(x=>x.medId===med.id).reduce((a,x)=>a+(Number(x.pills)||0),0));
+      nb.items.push({ medId:med.id, name:med.name, pills, pricePerPill:lc.pricePerPill, subtotal:lc.subtotal, note:it.note||"", perDay:it.perDay==null?null:it.perDay, linkedToGlobalDays:false });
     });
     bill = nb; toolsUi.open=false;
     if(tab!=="bill") setTab("bill"); else render();
     renderOverlays();
-    showToast(skipped||capped ? `Bill copied — ${skipped?skipped+" item(s) skipped (out of stock/special). ":""}${capped?capped+" quantity adjusted to stock.":""}` : "✓ Previous bill copied — check and complete");
+    showToast(skipped||capped ? `Bill copied — ${skipped?skipped+" item(s) skipped (special/removed). ":""}${capped?capped+" quantity adjusted to stock.":""}` : "✓ Previous bill copied — check and complete");
   };
   if(bill.items.length) askConfirm("Replace the bill you're working on with this one?", go, "Replace"); else go();
 }
@@ -2570,7 +2668,7 @@ function patientBodyHtml(){
 function topSoldMeds(n){
   const cutoff = Date.now()-60*86400000, cnt = {};
   visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; (t.items||[]).forEach(it=>{ if(!it.special) cnt[it.medId]=(cnt[it.medId]||0)+1; }); });
-  return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(id=>inventory.find(m=>m.id===id)).filter(m=>m && !m.deleted && !m.specialCategory && m.stockPills>0).slice(0,n);
+  return Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(id=>inventory.find(m=>m.id===id)).filter(m=>m && !m.deleted && !m.specialCategory).slice(0,n);
 }
 // Small grey tag after a Frequently-sold name: first letter of the category (S. prefix if tagged) + strength, e.g. "T · 60 mg".
 function quickPickTag(m){
@@ -2696,19 +2794,31 @@ function weekChartHtml(){
 }
 function topSellersHtml(){
   const cutoff=Date.now()-30*86400000, map={};
-  visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; (t.items||[]).forEach(it=>{ const k=it.medId||it.name; const e=map[k]=map[k]||{name:it.name,qty:0,rev:0}; e.qty+=it.pills||0; e.rev+=it.subtotal!=null?it.subtotal:(it.pricePerPill||0)*(it.pills||0); }); });
+  visibleTransactions().forEach(t=>{ if(t.timestamp<cutoff) return; const its=t.items||[], net=netLineAmounts(its.map(it=>it.subtotal!=null?it.subtotal:(it.pricePerPill||0)*(it.pills||0)), t.medsDiscount); its.forEach((it,i)=>{ const k=it.medId||it.name; const e=map[k]=map[k]||{name:it.name,qty:0,rev:0}; e.qty+=it.pills||0; e.rev+=net[i]; }); });
   const list=Object.values(map).sort((a,b)=>b.qty-a.qty).slice(0,10); if(!list.length) return `<p class="small faint">No sales in the last 30 days.</p>`;
   const max=list[0].qty||1;
   return `<p class="small" style="margin:0 0 8px;">Top 10 medicines by quantity — last 30 days</p>`+list.map((e,i)=>`<div style="margin-bottom:10px;"><div class="row"><span style="font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i+1}. ${esc(e.name)}</span><span class="small" style="flex-shrink:0;margin-left:8px;">${e.qty} · ${fmtMoney(e.rev)}</span></div>
     <div style="height:6px;border-radius:99px;background:var(--primarySoft);margin-top:4px;"><div style="height:100%;width:${Math.round(e.qty/max*100)}%;border-radius:99px;background:var(--primary);"></div></div></div>`).join("");
 }
 function costPct(){ let v=NaN; try{ v=Number(localStorage.getItem("clinic_cost_pct")); }catch(e){} return isFinite(v)&&v>0&&v<=100 ? v : 80; }
+// Two ways to count purchase cost: an average % of the selling price (estimate), or the real TOTAL
+// purchase cost you type in for the chosen period (Today / 7 days / 30 days — each remembered).
+function costMode(){ try{ return localStorage.getItem("clinic_cost_mode")==="total" ? "total" : "pct"; }catch(e){ return "pct"; } }
+function costTotalFor(range){ let v=NaN; try{ v=Number(localStorage.getItem("clinic_cost_total_"+range)); }catch(e){} return isFinite(v)&&v>=0 ? v : 0; }
 function profitCalc(){
   const days=Number(toolsUi.range)||7, today=dayStartTs(Date.now()), a=today-(days-1)*86400000, list=txBetween(a, today+86400000);
-  const rev=list.reduce((s,t)=>s+netParts(t).meds,0), cost=rev*costPct()/100; return { n:list.length, rev, cost, profit:rev-cost };
+  const rev=list.reduce((s,t)=>s+netParts(t).meds,0), total=costMode()==="total";
+  const cost = total ? costTotalFor(String(days)) : rev*costPct()/100;
+  return { n:list.length, rev, cost, profit:rev-cost, total };
 }
 function profitOutHtml(){ const p=profitCalc(); return `<div class="row"><span class="small">Medicine sales (after discounts)</span><strong>${fmtMoney(p.rev)}</strong></div>
-  <div class="row"><span class="small">Estimated purchase cost</span><strong>${fmtMoney(p.cost)}</strong></div><div class="row" style="margin-top:6px;"><span style="font-weight:700;">Estimated profit</span><strong style="color:var(--success);font-size:18px;">${fmtMoney(p.profit)}</strong></div>`; }
+  <div class="row"><span class="small">${p.total?"Purchase cost (your total)":"Estimated purchase cost"}</span><strong>${fmtMoney(p.cost)}</strong></div><div class="row" style="margin-top:6px;"><span style="font-weight:700;">${p.total?"Profit":"Estimated profit"}</span><strong style="color:var(--success);font-size:18px;">${fmtMoney(p.profit)}</strong></div>`; }
+function setCostMode(m){ try{ localStorage.setItem("clinic_cost_mode", m==="total"?"total":"pct"); }catch(e){} renderToolsModal(); }
+function onCostTotal(v){
+  const n=Number(String(v).replace(/[^0-9.]/g,""));
+  try{ localStorage.setItem("clinic_cost_total_"+(Number(toolsUi.range)||7), String(isFinite(n)?n:0)); }catch(e){}
+  const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml();
+}
 function onCostPct(v){ const n=Number(String(v).replace(/[^0-9.]/g,"")); if(n>0&&n<=100){ try{ localStorage.setItem("clinic_cost_pct", String(n)); }catch(e){} } const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml(); }
 function reportsBodyHtml(){
   const tabs=[["closing","Closing"],["week","7 days"],["top","Top sellers"],["profit","Profit"]];
@@ -2729,9 +2839,12 @@ function reportsBodyHtml(){
   } else if(toolsUi.tab==="week") body=weekChartHtml();
   else if(toolsUi.tab==="top") body=topSellersHtml();
   else body=`<div class="flex gap2" style="margin-bottom:12px;">${[["1","Today"],["7","7 days"],["30","30 days"]].map(([k,l])=>`<button type="button" class="btn ${toolsUi.range===k?"btn-primary":"btn-outline"}" style="flex:1;padding:8px 4px;font-size:12px;" onclick="rpSet('range','${k}')">${l}</button>`).join("")}</div>
-      <label class="field-label">Average purchase cost, % of selling price</label><input ${NOAC_RAW} inputmode="decimal" value="${costPct()}" oninput="onCostPct(this.value)" class="mb2">
+      <div class="flex gap2" style="margin-bottom:10px;">${[["pct","Average %"],["total","Total cost"]].map(([k,l])=>`<button type="button" class="btn ${costMode()===k?"btn-primary":"btn-outline"}" style="flex:1;padding:8px 4px;font-size:12px;" onclick="setCostMode('${k}')">${l}</button>`).join("")}</div>
+      ${costMode()==="total"
+        ? `<label class="field-label">Total purchase cost for ${{"1":"today","7":"the last 7 days","30":"the last 30 days"}[String(Number(toolsUi.range)||7)]}, ${CURRENCY}</label><input ${NOAC_RAW} inputmode="decimal" value="${costTotalFor(String(Number(toolsUi.range)||7))||""}" placeholder="e.g. 150000" oninput="onCostTotal(this.value)" class="mb2">`
+        : `<label class="field-label">Average purchase cost, % of selling price</label><input ${NOAC_RAW} inputmode="decimal" value="${costPct()}" oninput="onCostPct(this.value)" class="mb2">`}
       <div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;" id="profitOut">${profitOutHtml()}</div>
-      <p class="small faint">This is an estimate: the app doesn't store purchase prices, so profit = sales × (100 − cost %).</p>`;
+      <p class="small faint">${costMode()==="total"?"Profit = medicine sales (after discounts) minus the total purchase cost you entered for this period.":"This is an estimate: the app doesn't store purchase prices, so profit = sales × (100 − cost %)."}</p>`;
   return seg+body;
 }
 function renderToolsModal(){
@@ -2940,7 +3053,7 @@ function buildReceiptLines(tx, D){
   (tx.items||[]).forEach(it=>{ totalQty += it.pills; });
   if(shown.length){
     shown.forEach(it=>{
-      const nm = `${it.name}${it.note?` (${it.note})`:""}`, amt = money$(it.pricePerPill*it.pills);
+      const nm = `${it.name}${it.note?` (${it.note})`:""}`, amt = money$(it.subtotal!=null ? it.subtotal : it.pricePerPill*it.pills);
       if(D.itemStyle==="one") lr(`${fmtInt(it.pills)} x ${nm}`.slice(0,W-amt.length-1), amt, {b:D.boldItems});
       else{
         line(nm, {b:D.boldItems});
@@ -3697,7 +3810,7 @@ function gs1DateToIso(yymmdd){
     return ymd(d.getFullYear(), d.getMonth(), d.getDate());
   }
   if(dd<1||dd>31) return null;
-  return ymd(year, mm-1, dd);
+  return ymd(year, mm-1, Math.min(dd, new Date(year, mm, 0).getDate()));
 }
 // Longest value allowed for the variable-length AIs we might meet. Only used when separators
 // are missing and we have to guess where one field ends and the next begins.
@@ -3845,7 +3958,10 @@ function parseGS1Barcode(raw){
 // tryHarder trades a bit of decode speed for accuracy — worth it here since a GS1 DataMatrix is
 // small and dense; maxNumberOfSymbols:1 stops it looking for more than one code per image/frame,
 // which is both faster and avoids ever ambiguously returning the wrong one of two codes in frame.
-const ZXING_READ_OPTIONS = { formats: ["DataMatrix","QRCode","Code128"], tryHarder: true, maxNumberOfSymbols: 1 };
+// Medicine boxes use far more than just DataMatrix/QRCode/Code128 — Code39, EAN-13/8, UPC,
+// ITF, Codabar, MicroQRCode, rMQRCode and MaxiCode all show up in the wild too, and leaving
+// them out meant those boxes simply couldn't be scanned at all, not even badly.
+const ZXING_READ_OPTIONS = { formats: ["DataMatrix","QRCode","MicroQRCode","rMQRCode","Code128","Code39","Code93","Codabar","EAN-13","EAN-8","UPC-A","UPC-E","ITF","PDF417","Aztec","DataBar","DataBarExpanded","DataBarLimited","MaxiCode"], tryHarder: true, maxNumberOfSymbols: 1 };
 // A dotty inkjet-printed Data Matrix (very common on medicine boxes) can defeat the library's
 // default settings even when it looks perfectly sharp to a person — the printed dots bleed into
 // each other or leave gaps, so the "black/white" decision the decoder makes per module comes out
@@ -3874,7 +3990,7 @@ async function getNativeBarcodeDetector(){
     if(typeof BarcodeDetector === "undefined") return null;
     const fmts = await BarcodeDetector.getSupportedFormats();
     if(!fmts || fmts.indexOf("data_matrix") === -1) return null;
-    _nativeDetector = new BarcodeDetector({ formats: ["data_matrix","qr_code","code_128"] });
+    _nativeDetector = new BarcodeDetector({ formats: ["data_matrix","qr_code","code_128","code_39","code_93","codabar","ean_13","ean_8","upc_a","upc_e","itf","pdf417","aztec"] });
   }catch(e){ _nativeDetector = null; }
   return _nativeDetector;
 }
@@ -4162,6 +4278,26 @@ function parseDigitalLink(text){
   gs1DeriveProduct(out);
   return out;
 }
+// Not every manufacturer uses GS1 — some QR codes are just plain "Label: value" lines, e.g.
+// Venus Pharma's "Product Name: Dexamethasone Injection\r\nProduct Strength: 4mg/1ml\r\n
+// GTIN:8964001832331\r\nDML No.000300\r\nReg, No. 012089\r\nwww.venuspharma.com.pk" — a real
+// GTIN and product name are sitting right there, just not in a shape the GS1 parser reads.
+// Only the handful of labels this app actually has a box for are pulled out; things like a DML
+// or Registration number (no colon after them here anyway) or a website are left alone.
+function parseKeyValueCode(text){
+  const out = { gtin:null, batch:null, mfgDate:null, expiryDate:null, serial:null, productText:null, productName:null, price:null, strength:null };
+  String(text).split(/[\r\n]+/).forEach(line=>{
+    const m = line.match(/^\s*([A-Za-z][A-Za-z .]{1,30}?)\s*:\s*(.+?)\s*$/);
+    if(!m) return;
+    const key = m[1].toLowerCase().replace(/\s+/g," ").trim(), val = m[2].trim();
+    if(!val) return;
+    if(/^product\s*name$/.test(key)) out.productName = val;
+    else if(/^(product\s*)?strength$/.test(key)) out.strength = val;
+    else if(key==="gtin"){ const digits = val.replace(/\s+/g,""); if(/^\d{8,14}$/.test(digits)) out.gtin = digits; }
+    else if(/^batch(\s*no\.?)?$/.test(key) && !out.batch) out.batch = val;
+  });
+  return (out.productName || out.gtin) ? out : null;
+}
 function handleScanText(raw){
   const target = scanUi.pending;
   scanUi.pending = null;
@@ -4175,11 +4311,15 @@ function handleScanText(raw){
     const dl = parseDigitalLink(text);
     if(dl) parsed = dl;
     else {
-      const plain = text.replace(/[\x00-\x1f\x7f]/g,"").trim();
-      if(plain && plain.length<=128) parsed = Object.assign(parseGS1Barcode(""), { gtin: plain });
+      const kv = parseKeyValueCode(text);
+      if(kv) parsed = kv;
+      else {
+        const plain = text.replace(/[\x00-\x1f\x7f]/g,"").trim();
+        if(plain && plain.length<=128) parsed = Object.assign(parseGS1Barcode(""), { gtin: plain });
+      }
     }
   }
-  if(!parsed.gtin && !parsed.batch && !parsed.expiryDate){
+  if(!parsed.gtin && !parsed.batch && !parsed.expiryDate && !parsed.productName){
     // The barcode WAS read successfully — it just isn't in a shape the GS1 parser recognises.
     // Show exactly what it contained (rather than a toast that vanishes) so it can be copied/shared.
     const hex = Array.from(text.slice(0,24)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
@@ -4220,7 +4360,7 @@ function applyScanToEditForm(medId, parsed){
     }
     inv.editForm.gtin = parsed.gtin;
   }
-  showToast(parsed.gtin ? "✓ Barcode linked to this medicine" : "Scanned, but no GTIN was found in that code");
+  showToast(parsed.gtin ? "✓ Barcode linked to this medicine" : "Scanned, but no GTIN was found in that code", parsed.gtin ? null : revealLastScan);
   render();
 }
 /* Barcodes often carry the full product title in one string, e.g. "Terbisil 10 lotion 20 mL".
@@ -4322,9 +4462,17 @@ function parseBoxTextDetails(text){
   if(pack) out.perBox = pack[2] ? Number(pack[1])*Number(pack[2]) : Number(pack[1]);
   const compStart = t.search(/composition/i);
   if(compStart>=0){
-    const rest = t.slice(compStart);
-    const compEnd = rest.search(/\b(indication|dosage|direction|storage|contra|side\s*effect|precaution|warning)\b/i);
-    const block = compEnd>0 ? rest.slice(0, compEnd) : rest.slice(0, 300);
+    // Pharma labels commonly print COMPOSITION and DOSAGE/INDICATION as side-by-side boxes, not
+    // stacked — OCR reading left-to-right across the whole width then sees "dosage" almost right
+    // after "composition" on the very same line it scans. Cutting on ANY occurrence of a stop
+    // word anywhere in the text threw the whole ingredient list away before it was ever read.
+    // Requiring the stop word to actually START a line only matches a genuine new section.
+    const restLines = t.slice(compStart).split("\n");
+    let compEndIdx = restLines.length;
+    for(let i=1;i<restLines.length;i++){
+      if(/^\s*(indication|dosage|direction|storage|contra|side\s*effect|precaution|warning)\b/i.test(restLines[i])){ compEndIdx=i; break; }
+    }
+    const block = restLines.slice(0, Math.min(compEndIdx, 12)).join("\n"); // hard cap either way, just in case
     const names=[], strengths=[];
     // A dose's digits must not be glued to a letter (so "Vitamin D3" isn't mistaken for a dose
     // starting at its "3"), and the LAST dose-looking number on the line wins — composition
@@ -4493,8 +4641,21 @@ async function processBoxPhotosInner(files, forceOffline){
           // Brand names on a box front are 1-3 words ("ORSUP D", "Panadol Extra") — a big bold
           // banner line like "HELP TO PREVENT OSTEOPOROSIS" is taller than the actual name here
           // but is a full sentence, so it's excluded from the race even though it's the tallest.
-          const big=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text) && l.text.trim().split(/\s+/).length<=3)
-            .sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
+          // The dosage form word on its own ("Tablet", "2x10 Tablets") is excluded too — that's
+          // what Category is for, and a small "Tablets" in a pack-size line can otherwise end up
+          // measured as "taller" than a brand name mangled by a logo/icon glyph next to it.
+          const formWordOnly = /^(\d+\s*[x×]\s*\d+\s*)?(tablets?|capsules?|syrups?|suspensions?|injections?|ointments?|creams?|lotions?|drops?|gels?|powders?|sachets?|sprays?)$/i;
+          const candidates=((r&&r.data&&r.data.lines)||[]).filter(l=>l.confidence>60 && real(l) && !/gtin|mfg|exp|b\.?\s*no|m\.?\s*r\.?\s*p|\d{9,}/i.test(l.text) && l.text.trim().split(/\s+/).length<=3 && !formWordOnly.test(l.text.trim()));
+          // The brand name is always near the top of the box front — prefer whichever of the
+          // surviving candidates sits in the upper half of the readable text, tallest first,
+          // rather than letting something from the bottom corner (pack size, barcode caption)
+          // win just because the logo mangled the real name's line height.
+          let big=null;
+          if(candidates.length){
+            const maxY=Math.max(...candidates.map(l=>l.bbox.y1));
+            const topHalf=candidates.filter(l=>l.bbox.y0 < maxY*0.5);
+            big=(topHalf.length?topHalf:candidates).sort((a,b)=>(b.bbox.y1-b.bbox.y0)-(a.bbox.y1-a.bbox.y0))[0];
+          }
           parsed.productName = big ? big.text.replace(/\s+/g," ").trim() : null; // never keep an unchecked guess
           if(parsed.productName || parsed.price || parsed.gtin || parsed.formula || parsed.form || parsed.perBox) applyScanToNewMedForm(parsed);
           else showToast("⚠ Couldn't read this photo — try again with the box upright and well lit");
@@ -4546,8 +4707,8 @@ function applyScanToNewMedForm(parsed){
   }
   // Only complain when there was genuinely nothing to write into the boxes.
   if(filled.length) showToast("✓ " + filled.join(" & ") + " filled in from the scan — please check");
-  else if(parsed.gtin) showToast("Barcode linked, but this code has no name or MRP to fill in — type them in");
-  else showToast("Nothing usable was found in that code");
+  else if(parsed.gtin) showToast("Barcode linked, but this code has no name or MRP to fill in — type them in", revealLastScan);
+  else showToast("Nothing usable was found in that code", revealLastScan);
   render();
 }
 function onRestockScanInput(v){ inv.restockScanText=v; }
@@ -4570,7 +4731,7 @@ function applyScanToRestock(medId, parsed){
     if(parsed.batch) got.push("batch");
     if(parsed.price){ inv.restockMrp = String(parsed.price); got.push("MRP"); }
     if(got.length) showToast("✓ " + got.join(", ") + " filled in from the scan — check, then tap Add");
-    else showToast("Nothing to fill in — that code has no batch, expiry or MRP");
+    else showToast("Nothing to fill in — that code has no batch, expiry or MRP", revealLastScan);
     render();
   };
   if(parsed.gtin && m.gtin && m.gtin!==parsed.gtin){
@@ -4633,7 +4794,7 @@ function findExactDuplicateMedicine(f, excludeId){
 }
 function addMedicine(skipRender){
   const f = inv.form;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return false;
+  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)) return false;
   const dup = findExactDuplicateMedicine(f);
   if(dup){
     showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Use Restock on it, or change a box if it's a different medicine.`);
@@ -4713,8 +4874,16 @@ function doRestock(id){
   if(m){
     const mrpVal = (inv.restockMrp!=="" && Number(inv.restockMrp)>0) ? Number(inv.restockMrp) : null;
     m.batches = m.batches||[];
-    m.batches.push({ id:uid(), boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, lotNo: inv.restockLotNo.trim()||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
-    if(mrpVal!=null){ m.mrpPerBox = mrpVal; m.updatedAt = Date.now(); } // new MRP becomes the current default going forward
+    const newBatchId = uid();
+    m.batches.push({ id:newBatchId, boxes, pillsRemaining: boxes*m.pillsPerBox, mrpPerBox: mrpVal, expiryDate: inv.restockExpiry||null, lotNo: inv.restockLotNo.trim()||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+    if(mrpVal!=null){
+      const oldBase = Number(m.mrpPerBox)||0;
+      if(USE_BATCH_PRICES && oldBase>0 && oldBase!==mrpVal){
+        // older batches that had no price of their own were following the medicine's price: pin them to it first
+        m.batches.forEach(b=>{ if(b.id!==newBatchId && b.mrpPerBox==null && (Number(b.pillsRemaining)||0)>0){ b.mrpPerBox = oldBase; b.updatedAt = Date.now(); } });
+      }
+      m.mrpPerBox = mrpVal; m.updatedAt = Date.now();
+    } // new MRP becomes the current default going forward
     recomputeStock(m);
     // A restock resolves whatever low-stock situation led to "we'll buy it later" being tapped
     // earlier — clear that suppression now so future low-stock warnings for this medicine work
@@ -4828,7 +4997,7 @@ function onEditCategoryPicked(v){
 }
 function saveEdit(id){
   const f = inv.editForm;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return false;
+  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)||f.stockPills==="") return false;
   const dup = findExactDuplicateMedicine(f, id);
   if(dup){
     showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Change a box if it's a different medicine.`);
@@ -4923,7 +5092,7 @@ function openCopyVariantForm(f, variant){
 // in (same validation addMedicine() itself uses), then reopens the form for the variant.
 function copyNewMedicineVariant(variant){
   const f = inv.form;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox) return;
+  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)) return;
   const snapshot = {...f};
   // Close the popup straight away so the tap feels instant, then do the save. addMedicine(true)
   // skips its own full re-render because openCopyVariantForm() re-renders once right after.
@@ -4938,7 +5107,7 @@ function copyNewMedicineVariant(variant){
 // variant — as a separate, new entry, not a further edit of the one just saved.
 function copyEditVariant(id, variant){
   const f = inv.editForm;
-  if(!f.name.trim()||!f.mrp||!f.pillsPerBox||f.stockPills==="") return;
+  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)||f.stockPills==="") return;
   const snapshot = {...f};
   inv.editCopyMenuOpen = false; renderCopyMenu();
   setTimeout(()=>{
@@ -5016,7 +5185,7 @@ function buildInvCard(m){
         </div>
         <label class="small mt2" style="display:block;">Expiry date for this batch (optional)</label>
         <button type="button" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;background:#fff;cursor:pointer;color:var(--text);" onclick="openDatePicker(inv.restockExpiry,'restock',null)"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${inv.restockExpiry ? esc(fmtExpiryShort(inv.restockExpiry)) : ""}</span><span style="flex-shrink:0;" class="chev"></span></button>
-        <label class="small" style="display:block;">New MRP per box for this batch (optional — leave blank to keep using ${CURRENCY}${money(m.mrpPerBox)}) — or scan the barcode (auto-fills expiry &amp; batch above)</label>
+        <label class="small" style="display:block;">New MRP per box (optional — if you enter one, it becomes the price for ALL stock of this medicine; leave blank to keep ${CURRENCY}${money(m.mrpPerBox)}) — or scan the barcode (auto-fills expiry &amp; batch above)</label>
         <div class="flex gap2">
           <input ${NOAC} id="restockMrp-${m.id}" class="flex1" type="text" inputmode="decimal" value="${esc(inv.restockMrp)}" oninput="onRestockMrp(this.value)" placeholder="e.g. ${m.mrpPerBox}">
           <button type="button" class="btn btn-outline flex1" onclick='startBarcodeScan({kind:"restock",medId:"${m.id}"})'>📷 Scan barcode</button>
@@ -5087,7 +5256,7 @@ function buildInvCard(m){
             return `
             <div class="flex gap2 mt2" style="align-items:center;">
               <span class="small" style="flex-shrink:0;">${fmtInt(b.pillsRemaining)} medicine</span>
-              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(b.mrpPerBox==null)?" (base)":""}</span>
+              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(USE_BATCH_PRICES && b.mrpPerBox==null)?" (base)":""}</span>
               ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
               <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
               ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
@@ -5304,26 +5473,26 @@ function getMonthAdjustment(mk){
 }
 function monthAdjustedTotals(mk, tx){
   const computed = {
-    medTotal: tx.reduce((s,t)=>s+((t.medTotal||0)-(t.medsDiscount||0)),0),
-    feeTotal: tx.reduce((s,t)=>s+(t.doctorFee||0),0),
-    testsTotal: tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0),
-    extrasTotal: tx.reduce((s,t)=>s+(t.extrasTotal||0),0)
+    medTotal: r2(tx.reduce((s,t)=>s+((t.medTotal||0)-(t.medsDiscount||0)),0)),
+    feeTotal: r2(tx.reduce((s,t)=>s+((t.doctorFee||0)-(t.feeDiscount||0)),0)),
+    testsTotal: r2(tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0)),
+    extrasTotal: r2(tx.reduce((s,t)=>s+(t.extrasTotal||0),0))
   };
   const adj = getMonthAdjustment(mk);
-  const medTotal = computed.medTotal + adj.medTotal;
-  const feeTotal = computed.feeTotal + adj.doctorFee;
-  const testsTotal = computed.testsTotal + adj.testsTotal;
-  const extrasTotal = computed.extrasTotal + adj.othersTotal;
-  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: medTotal+feeTotal+testsTotal+extrasTotal, adj };
+  const medTotal = r2(computed.medTotal + adj.medTotal);
+  const feeTotal = r2(computed.feeTotal + adj.doctorFee);
+  const testsTotal = r2(computed.testsTotal + adj.testsTotal);
+  const extrasTotal = r2(computed.extrasTotal + adj.othersTotal);
+  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: r2(medTotal+feeTotal+testsTotal+extrasTotal), adj };
 }
 /* Same medicine/fee/tests/others split as monthAdjustedTotals(), but for a single day's
    transactions and with no manual correction applied — corrections are month-level only. */
 function dayTotals(tx){
-  const medTotal = tx.reduce((s,t)=>s+((t.medTotal||0)-(t.medsDiscount||0)),0);
-  const feeTotal = tx.reduce((s,t)=>s+(t.doctorFee||0),0);
-  const testsTotal = tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0);
-  const extrasTotal = tx.reduce((s,t)=>s+(t.extrasTotal||0),0);
-  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: medTotal+feeTotal+testsTotal+extrasTotal };
+  const medTotal = r2(tx.reduce((s,t)=>s+((t.medTotal||0)-(t.medsDiscount||0)),0));
+  const feeTotal = r2(tx.reduce((s,t)=>s+((t.doctorFee||0)-(t.feeDiscount||0)),0));
+  const testsTotal = r2(tx.reduce((s,t)=>s+((t.testsTotal||0)-(t.testsDiscount||0)),0));
+  const extrasTotal = r2(tx.reduce((s,t)=>s+(t.extrasTotal||0),0));
+  return { medTotal, feeTotal, testsTotal, extrasTotal, grandTotal: r2(medTotal+feeTotal+testsTotal+extrasTotal) };
 }
 function toggleDayBreakdown(key){
   rec.expandedDayBreakdown = rec.expandedDayBreakdown===key ? null : key;
@@ -5337,14 +5506,27 @@ function toggleBreakdownSection(section){
   rec.expandedBreakdownSection = rec.expandedBreakdownSection===section ? null : section;
   render();
 }
+// Spreads a bill-level discount across its lines in proportion to their amounts, working in whole
+// paise so the net line amounts add up EXACTLY to (gross - discount). Used so the monthly breakdown
+// rows match the headline totals, which are already net of discounts.
+function netLineAmounts(grossList, discount){
+  const gc = grossList.map(x=>Math.round((Number(x)||0)*100)), G = gc.reduce((a,b)=>a+b,0);
+  const dc = Math.min(Math.max(Math.round((Number(discount)||0)*100),0), G);
+  if(!(dc>0) || !(G>0)) return gc.map(x=>x/100);
+  const share = gc.map(x=>Math.floor(dc*x/G));
+  let left = dc - share.reduce((a,b)=>a+b,0);
+  for(let i=0; left>0 && i<gc.length; i++){ if(gc[i]-share[i]>0){ share[i]++; left--; } }
+  return gc.map((x,i)=>(x-share[i])/100);
+}
 function monthMedicineDetail(mTx){
   const map = {};
   mTx.forEach(t=>{
-    (t.items||[]).forEach(it=>{
+    const items = t.items||[], net = netLineAmounts(items.map(it=>it.subtotal), t.medsDiscount);
+    items.forEach((it,i)=>{
       const k = it.name;
       if(!map[k]) map[k] = { name: it.name, medId: it.medId, qty:0, worth:0 };
       map[k].qty += Number(it.pills)||0;
-      map[k].worth += Number(it.subtotal)||0;
+      map[k].worth = r2(map[k].worth + net[i]);
     });
   });
   return Object.values(map).sort((a,b)=>b.worth-a.worth);
@@ -5372,7 +5554,7 @@ function monthFeeDetail(mTx){
     if(!t.doctorFee) return;
     const k = new Date(t.timestamp).toDateString();
     if(!map[k]) map[k] = { ts:t.timestamp, amount:0, count:0 };
-    map[k].amount += Number(t.doctorFee)||0;
+    map[k].amount += (Number(t.doctorFee)||0) - (Number(t.feeDiscount)||0);
     map[k].count++;
   });
   return Object.values(map).sort((a,b)=>b.ts-a.ts);
@@ -5380,12 +5562,13 @@ function monthFeeDetail(mTx){
 function monthTestsDetail(mTx){
   const map = {};
   mTx.forEach(t=>{
-    (t.tests||[]).forEach(te=>{
+    const tests = t.tests||[], net = netLineAmounts(tests.map(te=>te.amount), t.testsDiscount);
+    tests.forEach((te,i)=>{
       const k = te.name;
       if(!map[k]) map[k] = { name: te.name, qty:0, worth:0, dates:[] };
       map[k].qty += 1;
-      map[k].worth += Number(te.amount)||0;
-      map[k].dates.push({ ts:t.timestamp, amount:Number(te.amount)||0 });
+      map[k].worth = r2(map[k].worth + net[i]);
+      map[k].dates.push({ ts:t.timestamp, amount:net[i] });
     });
   });
   return Object.values(map).sort((a,b)=>b.worth-a.worth);
@@ -5687,15 +5870,24 @@ function shareDay(dayKey){
   openShare(lines.join("\n"));
 }
 function deleteTx(id){
-  askConfirm("Delete this bill record?", ()=>{
+  const t = transactions.find(x=>x.id===id); if(!t) return;
+  // lines whose medicine still exists and had stock taken out when the bill was made
+  const back = (t.items||[]).filter(it=>{ const med=inventory.find(m=>m.id===it.medId); return med && !med.deleted && stockBack(it)>0; });
+  const doDelete = (returnIt)=>{
     // Soft-delete (tombstone) rather than removing it outright, so the deletion itself can
-    // sync to other devices via updatedAt instead of the record quietly reappearing once
-    // another device's data comes back in.
-    const t = transactions.find(x=>x.id===id);
-    if(t){ t.deleted = true; t.updatedAt = Date.now(); }
-    if(t) logActivity("bill_del", t.patientName||"Bill");
+    // sync to other devices via updatedAt instead of the record quietly reappearing.
+    if(returnIt){
+      back.forEach(it=>{ const med=inventory.find(m=>m.id===it.medId); if(med) returnStock(med, stockBack(it)); });
+      saveInventory();
+    }
+    t.deleted = true; t.updatedAt = Date.now();
+    logActivity("bill_del", (t.patientName||"Bill") + (back.length ? (returnIt ? " (stock returned)" : " (stock kept deducted)") : ""));
     saveTransactions(); render();
-  });
+    if(returnIt && back.length) showToast("✓ Bill deleted — stock returned");
+  };
+  if(!back.length){ askConfirm("Delete this bill record?", ()=>doDelete(false)); return; }
+  askConfirm(`Delete this bill? It has ${back.length} medicine line${back.length===1?"":"s"}. Return them to stock now, or keep the stock deducted?`,
+    ()=>doDelete(true), "Return stock", "Keep stock deducted", ()=>doDelete(false));
 }
 
 /* ---- editing an existing bill ---- */
@@ -5711,7 +5903,7 @@ function openEditTx(id){
 }
 function cancelEditTx(){ rec.editingId=null; render(); }
 function onEditTxPatient(v){ recEdit.patient=v; }
-function onEditTxFee(v){ recEdit.fee=v; scheduleRender(); }
+function onEditTxFee(v){ recEdit.fee=v; clampEditDiscounts(); scheduleRender(); }
 // Self-contained, same pattern as billQueryDropdownHtml() above: recomputes matches from
 // current state and returns just the dropdown HTML for the edit-bill medicine search box.
 function editTxDropdownHtml(){
@@ -5739,30 +5931,38 @@ function addEditTxItem(){
   const med = inventory.find(m=>m.id===recEdit.selectedMedId);
   const pills = Number(recEdit.pills);
   if(!med || !pills || pills<=0) return;
-  const pricePerPill = nextBatchUnitPrice(med);
-  recEdit.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills});
+  const skipNew = recEdit.items.filter(x=>x._new && x.medId===med.id).reduce((a,x)=>a+(Number(x.pills)||0),0);
+  const lc = lineCalc(med, pills, skipNew);
+  recEdit.items.push({medId:med.id, name:med.name, pills, pricePerPill:lc.pricePerPill, subtotal:lc.subtotal, _new:true});
+  clampEditDiscounts();
   recEdit.selectedMedId=null; recEdit.query=""; recEdit.pills="";
   render();
 }
-function removeEditTxItem(idx){ recEdit.items.splice(idx,1); render(); }
-function editTxMedTotal(){ return recEdit.items.reduce((s,it)=>s+it.subtotal,0); }
-function editTxGrandTotal(){ return editTxMedTotal() - (recEdit.medsDiscount||0) + (Number(recEdit.fee)||0) - (recEdit.feeDiscount||0) + (recEdit.extrasTotal||0) + (recEdit.testsTotal||0) - (recEdit.testsDiscount||0); }
+function removeEditTxItem(idx){ recEdit.items.splice(idx,1); clampEditDiscounts(); render(); }
+function editTxMedTotal(){ return r2(recEdit.items.reduce((s,it)=>s+(Number(it.subtotal)||0),0)); }
+function clampEditDiscounts(){
+  recEdit.medsDiscount  = r2(Math.min(Math.max(Number(recEdit.medsDiscount)||0,0), editTxMedTotal()));
+  recEdit.feeDiscount   = r2(Math.min(Math.max(Number(recEdit.feeDiscount)||0,0), Math.max(Number(recEdit.fee)||0,0)));
+  recEdit.testsDiscount = r2(Math.min(Math.max(Number(recEdit.testsDiscount)||0,0), Number(recEdit.testsTotal)||0));
+}
+function editTxGrandTotal(){ clampEditDiscounts(); return r2(editTxMedTotal() - recEdit.medsDiscount + Math.max(Number(recEdit.fee)||0,0) - recEdit.feeDiscount + (Number(recEdit.extrasTotal)||0) + (Number(recEdit.testsTotal)||0) - recEdit.testsDiscount); }
 function saveEditTx(){
   const t = transactions.find(x=>x.id===recEdit.txId);
   if(!t || !recEdit.patient.trim()) return;
   // give back stock for the old items, then deduct stock for the new items
   t.items.forEach(oldIt=>{
     const med = inventory.find(m=>m.id===oldIt.medId);
-    if(med) returnStock(med, oldIt.pills);
+    if(med) returnStock(med, stockBack(oldIt));
   });
   recEdit.items.forEach(newIt=>{
     const med = inventory.find(m=>m.id===newIt.medId);
-    if(med) deductStock(med, newIt.pills);
+    if(med) newIt.ded = deductStock(med, newIt.pills);
   });
   saveInventory();
   t.patientName = recEdit.patient.trim();
-  t.doctorFee = Number(recEdit.fee)||0;
-  t.items = recEdit.items;
+  clampEditDiscounts();
+  t.doctorFee = r2(Math.max(Number(recEdit.fee)||0,0));
+  t.items = recEdit.items.map(it=>{ const c={...it}; delete c._new; return c; });
   t.medTotal = editTxMedTotal();
   t.medsDiscount = recEdit.medsDiscount||0;
   t.extras = recEdit.extras||[];
@@ -5967,18 +6167,28 @@ function renderRecordsBody(){
     `;
   }).join("");
 
-  container.innerHTML = monthStat + daysHtml + renderRecordArchive();
+  container.innerHTML = monthStat + recordsReportsCard() + daysHtml + renderRecordArchive();
 }
-function recordsReportsBtn(){
-  return can("monthlyTotal") ? `<button type="button" class="btn btn-outline" style="width:100%;margin-bottom:8px;" onclick="openTools('reports')">📊 Reports</button>` : "";
+// A live teaser for Reports, same visual style as the "Total sales this month" card below it —
+// today's closing total, so there's something worth glancing at before even opening Reports.
+function recordsReportsCard(){
+  if(!can("monthlyTotal")) return "";
+  const r = closingData(localDateStr());
+  return `
+    <button type="button" onclick="openTools('reports')" class="card" style="background:var(--primarySoft);border:none;width:100%;text-align:left;cursor:pointer;padding:14px;margin-bottom:8px;">
+      <div class="row">
+        <span class="small" style="font-weight:700;color:var(--primary);">📊 Reports</span>
+        <span style="font-weight:700;font-size:16px;color:var(--primary);">${CURRENCY}${money(r.total)}</span>
+      </div>
+      <p class="small faint" style="margin:2px 0 0;">${r.n} bill${r.n===1?"":"s"} today · closing, 7-day trend, top sellers & profit</p>
+    </button>`;
 }
 function renderRecords(){
   if(visibleTransactions().length===0){
-    document.getElementById("main").innerHTML = `${recordsReportsBtn()}<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
+    document.getElementById("main").innerHTML = `${recordsReportsCard()}<p class="small faint" style="text-align:center;padding:40px 0;">No bills recorded yet.</p>`;
     return;
   }
   document.getElementById("main").innerHTML = `
-    ${recordsReportsBtn()}
     <div class="search-wrap mb2">
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="recordsSearchInput" value="${esc(rec.searchQuery)}" oninput="onRecordsSearch(this.value)" placeholder="Search by patient name or date…">
@@ -7583,6 +7793,33 @@ try{
 }catch(e){ console.error("Firebase init failed", e); }
 
 function cloudDocRef(){ return fbDb.collection("sync").doc("state"); }
+/* ---- Smaller cloud copy (dead-weight clean-up) ----
+   Only the copy SENT to the cloud is trimmed — the data on every phone is left exactly as it is.
+   A batch is left out of the cloud copy only when ALL of these are true: it is used up (0 left) or
+   marked disposed, AND it has a timestamp, AND that timestamp is more than a year old. Such a batch
+   no longer affects stock, prices or warnings. Phones that already have it keep it (batches merge by id,
+   so nothing is deleted anywhere); a brand-new phone just won't download year-old used-up batches. */
+const CLOUD_TRIM_BATCH_AGE_MS = 365*24*60*60*1000;
+function trimInventoryForCloud(inv){
+  const cutoff = Date.now()-CLOUD_TRIM_BATCH_AGE_MS; let removed = 0;
+  const out = (inv||[]).map(m=>{
+    const bs = m && m.batches; if(!bs || !bs.length) return m;
+    const keep = bs.filter(b=>{
+      const t = (b.updatedAt||b.addedAt||0);
+      const deadAndOld = (b.disposed || !(b.pillsRemaining>0)) && t>0 && t<cutoff;
+      if(deadAndOld) removed++;
+      return !deadAndOld;
+    });
+    return keep.length===bs.length ? m : {...m, batches:keep};
+  });
+  trimInventoryForCloud.lastRemoved = removed;
+  return out;
+}
+function buildCloudPayload(){
+  const p = buildFullStatePayload();
+  p.inventory = trimInventoryForCloud(p.inventory);
+  return p;
+}
 function buildFullStatePayload(){
   return {
     syncCode: SYNC_CODE,
@@ -7794,7 +8031,7 @@ async function pushToCloud(){
   try{
     const snap = await withTimeout(cloudDocRef().get(), 10000);
     if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; processHistorySync(); }
-    await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload())), 10000);
+    await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildCloudPayload())), 10000);
     syncStatus = "synced";
     clearPendingSyncIf(seqAtStart);
     clearSyncError();
@@ -7871,7 +8108,7 @@ function startCloudSync(){
         } else {
           // Confirmed: genuinely no shared document exists anywhere yet. Safe to create it
           // from this device's current state since there is nothing real to lose.
-          await cloudDocRef().set(sanitizeForFirestore(buildFullStatePayload()));
+          await cloudDocRef().set(sanitizeForFirestore(buildCloudPayload()));
           startCloudSync();
         }
       }catch(e){ syncStatus="offline"; setSyncError(e); renderSyncBadge(); }
@@ -8031,7 +8268,7 @@ function estimatedCloudDataSize(){
   // measuring its JSON size gives a close real-world estimate of what's stored in the cloud,
   // even though Firestore itself doesn't expose a "how big is my data" API to client apps.
   try{
-    const payload = buildFullStatePayload();
+    const payload = buildCloudPayload();
     const bytes = new Blob([JSON.stringify(payload)]).size;
     _cloudSizeCache = { bytes, at: now };
     return bytes;
@@ -8262,13 +8499,13 @@ function aiConfirmAdd(){
     const med=inventory.find(x=>x.id===r.medId && !x.deleted), pills=aiRowPills(r);
     if(med && r.medId!==((r.cands&&r.cands[0])?r.cands[0].id:"")) aiLearn(r, med);
     if(!med || !(pills>0)) return;
-    const pricePerPill=nextBatchUnitPrice(med), byDose=r.perDay>0 && r.days>0;
+    const lc=lineCalc(med, pills, billPendingSkip(med.id)), pricePerPill=lc.pricePerPill, byDose=r.perDay>0 && r.days>0;
     if(med.specialCategory){
-      const base=pricePerPill*pills;
+      const base=lc.subtotal;
       bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:base, note:"", perDay:null, linkedToGlobalDays:false,
         special:true, specialCategory:med.specialCategory||"", baseSubtotal:base, baseNote:"", appliedFee:0, feeMode:null});
     } else {
-      bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:pricePerPill*pills,
+      bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:lc.subtotal,
         note: byDose?`${r.perDay}/day × ${r.days}d`:"", perDay: byDose?r.perDay:null, linkedToGlobalDays:false});
     }
     added++;
@@ -8541,7 +8778,9 @@ function _hBytes(v){ try{ const t=JSON.stringify(v); return (typeof TextEncoder!
 function _hKB(b){ return (b/1024).toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1})+" KB"; }
 function _hTime(fn){ const t0=performance.now(); try{ fn(); }catch(e){} return Math.max(0.1, performance.now()-t0).toFixed(1)+" ms"; }
 function cloudPayloadStats(){
-  const payload = sanitizeForFirestore(buildFullStatePayload());
+  const payload = sanitizeForFirestore(buildCloudPayload());
+  const trimmedCount = trimInventoryForCloud.lastRemoved||0;
+  const fullBytes = _hBytes(sanitizeForFirestore(buildFullStatePayload()));
   const total = _hBytes(payload), parts = [];
   Object.keys(payload).forEach(k=>parts.push([k,_hBytes(payload[k])]));
   parts.sort((a,b)=>b[1]-a[1]);
@@ -8550,7 +8789,7 @@ function cloudPayloadStats(){
   const perDay = recent/30, perBill = nTx ? txBytes/nTx : 0;
   const room = Math.max(0, CLOUD_DOC_LIMIT-total);
   const daysLeft = (perDay>0 && perBill>0) ? Math.floor(room/(perDay*perBill)) : null;
-  return { total, pct: total/CLOUD_DOC_LIMIT*100, parts, nTx, perDay, perBill, daysLeft };
+  return { total, saved: Math.max(0, fullBytes-total), trimmedCount, pct: total/CLOUD_DOC_LIMIT*100, parts, nTx, perDay, perBill, daysLeft };
 }
 function dataIntegrityIssues(){
   const out = [], meds = (inventory||[]).filter(m=>!m.deleted);
@@ -8584,6 +8823,7 @@ function showStorageHealth(){
   L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Counter Book ${APP_VERSION}`, ``);
   L.push(`☁️ CLOUD (one shared document, limit 1,024 KB)`);
   L.push(`Size now: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full${st.pct>=70?"  ⚠ getting full":""}`);
+  L.push(`Clean-up: ${st.trimmedCount.toLocaleString("en-US")} used-up batches older than a year are left out of the cloud copy (saves ${_hKB(st.saved)}); your phones keep them`);
   L.push(`Biggest parts: `+st.parts.slice(0,5).map(p=>`${p[0]} ${_hKB(p[1])}`).join(" · "));
   L.push(`Bills: ${st.nTx.toLocaleString("en-US")} saved, about ${st.perDay.toFixed(1)}/day over the last 30 days, ~${(st.perBill/1024).toFixed(2)} KB each`);
   L.push(st.daysLeft==null ? `Time until full: not enough recent bills to estimate` : `At this pace the document fills in about ${st.daysLeft.toLocaleString("en-US")} days (~${(st.daysLeft/365).toFixed(1)} years)`);
@@ -8597,7 +8837,7 @@ function showStorageHealth(){
   const yearAgo=Date.now()-365*86400000, old=(transactions||[]).filter(t=>(t.timestamp||0)<yearAgo).length;
   L.push(``, `📦 COUNTS`, `${meds.length.toLocaleString("en-US")} medicines · ${nb.toLocaleString("en-US")} batches · ${st.nTx.toLocaleString("en-US")} bills (${old.toLocaleString("en-US")} older than 1 year)`);
   L.push(``, `⚡ SPEED ON THIS PHONE (right now)`);
-  L.push(`Save medicines: ${_hTime(()=>JSON.stringify(inventory))} · save bills: ${_hTime(()=>JSON.stringify(transactions))} · build cloud copy: ${_hTime(()=>sanitizeForFirestore(buildFullStatePayload()))}`);
+  L.push(`Save medicines: ${_hTime(()=>JSON.stringify(inventory))} · save bills: ${_hTime(()=>JSON.stringify(transactions))} · build cloud copy: ${_hTime(()=>sanitizeForFirestore(buildCloudPayload()))}`);
   if(window.__bootMs) L.push(`App start-up took about ${Math.round(window.__bootMs)} ms`);
   const issues=dataIntegrityIssues();
   L.push(``, `🩺 DATA CHECK (read-only — nothing was changed)`);
