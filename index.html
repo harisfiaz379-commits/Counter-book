@@ -475,7 +475,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v78";
+const APP_VERSION = "v79";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -4628,11 +4628,24 @@ function parseBoxText(text){
   const out = {};
   const g = t.match(/GTIN\D{0,4}(\d{12,14})/i); if(g) out.gtin = g[1];
   // MRP / Retail Price / Price Rs. 450 / Rs.450/-  (a bare "Rs 450" is accepted only with the Rs/PKR sign)
-  const m = t.match(/M\.?\s*R\.?\s*P\.?\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i)
-         || t.match(/(?:max(?:imum)?\.?\s*)?retail\s*price\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i)
-         || t.match(/\bprice\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)\s*(\d+(?:\.\d{1,2})?)/i)
-         || t.match(/(?:\bRs\.?|₹|\bPKR)\s*(\d{2,6}(?:\.\d{1,2})?)\s*(?:\/-)?/);
-  if(m && Number(m[1])>0) out.price = String(Number(m[1]));
+  const priceRes = [
+    /M\.?\s*R\.?\s*P\.?\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i,
+    /(?:max(?:imum)?\.?\s*)?retail\s*price\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)?\s*(\d+(?:\.\d{1,2})?)/i,
+    /\bprice\s*[:.\-]?\s*(?:Rs\.?|₹|PKR|INR)\s*(\d+(?:\.\d{1,2})?)/i,
+    /(?:\bRs\.?|₹|\bPKR)\s*(\d{2,6}(?:\.\d{1,2})?)\s*(?:\/-)?/
+  ];
+  // a reading slip such as "M.R.P. Rs.\n7" must not become a price of Rs 7: a whole number needs 2+ digits
+  const priceOk = v => v!=null && Number(v)>0 && (String(v).indexOf(".")>=0 ? Number(v)>=1 : Number(v)>=10);
+  let m = null;
+  for(const re of priceRes){ const mm=t.match(re); if(mm && priceOk(mm[1])){ m=mm; break; } }
+  if(m) out.price = String(Number(m[1]));
+  if(!out.price && /m\.?\s*r\.?\s*p/i.test(t)){
+    // "M.R.P. Rs.:" with the amount printed on a line of its own (often one row off): take the single price-looking
+    // number such as 365.00. Dates like 02.26 (month.year) and long codes are not prices.
+    const cands = (t.match(/(?<![\d.\/\-])\d{2,5}\.\d{2}(?![\d.\/\-])/g)||[]).filter(x=>!/^(0[1-9]|1[0-2])\.\d{2}$/.test(x));
+    const uniq = [...new Set(cands)];
+    if(uniq.length===1 && Number(uniq[0])>=5) out.price = String(Number(uniq[0]));
+  }
   const skip = /gtin|mfg|mfd|exp|b\.?\s*no|sr\.?\s*no|m\.?\s*r\.?\s*p|batch|\brs\b|licen|\d{9,}/i;
   const line = t.split("\n").map(l=>l.replace(/\s+/g," ").trim()).find(l=>l.length>=3 && /[A-Za-z]{3}/.test(l) && !skip.test(l));
   if(line) out.productName = line;
@@ -4647,26 +4660,7 @@ function parseBoxTextDetails(text){
   const out = {};
   const formMatch = t.match(/\b(tablets?|capsules?|syrups?|suspensions?|injections?|ointments?|creams?|lotions?|drops?|gels?|powders?|sachets?|sprays?)\b/i);
   if(formMatch) out.form = formMatch[1].toLowerCase().replace(/s$/,"").replace(/^[a-z]/,c=>c.toUpperCase());
-  // Pack size. "2x10 Tablets" (strips x tablets) is the reliable form. The text reader often turns the
-  // 0 in "10" into O/o and the 1 into I/l, so those are fixed up when they sit right after an "x".
-  const tx = t.replace(/(\d)\s*[xX×*]\s*([0-9OoIl]{1,4})\b/g,(m,a,b)=>a+"x"+b.replace(/[Oo]/g,"0").replace(/[Il]/g,"1"));
-  const pack = tx.match(/\b(\d{1,3})\s*x\s*(\d{1,4})\b(?=[\s\S]{0,25}?(?:tablets?|capsules?|tabs?|caps?|strips?))/i);
-  if(pack){ out.perBox = Number(pack[1])*Number(pack[2]); }
-  else {
-    const apos = tx.match(/\b(\d{1,4})\s*['\u2019]\s*s\b/i);   // "10's"
-    if(apos) out.perBox = Number(apos[1]);
-    else {
-      // A bare "N tablets" is only a pack size when it is NOT part of a dose instruction such as
-      // "Take 1-2 tablets" / "one tablet daily" (that used to be read as a pack of 2).
-      const re = /(?<![\d\-\u2013.])\b(\d{1,4})\s*(?:tablets?|capsules?)\b/gi; let mm;
-      while((mm = re.exec(tx))){
-        const before = tx.slice(Math.max(0,mm.index-18), mm.index);
-        if(/(take|dose|daily|one|upto|up to|to|and|or|every|per|each)\s*[:\-]?\s*$/i.test(before)) continue;
-        if(/(?:^|\n)\s*take[^\n]*$/i.test(tx.slice(0,mm.index))) continue;
-        out.perBox = Number(mm[1]); break;
-      }
-    }
-  }
+  const pk0 = boxFindPack(t); if(pk0) out.perBox = pk0;   // one set of pack-size rules for every reader path
   const compStart = t.search(/composition/i);
   if(compStart>=0){
     // Pharma labels commonly print COMPOSITION and DOSAGE/INDICATION as side-by-side boxes, not
@@ -4792,6 +4786,37 @@ async function aiOcrCanvas(file, deg, maxW, maxSc){ // bigger + grayscale + more
 // knownDeg: once the first photo's orientation has been found, every later photo in the same
 // batch is assumed to have been held the same way and skips the 4-way probe entirely — that
 // probe was the single biggest cost here (up to 4 extra OCR passes per photo).
+// Deep read: the photo is cut into overlapping tiles at (nearly) full resolution and each tile is read on its own.
+// On a busy background (patterned cloth, hands, shelves) the reader gets lost on the whole picture but reads the
+// same text fine tile by tile, and small print gets many more pixels. Tiles are added to the result one at a time, so
+// whatever is finished when time runs out still counts. Line heights are scaled to the quick read's size so brand-name
+// sizes stay comparable.
+async function aiOcrTiles(file, deg, worker, grid, quickH, shouldStop, onTile){
+  const run = img => worker ? worker.recognize(img) : window.Tesseract.recognize(img,"eng");
+  const bmp = await createImageBitmap(file);
+  const sc = Math.min(1, 2600/Math.max(bmp.width,bmp.height));
+  const w = Math.round(bmp.width*sc), h = Math.round(bmp.height*sc), swap = (deg===90||deg===270);
+  const full = document.createElement("canvas"); full.width = swap?h:w; full.height = swap?w:h;
+  const fx = full.getContext("2d", {willReadFrequently:true});
+  fx.translate(full.width/2, full.height/2); fx.rotate((deg||0)*Math.PI/180); fx.drawImage(bmp,-w/2,-h/2,w,h); fx.setTransform(1,0,0,1,0,0);
+  try{ bmp.close && bmp.close(); }catch(e){}
+  const d = fx.getImageData(0,0,full.width,full.height), a = d.data;
+  for(let i=0;i<a.length;i+=4){ let v=0.3*a[i]+0.59*a[i+1]+0.11*a[i+2]; v=Math.max(0,Math.min(255,(v-128)*1.4+128)); a[i]=a[i+1]=a[i+2]=v; }
+  fx.putImageData(d,0,0);
+  const n = grid||2, ov = 0.3, tw = Math.round(full.width/(n-(n-1)*ov)), th = Math.round(full.height/(n-(n-1)*ov));
+  const k = quickH ? quickH/full.height : 1;
+  const out = { data:{ text:"", lines:[], words:[] }, __h:quickH||full.height, __w:Math.round(full.width*k), __deg:deg };
+  for(let r=0;r<n;r++) for(let c=0;c<n;c++){
+    if(shouldStop && shouldStop()) return out;
+    const x0 = Math.round(c*(full.width-tw)/Math.max(1,n-1)), y0 = Math.round(r*(full.height-th)/Math.max(1,n-1));
+    const t = document.createElement("canvas"); t.width = tw; t.height = th; t.getContext("2d").drawImage(full,x0,y0,tw,th,0,0,tw,th);
+    const res = await run(t), dd = res && res.data; if(!dd) continue;
+    out.data.text += (out.data.text ? "\n" : "") + String(dd.text||"");
+    (dd.lines||[]).forEach(l=>{ if(l && l.bbox) out.data.lines.push(Object.assign({}, l, { bbox:{ x0:l.bbox.x0*k, x1:l.bbox.x1*k, y0:(l.bbox.y0+y0)*k, y1:(l.bbox.y1+y0)*k } })); });
+    if(onTile) onTile(out);
+  }
+  return out;
+}
 async function aiOcrRotated(file, worker, knownDeg, shared){
   const run=async img=> worker ? worker.recognize(img) : window.Tesseract.recognize(img,"eng");
   const bmp=await createImageBitmap(file);
@@ -4874,7 +4899,8 @@ async function boxCompositionSecondLook(reads, files, deg, worker){
 //    common generic ingredients plus every formula already stored in the app, matched loosely (typo tolerant)
 //  - brand name = the most prominent text that is not a common word, a dosage form or an ingredient; if it closely
 //    matches a medicine already stored, the stored spelling is used
-const BOX_GENERICS = ("paracetamol acetaminophen ibuprofen diclofenac naproxen aspirin ketoprofen mefenamic_acid piroxicam meloxicam etoricoxib celecoxib nimesulide tramadol codeine morphine "
+const BOX_GENERICS_EXTRA = "lactitol lactulose bisacodyl sodium_picosulfate senna ispaghula psyllium macrogol simethicone domperidone metoclopramide ondansetron itopride mosapride trimebutine mebeverine hyoscine dicyclomine drotaverine pantoprazole omeprazole esomeprazole rabeprazole lansoprazole famotidine ranitidine sucralfate bismuth magaldrate aluminium_hydroxide magnesium_hydroxide sodium_alginate salbutamol levosalbutamol terbutaline montelukast levocetirizine cetirizine loratadine desloratadine fexofenadine chlorpheniramine pseudoephedrine phenylephrine ambroxol bromhexine carbocisteine acebrophylline dextromethorphan guaifenesin theophylline doxofylline budesonide fluticasone ipratropium tiotropium formoterol salmeterol amlodipine atenolol bisoprolol metoprolol carvedilol nebivolol losartan valsartan telmisartan irbesartan olmesartan candesartan lisinopril enalapril ramipril captopril hydrochlorothiazide indapamide furosemide spironolactone torsemide atorvastatin rosuvastatin simvastatin pravastatin ezetimibe fenofibrate clopidogrel warfarin rivaroxaban apixaban isosorbide nicorandil trimetazidine ivabradine ranolazine digoxin amiodarone metformin glimepiride gliclazide glibenclamide pioglitazone sitagliptin vildagliptin linagliptin saxagliptin empagliflozin dapagliflozin insulin gabapentin pregabalin carbamazepine phenytoin valproate levetiracetam lamotrigine topiramate escitalopram sertraline fluoxetine paroxetine amitriptyline nortriptyline alprazolam clonazepam diazepam lorazepam zolpidem quetiapine olanzapine risperidone aripiprazole haloperidol cinnarizine flunarizine betahistine sumatriptan rizatriptan terbinafine fluconazole itraconazole ketoconazole clotrimazole miconazole nystatin betamethasone clobetasol mometasone hydrocortisone fusidic_acid mupirocin permethrin ivermectin albendazole mebendazole praziquantel acyclovir valacyclovir oseltamivir isotretinoin adapalene tretinoin benzoyl_peroxide salicylic_acid cholecalciferol ergocalciferol calcitriol methylcobalamin pyridoxine biotin lycopene iron_polymaltose alfacalcidol alendronate risedronate ibandronate raloxifene glucosamine chondroitin diacerein collagen levothyroxine carbimazole prednisolone dexamethasone methylprednisolone deflazacort tamsulosin finasteride dutasteride sildenafil tadalafil ";
+const BOX_GENERICS = (BOX_GENERICS_EXTRA+"paracetamol acetaminophen ibuprofen diclofenac naproxen aspirin ketoprofen mefenamic_acid piroxicam meloxicam etoricoxib celecoxib nimesulide tramadol codeine morphine "
  +"amoxicillin amoxycillin ampicillin cloxacillin flucloxacillin penicillin clavulanic_acid sulbactam tazobactam cefixime cefuroxime cefpodoxime ceftriaxone cefotaxime ceftazidime cefalexin cephalexin cefadroxil cefaclor cefepime "
  +"azithromycin clarithromycin erythromycin doxycycline tetracycline minocycline ciprofloxacin levofloxacin ofloxacin moxifloxacin norfloxacin metronidazole tinidazole ornidazole secnidazole clindamycin gentamicin amikacin "
  +"co_trimoxazole sulfamethoxazole trimethoprim nitrofurantoin linezolid vancomycin meropenem imipenem rifampicin isoniazid pyrazinamide ethambutol "
@@ -4891,7 +4917,7 @@ const BOX_GENERICS = ("paracetamol acetaminophen ibuprofen diclofenac naproxen a
  +"diazepam alprazolam lorazepam clonazepam bromazepam zolpidem escitalopram citalopram sertraline fluoxetine paroxetine fluvoxamine venlafaxine duloxetine mirtazapine amitriptyline nortriptyline "
  +"risperidone olanzapine quetiapine aripiprazole haloperidol chlorpromazine lithium valproate carbamazepine oxcarbazepine phenytoin levetiracetam lamotrigine topiramate gabapentin pregabalin phenobarbital "
  +"levodopa carbidopa pramipexole donepezil memantine sumatriptan rizatriptan flunarizine cinnarizine betahistine piracetam methylcobalamin mecobalamin "
- +"ascorbic_acid folic_acid cholecalciferol ergocalciferol calcitriol calcium zinc iron ferrous_sulphate ferrous_fumarate ferrous_ascorbate magnesium potassium_chloride sodium_chloride vitamin_d3 vitamin_b12 vitamin_c vitamin_e vitamin_k "
+ +"ascorbic_acid folic_acid cholecalciferol ergocalciferol calcitriol calcium zinc iron ferrous_sulphate ferrous_fumarate ferrous_ascorbate magnesium potassium_chloride sodium_chloride vitamin_d3 vitamin_b12 vitamin_c vitamin_e vitamin_k vitamin_b1 vitamin_b2 vitamin_b3 vitamin_b5 vitamin_b6 vitamin_b9 vitamin_a vitamin_k2 "
  +"thiamine pyridoxine riboflavin nicotinamide niacinamide cyanocobalamin biotin multivitamin lactoferrin omega_3 "
  +"alendronate risedronate ibandronate raloxifene tamsulosin finasteride dutasteride silodosin tadalafil sildenafil oxybutynin solifenacin mirabegron "
  +"norethisterone progesterone dydrogesterone estradiol clomiphene letrozole tranexamic_acid ethamsylate misoprostol cabergoline bromocriptine "
@@ -4940,7 +4966,7 @@ function boxGenericAt(words,i,idx){
     for(const g of idx){
       if(g.words!==n) continue;
       const L=g.key.length, need=L>=10?0.8:L>=7?0.84:1;
-      if(t===g.key || (need<1 && Math.abs(t.length-L)<=2 && aiSim(t,g.key)>=need)) return {label:g.label,len:n};
+      if(t===g.key || (need<1 && !/\d/.test(t) && !/\d/.test(g.key) && Math.abs(t.length-L)<=2 && aiSim(t,g.key)>=need)) return {label:g.label,len:n};   // "Vitamin B6" must never become "Vitamin B12"
     }
   }
   return null;
@@ -4962,15 +4988,45 @@ function boxQuantities(line){
   return out;
 }
 // ingredients + strengths from ANY line of the box text
+const BOX_ALIAS = {"ascorbic acid":"vitamin c","cholecalciferol":"vitamin d3","vitamin d":"vitamin d3","pyridoxine":"vitamin b6","pyridoxine hcl":"vitamin b6","pyridoxine hydrochloride":"vitamin b6","cyanocobalamin":"vitamin b12","methylcobalamin":"vitamin b12","thiamine":"vitamin b1","thiamine hcl":"vitamin b1","riboflavin":"vitamin b2","tocopherol":"vitamin e","retinol":"vitamin a","niacinamide":"vitamin b3","nicotinamide":"vitamin b3"};
+function boxCanon(n){ const k=String(n||"").toLowerCase().replace(/\s+/g," ").trim(); return BOX_ALIAS[k]||k; }
+function boxDedupePairs(pairs){
+  const out=[];
+  (pairs||[]).forEach(p=>{ const c=boxCanon(p.name), hit=out.find(q=>boxCanon(q.name)===c); if(hit){ if(!hit.strength && p.strength) hit.strength=p.strength; return; } out.push(Object.assign({},p)); });
+  // one word that only repeats the first word of a longer name ("Calcium" beside "Calcium Carbonate") is not another ingredient
+  return out.filter(p=>{ const w=String(p.name).toLowerCase(); if(w.indexOf(" ")>=0) return true; return !out.some(q=>q!==p && String(q.name).toLowerCase().split(" ")[0]===w && String(q.name).indexOf(" ")>=0); });
+}
+// flavours, sweeteners, colours and fillers listed under "Excipients" are not part of the formula
+const BOX_SALT_TRAIL = /^(monohydrate|dihydrate|trihydrate|anhydrous|hydrochloride|hcl|sulphate|sulfate|phosphate|maleate|tartrate|succinate|fumarate|mesylate|besylate|acetate|citrate|nitrate|carbonate|gluconate|lactate|dipropionate|propionate|valerate|sodium|potassium|trometamol|tromethamine)$/i;
+const BOX_EXCIP_NAMES = /^(sodium bicarbonate|bicarbonate|citric acid|sodium carbonate|glucose|sucrose|lactose|mannitol|sorbitol|xylitol|talc|starch)$/i;
+const BOX_EXCIP_RE = /exc[il1]p[il1]ents?|inactive|flavou?r|saccharin|sweeten|colou?r|fd&c|granulat|\bsugar\b|citric\s*acid|stearate|povidone|\btalc\b|\bstarch\b/i;
+function boxDropExcipientLines(lines){ return (lines||[]).filter(l=>!BOX_EXCIP_RE.test(l)); }
 function boxFindComposition(text){
   const idx=boxGenericIndex(), pairs=[], standalone=[];
-  String(text||"").split("\n").forEach(raw=>{
-    let l=raw.replace(/\.{2,}/g," ").replace(/\(\s*(?:eq|equiv|elemental|as\b|i\.?e)[^)]*\)/gi," ").replace(/[ \t]+/g," ").trim();
+  // Only the ingredient section counts: from "Composition / Each tablet contains" to "Excipients / Dosage / Storage…".
+  // (Flavours, sweeteners and the like below it are not part of the formula.)
+  let srcLines = boxDropExcipientLines(String(text||"").split("\n")), sectioned=false;
+  const si = srcLines.findIndex(l=>/composition|\beach\s+(?:[A-Za-z\-]+\s+){0,3}contains?|\bcontains?\s*:/i.test(l));
+  if(si>=0){
+    sectioned = true; srcLines = srcLines.slice(si+1);
+    const ei = srcLines.findIndex(l=>/^\s*(indication|dosage|directions?|storage|store|excipients?|inactive|manufactured|batch|mfg|expiry|usual\s+dosage|warning|keep|protect|for any)\b/i.test(l));
+    if(ei>=0) srcLines = srcLines.slice(0,ei);
+    srcLines = srcLines.slice(0,16);
+  }
+  srcLines.forEach(raw=>{
+    let l=raw.replace(/\.{2,}/g," ").replace(/\(\s*(?:eq|equiv|elemental|as\b|i\.?e)[^)]*\)/gi," ")
+    if(sectioned) l=l.replace(/\([^)]*\)?/g," ");              // "(Ascorbic Acid)", "(BP Specs)": descriptions, not more ingredients
+    l=l.replace(/[ \t]+/g," ").trim();
     if(!l) return;
-    const toks=[], re=/[A-Za-z][A-Za-z\-]*/g; let m;
+    const toks=[], re=/[A-Za-z][A-Za-z\-]*(?:\d{1,2}(?![\d.]))?/g; let m;
     while((m=re.exec(l))) toks.push({t:m[0],pos:m.index});
     const hits=[]; const words=toks.map(x=>x.t);
-    for(let i=0;i<words.length;i++){ const h=boxGenericAt(words,i,idx); if(h){ hits.push({name:h.label,pos:toks[i].pos}); i+=h.len-1; } }
+    for(let i=0;i<words.length;i++){
+      const h=boxGenericAt(words,i,idx); if(!h) continue;
+      let label=h.label, end=i+h.len, extra=0;
+      while(extra<2 && end<words.length && BOX_SALT_TRAIL.test(words[end]) && (!boxGenericAt(words,end,idx) || /^(sodium|potassium)$/i.test(words[end]))){ label+=" "+boxNiceIngredient(words[end]); end++; extra++; }
+      hits.push({name:label,pos:toks[i].pos}); i=end-1;
+    }
     const qs=boxQuantities(l);
     if(hits.length){
       hits.forEach((h,k)=>{
@@ -4984,7 +5040,7 @@ function boxFindComposition(text){
       qs.forEach(q=>standalone.push(q.text));
     }
   });
-  return {pairs, standalone};
+  return {pairs:boxDedupePairs(sectioned ? pairs : pairs.filter(p=>!BOX_EXCIP_NAMES.test(p.name))), standalone};
 }
 function boxFindVolume(text){
   const re=/(\d+(?:\.\d+)?)\s*(ml|l|gm|gram|g)\b/gi; let m, best=null;
@@ -5005,28 +5061,181 @@ function boxFindPack(text){
   const pack=tx.match(new RegExp("\\b(\\d{1,3})\\s*x\\s*(\\d{1,4})\\b(?=[\\s\\S]{0,25}?(?:"+BOX_UNITS_WORD+"|strips?))","i"));
   if(pack) return Number(pack[1])*Number(pack[2]);
   const ap=tx.match(/\b(\d{1,4})\s*['\u2019]\s*s\b/i); if(ap) return Number(ap[1]);
-  const re=new RegExp("(?<![\\d\\-\\u2013.])\\b(\\d{1,4})\\s*(?:"+BOX_UNITS_WORD+")\\b","gi"); let mm;
+  const re=new RegExp("(?<![\\d\\-\\u2013./])\\b(\\d{1,4})\\s*(?:"+BOX_UNITS_WORD+")\\b","gi"); let mm;
   while((mm=re.exec(tx))){
+    const lineStart = tx.lastIndexOf("\n", mm.index)+1, sameLine = tx.slice(lineStart, mm.index);
     const before=tx.slice(Math.max(0,mm.index-18),mm.index);
     if(/(take|dose|daily|one|upto|up to|to|and|or|every|per|each|contains?)\s*[:\-]?\s*$/i.test(before)) continue;
     if(/(?:^|\n)\s*take[^\n]*$/i.test(tx.slice(0,mm.index))) continue;
+    if(/\b(take|dosage|dose|adults?|children|daily|once|twice|swallow|chew|dissolve|years?)\b/i.test(sameLine)) continue;   // inside a dose sentence
+    if(/\d\s*[-\u2013\/]\s*$/.test(sameLine)) continue;                                                              // "1 - 2 tablets", "1/2 tablet"
     return Number(mm[1]);
   }
   return 0;
 }
+
+// ======================= Box reader v3: stricter checks + smarter formula / name rules =======================
+// Common slips of the text reader: "15m1"/"15mI" for 15ml, "400 1.U" / "400 l.U" for 400 I.U, "C A L C I U M" spelled with gaps.
+function boxFixOcr(text){
+  let t = String(text||"");
+  t = t.replace(/(\d)\s*(?:m[1lI]|rn[1lI])(?![A-Za-z0-9])/g, "$1 ml");
+  t = t.replace(/(\d)\s*[1lI|]\s*\.?\s*[uU](?![A-Za-z])/g, "$1 IU");
+  t = t.split("\n").map(line=>{
+    const toks = line.trim().split(/\s+/);
+    if(toks.length>=7 && toks.filter(x=>x.length===1).length >= toks.length-1){      // a line of single letters = a spaced-out word
+      const joined = line.trim().split(/\s{2,}/).map(w=>w.replace(/\s+/g,"")).join(" ");
+      return joined.length>=5 ? joined : line;
+    }
+    return line;
+  }).join("\n");
+  return t;
+}
+const BOX_SALT_WORDS = new Set(("calcium sodium potassium magnesium zinc iron ferrous ferric lactate gluconate carbonate bicarbonate citrate phosphate sulphate sulfate chloride hydrochloride hcl acetate maleate tartrate succinate fumarate mesylate besylate monohydrate dihydrate trihydrate anhydrous hydrate dipropionate propionate valerate nitrate oxide hydroxide acid vitamin vitamins mineral minerals multivitamin elemental ascorbic folic lactic").split(/\s+/));
+const BOX_INN_SUFFIX = /(?:olol|pril|sartan|statin|azole|cillin|mycin|micin|floxacin|oxacin|dipine|tidine|prazole|gliptin|gliflozin|formin|zepam|zolam|triptan|setron|cycline|penem|bactam|lukast|terol|olone|onide|caine|phylline|dronate|fenac|profen|oxicam|coxib|thiazide|semide|afil|apine|idone|oxetine|cetam|xime|ol|one|ine|ide|ate|ose|ium|ase|vir|nib|zide|pam|lam)$/i;
+let _boxWordSet = null;
+function boxWordSet(){
+  if(_boxWordSet && _boxWordSet.n===inventory.length) return _boxWordSet.s;
+  const st = new Set();
+  BOX_GENERICS.concat(boxStoredGenerics()).forEach(g=>String(g).split("_").forEach(w=>{ w=w.toLowerCase().replace(/[^a-z]/g,""); if(w.length>=4) st.add(w); }));
+  _boxWordSet = { n:inventory.length, s:st };
+  return st;
+}
+// is this one word an ingredient (known name, salt/vitamin word, close spelling of a known name, or a typical generic ending)?
+function boxIsIngredientWord(w){
+  w = String(w||"").toLowerCase().replace(/[^a-z]/g,""); if(w.length<4) return false;
+  const st = boxWordSet();
+  if(st.has(w) || BOX_SALT_WORDS.has(w)) return true;
+  if(w.length>=7 && BOX_INN_SUFFIX.test(w)) return true;
+  if(w.length>=6){ for(const k of st){ if(Math.abs(k.length-w.length)<=2 && k.length>=6 && aiSim(w,k)>=0.84) return true; } }
+  return false;
+}
+// like boxIsIngredientWord, but a word that is ONLY a salt/ending ("Monohydrate", "Hydrochloride") does not count
+function boxIsCoreIngredientWord(w){
+  w = String(w||"").toLowerCase().replace(/[^a-z]/g,""); if(w.length<4) return false;
+  const st = boxWordSet();
+  if(st.has(w)) return true;
+  if(BOX_SALT_WORDS.has(w)) return false;
+  if(w.length>=7 && BOX_INN_SUFFIX.test(w)) return true;
+  if(w.length>=6){ for(const k of st){ if(Math.abs(k.length-w.length)<=2 && k.length>=6 && aiSim(w,k)>=0.84) return true; } }
+  return false;
+}
+// a formula must be made of ingredient names — "Orange Flavor", "…in D3 + PTI LL LE LE" are not
+function boxFormulaOk(f){
+  const parts = String(f||"").split("+").map(x=>x.trim()).filter(Boolean); if(!parts.length) return false;
+  return parts.every(part=>{
+    const letters=(part.match(/[A-Za-z]/g)||[]).length, all=part.replace(/\s/g,"").length;
+    if(!all || letters/all < 0.8) return false;
+    if(/(^|\s)[A-Za-z]{1,2}(?=\s|$)/.test(part.replace(/\b(?:[A-Z]\d{0,2}|vitamin\s+[A-Za-z]\d{0,2})\b/gi,"")) && part.split(/\s+/).length>1 && /(^|\s)[a-z]{1,2}(?=\s|$)/.test(part)) return false;
+    return part.split(/\s+/).some(tok=>boxIsCoreIngredientWord(tok));
+  });
+}
+// a brand name: 1-3 words; every word 3+ letters (an all-capital 1-3 letter variant tag such as "D" / "MR" may end it);
+// it must not be made only of ingredient words
+function boxNameOk(n){
+  const toks = String(n||"").trim().split(/\s+/).filter(Boolean);
+  if(!toks.length || toks.length>3) return false;
+  for(let i=0;i<toks.length;i++){
+    const t=toks[i], letters=(t.match(/[A-Za-z]/g)||[]).length;
+    if(letters>=3){ if(!/[aeiouyAEIOUY]/.test(t) && !/^[A-Z]{3,4}$/.test(t)) return false; continue; }
+    if(i===toks.length-1 && i>0 && /^[A-Z]{1,3}$/.test(t)) continue;       // variant tag: Orsup D, Getzid MR
+    return false;
+  }
+  const L=(String(n).match(/[A-Za-z]/g)||[]).length; if(L<3 || L/String(n).replace(/\s/g,"").length<0.8) return false;
+  const big = toks.filter(t=>t.replace(/[^A-Za-z]/g,"").length>=4);
+  if(big.length && big.every(t=>boxIsIngredientWord(t))) return false;
+  return true;
+}
+function boxNiceIngredient(name){
+  return String(name||"").replace(/\s+/g," ").trim().split(" ").map(w=>{
+    if(/^[A-Za-z]\d{1,2}$/.test(w)) return w.toUpperCase();
+    if(/^(?:[A-Z]{2,5})$/.test(w) && w.length<=3) return w;
+    return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase();
+  }).join(" ");
+}
+// ingredient list read line by line: "<name> (aside) <dose>" — the way compositions are printed
+function boxStructuredComposition(text){
+  const lines = boxDropExcipientLines(String(text||"").split("\n")).map(l=>l.replace(/\s+/g," ").trim()).filter(Boolean);
+  const start = lines.findIndex(l=>/composition|\beach\s+(?:[A-Za-z\-]+\s+){0,3}contains?|\bcontains?\s*:/i.test(l));
+  if(start<0) return { pairs:[], leftover:[] };
+  const stop = /^\s*(indication|dosage|directions?|storage|store|excipients?|manufactured|batch|mfg|expiry|usual\s+dosage|warning|keep|protect)\b/i;
+  const pairs=[], leftover=[];
+  for(let i=start+1;i<lines.length && i<start+16;i++){
+    let l=lines[i]; if(stop.test(l)) break;
+    l = l.replace(/\.{2,}/g," ").replace(/\(\s*(?:eq|equiv|elemental|as\b|i\.?e)[^)]*\)/ig," ")
+         .replace(/\b(take|dosage?|indication|storage|adults?|children)\b.*$/i,"").trim();
+    if(!l) continue;
+    const qs = boxQuantities(l); let name = l, q = null;
+    if(qs.length){ q = qs[qs.length-1]; name = l.slice(0,q.index); }
+    name = name.replace(/\([^)]*\)?/g," ").replace(/\b(?:U\.?S\.?P\.?|B\.?P\.?|I\.?P\.?|Ph\.?\s*Eur\.?|Specs?)\b/ig," ")
+               .replace(/[^A-Za-z0-9\- ]/g," ").replace(/\s+/g," ").trim();
+    const goodName = name && (name.split(" ").length<=5) && name.split(" ").some(tok=>boxIsIngredientWord(tok)) && ((name.match(/[A-Za-z0-9]/g)||[]).length/name.replace(/\s/g,"").length)>=0.9;
+    if(!qs.length){ if(goodName) pairs.push({ name:boxNiceIngredient(name), strength:null }); continue; }
+    if(goodName){ pairs.push({ name:boxNiceIngredient(name), strength:q.text }); continue; }
+    const last = [...pairs].reverse().find(pp=>!pp.strength);
+    if(last) last.strength = q.text; else leftover.push(q.text);
+  }
+  return { pairs:boxDedupePairs(pairs), leftover };
+}
+// "(Lactitol Monohydrate)" / "(Betamethasone Dipropionate U.S.P &\nSalicylic Acid U.S.P)" under a brand name, bracket or not
+// "Ctitol" -> "Lactitol", "Nohyadrate" -> "Monohydrate": a damaged word that is clearly close to a known ingredient word
+function boxRepairWord(w){
+  const k=String(w||"").toLowerCase().replace(/[^a-z]/g,""); if(k.length<5) return w;
+  const st=boxWordSet(); if(st.has(k) || BOX_SALT_WORDS.has(k)) return w;
+  let best=null, bs=0;
+  const scan=set=>{ for(const x of set){ if(x.length>=6 && Math.abs(x.length-k.length)<=3){ const sc=aiSim(k,x); if(sc>bs){ bs=sc; best=x; } } } };
+  scan(st); scan(BOX_SALT_WORDS);
+  return (best && bs>=0.72) ? best : w;
+}
+function boxBracketFormula(text){
+  const lines = String(text||"").split("\n").map(l=>l.replace(/\s+/g," ").trim()).filter(Boolean), idx = boxGenericIndex();
+  for(let i=0;i<lines.length;i++){
+    let l=lines[i]; const opens=/^[^A-Za-z0-9]*\(/.test(l), closes=/\)\s*$/.test(l);
+    if(!opens && !closes) continue;
+    if(opens && !closes){ let j=i; while(j+1<lines.length && j<i+2 && !/\)\s*$/.test(l)){ j++; l+=" "+lines[j]; } if(!/\)\s*$/.test(l)) continue; }
+    let inner = l.replace(/^[^A-Za-z0-9(]*\(?/,"").replace(/\)\s*$/,"").trim();
+    if(/\d/.test(inner)) continue;
+    inner = inner.replace(/\b(?:U\.?S\.?P\.?|B\.?P\.?|I\.?P\.?|Specs?)\b/ig," ").replace(/[^A-Za-z&+, \-]/g," ").replace(/\s+/g," ").trim();
+    const parts = inner.split(/\s*(?:&|\+|,|\band\b)\s*/i).map(x=>x.trim()).filter(Boolean);
+    if(!parts.length || parts.length>4) continue;
+    const nice = parts.map(part=>{
+      const words=part.split(" "); const o=[];
+      for(let k=0;k<words.length;k++){ const h=boxGenericAt(words,k,idx); if(h && h.len===1){ o.push(h.label); } else if(h && h.len===2){ o.push(h.label); k++; } else o.push(boxNiceIngredient(boxRepairWord(words[k]))); }
+      return o.join(" ");
+    });
+    const f = nice.join(" + ");
+    if(boxFormulaOk(f)) return f;
+  }
+  return "";
+}
+function boxGateFields(m){
+  if(m.formula && !boxFormulaOk(m.formula)){ delete m.formula; }
+  if(m.strength && !/\d/.test(m.strength)) delete m.strength;
+  if(m.productName && !boxNameOk(m.productName)) delete m.productName;
+  if(m.price && !(Number(m.price)>=1 && Number(m.price)<=1000000)) delete m.price;
+  if(m.perBox && !(Number(m.perBox)>=1 && Number(m.perBox)<=5000)) delete m.perBox;
+  return m;
+}
 // applies the rules above to what the combined reading has so far
 function boxEnrich(m, text){
-  const t=String(text||""), liquid=BOX_LIQUID_FORM.test(m.form||"");
+  const t=boxFixOcr(text), liquid=BOX_LIQUID_FORM.test(m.form||"");
+  if(m.formula && !boxFormulaOk(m.formula)){ m.formula=""; m.strength=""; }     // a reading slip like "…in D3 + PTI LL LE LE" must not block the real one
+  const sc=boxStructuredComposition(t);
   const comp=boxFindComposition(t), nOld=Math.min(String(m.formula||"").split("+").filter(x=>x.trim()).length, String(m.strength||"").split("+").filter(x=>x.trim()).length);
   const withStr=comp.pairs.filter(p=>p.strength);
-  if(comp.pairs.length && (!m.formula || withStr.length>nOld)){
+  if(sc.pairs.length>=3 || (sc.pairs.length>=1 && sc.pairs.length>=comp.pairs.length && sc.pairs.some(p=>p.strength))){
+    // the ingredient list was read line by line: names and doses stay together
+    const names = sc.pairs.map(p=>p.name), have = sc.pairs.map(p=>p.strength);
+    comp.pairs.forEach(cp=>{ if(!names.some(n=>boxNzKey(n)===boxNzKey(cp.name)) && sc.pairs.length<comp.pairs.length){ names.push(cp.name); have.push(cp.strength); } });
+    let extra = sc.leftover.slice(); for(let i=0;i<have.length;i++) if(!have[i] && extra.length) have[i]=extra.shift();
+    m.formula = names.join(" + ");
+    const got = have.filter(Boolean); if(got.length) m.strength = got.join(" + ");
+  } else if(comp.pairs.length && (!m.formula || withStr.length>nOld || comp.pairs.length>String(m.formula||"").split("+").filter(x=>x.trim()).length)){
     m.formula=comp.pairs.map(p=>p.name).join(" + ");
     const sp=comp.pairs.map(p=>p.strength);
     let extra=comp.standalone.slice(); for(let i=0;i<sp.length;i++) if(!sp[i] && extra.length) sp[i]=extra.shift();
     const got=sp.filter(Boolean); if(got.length) m.strength=got.join(" + ");
-  } else if(!m.strength && comp.standalone.length){
-    m.strength=comp.standalone[0];
   }
+  if(!m.formula){ const bf=boxBracketFormula(t); if(bf) m.formula=bf; }
   if(liquid){
     m.perBox=1;                                   // one bottle / tube
     const vol=boxFindVolume(t);
@@ -5066,7 +5275,9 @@ function mergeBoxReads(reads){
   infos.forEach(x=>{
     const H = x.r.__h || 1;
     ((x.r.data && x.r.data.lines) || []).forEach(l=>{
-      const clean0 = String(l.text||"").replace(/[^A-Za-z0-9 \-]+/g," ").replace(/\s+/g," ").trim();
+      if(/^[^A-Za-z0-9]*[\(\[]/.test(String(l.text||"")) || /[\)\]]\s*$/.test(String(l.text||""))) return;   // "(Lactitol Monohydrate)" is the formula, never the brand
+      let clean0 = String(l.text||"").replace(/[^A-Za-z0-9 \-]+/g," ").replace(/\s+/g," ").trim();
+      clean0 = clean0.split(/\s[-\u2013]+\s/)[0].trim();                      // "Provate-S - EY": text after a stray dash is noise
       // drop ordinary words and dosage forms from the line; what is left is a possible brand name
       const kept = clean0.split(" ").filter(w=>w && !BOX_COMMON.has(w.toLowerCase().replace(/[^a-z]/g,"")));
       const clean = kept.join(" ");
@@ -5075,6 +5286,8 @@ function mergeBoxReads(reads){
       if(letters/clean.replace(/\s/g,"").length < 0.7) return;
       if(/gtin|m\.?r\.?p|\d{6,}/i.test(clean)) return;
       const lo = clean.toLowerCase();
+      if(notAName.test(clean)) return;
+      if(!boxNameOk(clean)) return;
       if(ingredients.some(n=>n===lo || n.includes(lo) || lo.includes(n))) return;
       const kw = kept.filter(w=>/[A-Za-z]{3}/.test(w));
       if(kw.length && kw.every((w,i)=>boxGenericAt(kw,i,idx))) return;      // every word is an ingredient name
@@ -5089,7 +5302,7 @@ function mergeBoxReads(reads){
     if(name === name.toUpperCase()) name = name.toLowerCase().replace(/\b([a-z])([a-z]+)/g,(m,a,b)=>a.toUpperCase()+b).replace(/\b([a-z])\b/g,c=>c.toUpperCase());
     merged.productName = boxSnapToStored(name);
   }
-  return merged;
+  return boxGateFields(merged);
 }
 async function processBoxPhotos(files, forceOffline){
   boxBusyOn(files.length);
@@ -5257,8 +5470,8 @@ async function offlineBoxPipeline(files){
 // text is read on a free engine, silently. By the time "Done" is tapped most or all of the work is finished, so the
 // result usually appears at once; only if work is still running does the usual "Reading…" box show.
 function createBoxSession(){
-  const S = { files:[], reads:[], codes:{}, firstCodeText:null, shared:{deg:null}, workers:[], idle:[], queue:[],
-              running:0, codePending:0, ready:false, failed:false, complete:false, closed:false, waiters:[] };
+  const S = { files:[], reads:[], deep:[], deepQueue:[], codes:{}, firstCodeText:null, shared:{deg:null}, workers:[], idle:[], queue:[],
+              running:0, codePending:0, ready:false, failed:false, complete:false, closed:false, waiters:[], deadline:0 };
   const cores = navigator.hardwareConcurrency || 4, mem = navigator.deviceMemory || 4;
   const lanes = Math.max(1, Math.min(3, cores-1, mem<2 ? 1 : 3));   // fewer engines on weak phones
   const mkWorker = async ()=>{ try{ return await window.Tesseract.createWorker("eng"); }catch(e){ return null; } };
@@ -5277,16 +5490,27 @@ function createBoxSession(){
       S.workers = ws; S.idle = ws.slice(); S.ready = true; pump();
     })().catch(()=>{ S.failed = true; wake(); });
   };
-  const combined = ()=> Object.assign({}, mergeBoxReads(S.reads), Object.fromEntries(Object.entries(S.codes).filter(([,v])=>v!=null && v!=="")));
-  function settled(){ return S.closed || S.complete || S.failed || (S.ready && !S.queue.length && S.running===0 && S.codePending===0); }
+  const combined = ()=> Object.assign({}, mergeBoxReads(S.reads.concat(S.deep.filter(Boolean))), Object.fromEntries(Object.entries(S.codes).filter(([,v])=>v!=null && v!=="")));
+  function settled(){ return S.closed || S.complete || S.failed || (S.ready && !S.queue.length && !S.deepQueue.length && S.running===0 && S.codePending===0); }
   function wake(){ if(settled()){ const ws=S.waiters.splice(0); ws.forEach(f=>f()); } }
   function checkComplete(){ if(!S.complete && boxIsComplete(combined())) S.complete = true; }
+  function stopDeep(){ return S.closed || S.complete || (S.deadline && Date.now()>S.deadline); }
   function pump(){
-    while(!S.closed && !S.complete && S.idle.length && S.queue.length){
-      const w = S.idle.pop(), k = S.queue.shift(); S.running++;
-      (async()=>{
-        try{ S.reads[k] = await aiOcrRotated(S.files[k], w, null, S.shared); checkComplete(); }catch(e){ /* this photo failed; the others carry on */ }
-      })().finally(()=>{ S.running--; if(!S.closed) S.idle.push(w); pump(); wake(); });
+    // the quick read of every photo goes first; the slower tile-by-tile deep read only uses engines that would otherwise be idle
+    while(!S.closed && !S.complete && S.idle.length && (S.queue.length || S.deepQueue.length)){
+      const w = S.idle.pop(); S.running++;
+      let job;
+      if(S.queue.length){
+        const k = S.queue.shift();
+        job = (async()=>{
+          const r = await aiOcrRotated(S.files[k], w, null, S.shared); S.reads[k] = r; checkComplete();
+          if(!S.complete) S.deepQueue.push({ k, deg:r.__deg||0, quickH:r.__h, grid:((r.data&&r.data.words||[]).length>=30) ? 3 : 2 });
+        })();
+      } else {
+        const j = S.deepQueue.shift();
+        job = (async()=>{ await aiOcrTiles(S.files[j.k], j.deg, w, j.grid, j.quickH, stopDeep, out=>{ S.deep[j.k]=out; checkComplete(); }); })();
+      }
+      job.catch(()=>{ /* this photo failed; the others carry on */ }).finally(()=>{ S.running--; if(!S.closed) S.idle.push(w); pump(); wake(); });
     }
     wake();
   }
@@ -5310,7 +5534,11 @@ function createBoxSession(){
   // Resolves with { parsed, codeText } when every photo handed over so far has been read — or { failed:true }.
   S.finish = async function(){
     S.start();
-    if(!settled()) await new Promise(r=>{ S.waiters.push(r); wake(); });
+    S.deadline = Date.now() + 14000;   // after "Done" the deep reading may use at most ~14 s; what is finished by then is used
+    if(!settled()){
+      await Promise.race([ new Promise(r=>{ S.waiters.push(r); wake(); }), new Promise(r=>setTimeout(r,22000)) ]);
+      S.queue.length = 0; S.deepQueue.length = 0;
+    }
     if((S.failed || S.closed) && !S.complete){ S.dispose(); return { failed:true }; }
     const parsed = combined();
     if(!S.complete && boxNeedsDoses(parsed)){
@@ -9747,13 +9975,53 @@ function aiLoadTesseract(){
 }
 // Camera capture inside the page (same getUserMedia route as the barcode scanner). The app's
 // WebView doesn't open the phone's file chooser, so <input type="file"> buttons did nothing.
+// How sharp a picture is (variance of a Laplacian on a 320 px copy). High = crisp text, low = blur.
+function imgSharpness(src){
+  try{
+    const sw = src.width || src.videoWidth, sh = src.height || src.videoHeight; if(!sw || !sh) return 0;
+    const w = 320, h = Math.max(8, Math.round(w*sh/sw));
+    const t = document.createElement("canvas"); t.width = w; t.height = h;
+    const x = t.getContext("2d", {willReadFrequently:true}); x.drawImage(src,0,0,w,h);
+    const d = x.getImageData(0,0,w,h).data, g = new Float32Array(w*h);
+    for(let i=0;i<w*h;i++) g[i] = 0.3*d[4*i] + 0.59*d[4*i+1] + 0.11*d[4*i+2];
+    let n=0, s1=0, s2=0;
+    for(let y=1;y<h-1;y++) for(let xx=1;xx<w-1;xx++){ const i=y*w+xx, l=g[i-1]+g[i+1]+g[i-w]+g[i+w]-4*g[i]; s1+=l; s2+=l*l; n++; }
+    const m = s1/n; return s2/n - m*m;
+  }catch(e){ return 0; }
+}
+const BLUR_WARN_BELOW = 260;   // measured on real photos: clearly sharp 360-1400, the blurry bottle front 243, heavy blur under 100
+// The frame grabbed the instant the button was tapped is often still out of focus. Take two more a moment later and
+// keep the sharpest; when the phone can take a real full-resolution still, use that unless it came out worse.
+async function takeSharpPhoto(c0, v, imgCap){
+  const cands = [{ cv:c0, s:imgSharpness(c0) }];
+  for(let i=0;i<2;i++){
+    await new Promise(r=>setTimeout(r,110));
+    if(!v.videoWidth) break;
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v,0,0);
+    cands.push({ cv:c, s:imgSharpness(c) });
+  }
+  cands.sort((a,b)=>b.s-a.s);
+  const best = cands[0]; let blob = null, sharp = best.s;
+  if(imgCap){
+    try{
+      const sb = await imgCap.takePhoto();
+      const bm = await createImageBitmap(sb);
+      const ss = imgSharpness(bm); try{ bm.close && bm.close(); }catch(e){}
+      if(ss >= best.s*0.6){ blob = sb; sharp = Math.max(ss, best.s); }
+    }catch(e){ /* this phone/web view has no still capture — the sharpest preview frame is used */ }
+  }
+  if(!blob) blob = await new Promise(res=>best.cv.toBlob(res,"image/jpeg",0.9));
+  return { blob, blurry: sharp < BLUR_WARN_BELOW };
+}
 async function takePhoto(cb, max, hooks){
   max = max||1; hooks = hooks||{};
   let stream;
   showToast("📷 Opening camera…"); // if you never see this, the old index.html is still live on GitHub
   try{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error("This app's web view has no camera support"),{name:"NoCameraApi"});
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}}});
+    const hiRes = max>1;   // several photos of a box / prescription: ask for a sharper picture (the camera uses what it can)
+    const hasStill = typeof ImageCapture !== "undefined";
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:hiRes?(hasStill?2560:3840):1920},height:{ideal:hiRes?(hasStill?1440:2160):1080}}});
   }catch(e){
     if(window.AppInventor && typeof window.AppInventor.setWebViewString==="function") window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
     showToast("📷 Camera error ("+(e&&e.name?e.name:"unknown")+") — allow the camera, then tap again");
@@ -9761,6 +10029,12 @@ async function takePhoto(cb, max, hooks){
     return;
   }
   const multi = max>1, shots=[];
+  let imgCap = null;
+  try{
+    const track = stream.getVideoTracks()[0], caps = (track.getCapabilities && track.getCapabilities()) || {};
+    if(caps.focusMode && caps.focusMode.indexOf("continuous")>=0) track.applyConstraints({advanced:[{focusMode:"continuous"}]}).catch(()=>{});
+    if(multi && typeof ImageCapture !== "undefined") imgCap = new ImageCapture(track);
+  }catch(e){ imgCap = null; }
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column;";
   ov.innerHTML='<video id="tpVideo" autoplay playsinline muted style="flex:1;min-height:0;width:100%;object-fit:contain;"></video>'
@@ -9801,10 +10075,16 @@ async function takePhoto(cb, max, hooks){
     th.insertAdjacentHTML("beforeend",'<img src="'+tc.toDataURL("image/jpeg",0.6)+'" style="height:44px;width:auto;border-radius:8px;border:2px solid var(--primary);">');
     ov.querySelector("#tpShot").textContent="📸 Capture ("+taken+"/"+max+")";
     const d=ov.querySelector("#tpDone"); d.disabled=false; d.style.opacity="1";
-    pending.push(new Promise(res=>c.toBlob(b=>{
-      if(b){ const f=new File([b],"photo.jpg",{type:"image/jpeg"}); shots.push(f); try{ hooks.onShot && hooks.onShot(f); }catch(_){} }   // hand each photo over the moment it exists
-      res();
-    },"image/jpeg",0.85)));
+    pending.push((async()=>{
+      let res = null;
+      try{ res = await takeSharpPhoto(c, v, imgCap); }catch(e){ res = null; }
+      if(!res || !res.blob) res = { blob: await new Promise(r=>c.toBlob(r,"image/jpeg",0.85)), blurry:false };
+      if(res.blob){
+        const f = new File([res.blob],"photo.jpg",{type:"image/jpeg"}); shots.push(f);
+        if(res.blurry) showToast("⚠ That photo may be blurry — retake it if the small print isn't sharp");
+        try{ hooks.onShot && hooks.onShot(f); }catch(_){}   // hand each photo over the moment it exists
+      }
+    })());
     if(taken>=max) finish();
   };
 }
