@@ -327,12 +327,12 @@
   .chip.red{color:var(--danger);border-color:var(--danger);}
   .chip.red.on{background:var(--danger);border-color:var(--danger);color:#fff;}
   [data-hold]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;}
-  .hold-menu{position:fixed;z-index:90;display:flex;background:#2B3440;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.32);overflow:hidden;}
-  .hold-menu button{background:none;border:none;border-right:1px solid rgba(255,255,255,.16);color:#fff;font-size:15px;font-weight:700;padding:12px 20px;font-family:inherit;cursor:pointer;}
+  .hold-menu{position:fixed;z-index:90;display:flex;background:#2B3440;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.3);overflow:hidden;max-width:calc(100vw - 12px);}
+  .hold-menu button{background:none;border:none;border-right:1px solid rgba(255,255,255,.16);color:#fff;font-size:12px;font-weight:600;padding:8px 10px;white-space:nowrap;line-height:1.25;font-family:inherit;cursor:pointer;}
   .hold-menu button:last-child{border-right:none;}
   .seg{display:flex;flex:none;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#fff;}
-  .seg button{border:none;background:none;padding:8px 14px;font-size:13px;font-weight:700;color:var(--muted);font-family:inherit;cursor:pointer;}
-  .seg button.on{background:var(--primary);color:#fff;}
+  .seg button{border:none;background:none;padding:11px 18px;font-size:14px;font-weight:600;color:var(--muted);font-family:inherit;cursor:pointer;}
+  .seg button.on{background:var(--primary);color:#fff;box-shadow:0 4px 12px rgba(15,92,87,.25);}
   #invCardsList > div{content-visibility:auto;contain-intrinsic-size:auto 300px;}
   #invStickyBar{position:sticky;top:0;z-index:25;background:var(--page);margin:0 -12px 4px;padding:8px 12px 2px;transition:transform .22s ease;will-change:transform;}
   #invStickyBar.hide{transform:translateY(-115%);}
@@ -460,6 +460,7 @@
 <div id="receiptModalRoot"></div>
 <div id="scanMethodModalRoot"></div>
 <div id="themeModalRoot"></div>
+<div id="kbTestRoot"></div>
 <div id="receiptDesignRoot"></div>
 <div id="toolsModalRoot"></div>
 <div id="recoveryModalRoot"></div>
@@ -488,10 +489,10 @@ const CURRENCY = "Rs ";
 // input's own native display, not in anything this page draws). If this fixes it, the
 // trade-off is medicine names may show spellcheck underlines; if it doesn't, this is safe to
 // revert and the real cause is still elsewhere.
-// autocapitalize="sentences" makes the keyboard start each box with a capital letter.
+// autocapitalize="words" makes the keyboard start each box with a capital letter.
 // autocorrect="off" was removed: newer Android keyboards treat it as "no suggestions", which
 // also switches auto-capital off everywhere.
-const NOAC = 'autocomplete="off" autocapitalize="sentences" data-lpignore="true"';
+const NOAC = 'autocomplete="off" autocapitalize="words" data-lpignore="true"';
 // For boxes holding keys, codes, addresses or dates — these must stay exactly as typed.
 const NOAC_RAW = 'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true"';
 let inventory = [];
@@ -553,7 +554,7 @@ let newTestPriceDraft = ""; // transient: price input for adding a new test in t
 
 /* transient (not persisted) UI state */
 function newBillState(){
-  return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", medsDiscount:"", selectedMedId:null, qtyMode:billModePrefs.qtyMode, daysMode:billModePrefs.daysMode, perDay:"", days:"", globalDays:"", extras:[], extraAmount:"",
+  return { patient:"", fee: defaultDoctorFee?String(defaultDoctorFee):"", items:[], query:"", pills:"", medsDiscount:"", selectedMedId:null, qtyMode:billModePrefs.qtyMode, daysMode:billModePrefs.daysMode, perDay:"", days:"", globalDays:"", extras:[], extraAmount:"", extraLabel:"",
     tests:[], selectedTestIds:[], testsDiscount:"", feeDiscount:"", totDisc:"", totDiscMode:"rs", fixedMode:false, feeEditing:false, feeDiscountEditing:false, medsDiscountEditing:false, testsMenuOpen:false, feeIncluded:false,
     paymentMode:"Cash", remarks: defaultDoctorName || "",
     // Special-category medicines: a second, separate search/add flow (see specialMatches()
@@ -1748,7 +1749,7 @@ window.addEventListener("popstate", function(){
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
-    printerUi.open || themeUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
+    printerUi.open || themeUi.open || kbTestUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -1769,6 +1770,7 @@ function closeTopMenu(){
   if(historyUi.open){ closeHistoryModal(); return; }
   if(aiUi.open){ closeQuickAdd(); return; }
   if(themeUi.open){ closeThemeModal(); return; }
+  if(kbTestUi.open){ closeKbTest(); return; }
   if(rdUi.open){ closeReceiptDesign(); return; }
   if(toolsUi.open){ closeTools(); return; }
   if(printerUi.open){ printerUi.open=false; render(); return; }
@@ -1815,7 +1817,7 @@ function renderOverlays(){
   renderShareModal(); renderConfirmModal(); renderNumberPromptModal(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderPrinterModal();
   renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderHistoryModal();
   renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
-  renderScanMethodModal(); renderThemeModal(); renderReceiptDesignModal(); renderToolsModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
+  renderScanMethodModal(); renderThemeModal(); renderKbTestModal(); renderReceiptDesignModal(); renderToolsModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
   syncMenuHistory(); syncHeaderOffset();
 }
 function render(){
@@ -2105,8 +2107,8 @@ function renderNumberPromptModal(){
   if(!root) return;
   if(!numberPromptState){ root.innerHTML=""; return; }
   root.innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this) cancelNumberPrompt()">
-      <div class="modal" style="max-width:300px;">
+    <div class="modal-overlay" style="align-items:flex-start;padding:12vh 12px 0;" onclick="if(event.target===this) cancelNumberPrompt()">
+      <div class="modal" style="max-width:300px;border-radius:16px;">
         <div class="modal-head"><strong>${esc(numberPromptState.message)}</strong></div>
         <div class="modal-body">
           <input ${NOAC} type="text" inputmode="numeric" autofocus value="${esc(numberPromptState.draft)}" oninput="onNumberPromptDraft(this.value)" onkeydown="if(event.key==='Enter') submitNumberPrompt()" placeholder="Enter a number" style="margin-bottom:4px;">
@@ -2157,11 +2159,13 @@ function billFeeContribution(){ return bill.feeIncluded ? billFeeNet() : 0; }
 function billGrandTotal(){ return r2(billMedNet() + billExtrasTotal() + billTestsTotal() + billFeeContribution()); }
 function onBillMedsDiscount(v){ bill.medsDiscount=v; scheduleRender(); }
 function onExtraAmount(v){ bill.extraAmount=v; scheduleRender(); }
+function onExtraLabel(v){ bill.extraLabel=v; }   // optional name, e.g. "Dressing" — no redraw while typing
 function addExtraItem(){
   const amount = r2(Number(bill.extraAmount));
   if(!amount || amount<=0) return;
-  bill.extras.push({ id:uid(), amount });
-  bill.extraAmount="";
+  const label = String(bill.extraLabel||"").replace(/\s+/g," ").trim().slice(0,40);
+  bill.extras.push(label ? { id:uid(), amount, label } : { id:uid(), amount });
+  bill.extraAmount=""; bill.extraLabel="";
   render();
 }
 function removeExtraItem(idx){ bill.extras.splice(idx,1); render(); }
@@ -2384,13 +2388,13 @@ function redOneBtnHtml(sm){
 function qChip(label, active, onclick, hold, sm){
   return `<button type="button" class="chip ${active?'on':''} ${sm?'sm':''}" style="flex:1;" ${hold?`data-hold="menu:${hold}"`:""} onclick="${onclick}">${label}</button>`;
 }
-function perDayChipsHtml(sm){
+function perDayChipsHtml(sm, noRed){
   const pd = Number(bill.perDay), f = !!bill.fixedMode;
   return `<div class="flex ${sm?'':'gap2 '}mb2" ${sm?'style="gap:4px;"':''}>`
     + qChip(1, !f&&pd===1, "setBillPerDayQuick(1)", "", sm)
     + qChip(2, !f&&pd===2, "setBillPerDayQuick(2)", "perDay:4,6,8", sm)
     + qChip(3, !f&&pd===3, "setBillPerDayQuick(3)", "perDay:6,9,12", sm)
-    + redOneBtnHtml(sm) + `</div>`;
+    + (noRed ? "" : redOneBtnHtml(sm)) + `</div>`;
 }
 function daysChipsHtml(kind, withRed, sm){
   const cur = Number(kind==='gdays' ? bill.globalDays : bill.days);
@@ -2641,7 +2645,7 @@ function buildBillText(tx){
   }
   if(tx.extras && tx.extras.length){
     lines.push(`Other charges:`);
-    tx.extras.forEach((ex,i)=> lines.push(`${i+1}. Other charge — ${CURRENCY}${money(ex.amount)}`));
+    tx.extras.forEach((ex,i)=> lines.push(`${i+1}. ${ex.label || "Other charge"} - ${CURRENCY}${money(ex.amount)}`));
     lines.push(``);
   }
   lines.push(`Medicine total: ${CURRENCY}${money((tx.medTotal||0)-(tx.medsDiscount||0))}`);
@@ -3047,6 +3051,40 @@ function getAppearance(){ try{ const v=localStorage.getItem("clinic_appearance")
 function isDarkMode(){ const a=getAppearance(); return a==="dark" || (a==="auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches); }
 function chooseAppearance(v){ try{ localStorage.setItem("clinic_appearance", v); }catch(e){} applyTheme(getThemeId()); renderOverlays(); }
 try{ if(window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ()=>{ if(getAppearance()==="auto") applyTheme(getThemeId()); }); }catch(e){}
+
+
+// ======================= Keyboard test (Settings → ⌨ Keyboard test) =======================
+// The page can only HINT to the phone's keyboard (autocapitalize). This screen has the same kind of box set up in
+// several different ways, so we can see which way the phone's keyboard follows and then use it everywhere.
+let kbTestUi = { open:false };
+function openKbTest(){ kbTestUi.open = true; renderOverlays(); }
+function closeKbTest(){ kbTestUi.open = false; renderOverlays(); }
+function renderKbTestModal(){
+  const root = document.getElementById("kbTestRoot"); if(!root) return;
+  if(!kbTestUi.open){ root.innerHTML = ""; return; }
+  const ua = navigator.userAgent || "";
+  const chrome = (/Chrome\/([\d.]+)/.exec(ua)||[])[1] || "?", android = (/Android ([\d.]+)/.exec(ua)||[])[1] || "?";
+  const box = (letter, title, html)=>`<div style="margin-bottom:12px;"><div style="font-size:13px;font-weight:700;margin-bottom:4px;">${letter} — ${title}</div>${html}</div>`;
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeKbTest()">
+      <div class="modal" style="max-height:92vh;">
+        <div class="modal-head"><strong>⌨ Keyboard test</strong><button class="modal-x" onclick="closeKbTest()">✕</button></div>
+        <div style="padding:12px 16px 18px;overflow-y:auto;">
+          <p class="small" style="margin:0 0 10px;">Tap each box in turn and look at the keyboard <b>before you type</b>: do the letters show as capitals (shift on)? Then type two words with a space and see whether the keys switch to capitals again at the start of the second word. Tell me which letters (A–H) worked.</p>
+          <p class="small faint" style="margin:0 0 12px;">Web view: Chrome ${esc(chrome)} · Android ${esc(android)}</p>
+          ${box("A","same as the boxes in the app",`<input autocomplete="off" autocapitalize="words" data-lpignore="true" placeholder="Type two words">`)}
+          ${box("B","without the autocomplete setting",`<input autocapitalize="words" placeholder="Type two words">`)}
+          ${box("C","first letter only (sentences)",`<input autocapitalize="sentences" placeholder="Type two words">`)}
+          ${box("D","no hints at all",`<input placeholder="Type two words">`)}
+          ${box("E","multi-line box",`<textarea autocapitalize="words" rows="2" placeholder="Type two words"></textarea>`)}
+          ${box("F","search-style box",`<input type="search" autocapitalize="words" placeholder="Type two words">`)}
+          ${box("G","name-style box",`<input type="text" name="name" autocomplete="name" autocapitalize="words" placeholder="Type two words">`)}
+          ${box("H","editable area",`<div contenteditable="true" autocapitalize="words" style="min-height:42px;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--card);"></div>`)}
+          <p class="small faint" style="margin:6px 0 0;">Also check your keyboard's own settings: an "auto capitalize" option there must be on, or no app can switch it on for you.</p>
+        </div>
+      </div>
+    </div>`;
+}
 
 let scanMethodUi = { open:false, method:"scanner" };
 function editScanMethodSettings(){
@@ -3664,7 +3702,7 @@ function renderBill(){
             <p class="small faint" style="margin:0 0 8px;">Edit each test's name or amount — used whenever you add it to a bill.</p>
             ${allTests().map(t=>`
               <div class="flex gap2 mb2" style="align-items:center;">
-                <input autocomplete="off" autocapitalize="sentences" class="flex1" id="testNameDraft-${t.id}" type="text" value="${esc(testNameDraft[t.id]!=null?testNameDraft[t.id]:t.name)}" oninput="onTestNameDraft('${t.id}',this.value)" placeholder="Test name">
+                <input autocomplete="off" autocapitalize="words" class="flex1" id="testNameDraft-${t.id}" type="text" value="${esc(testNameDraft[t.id]!=null?testNameDraft[t.id]:t.name)}" oninput="onTestNameDraft('${t.id}',this.value)" placeholder="Test name">
                 <input ${NOAC} id="testPriceDraft-${t.id}" type="text" inputmode="decimal" style="width:90px;" value="${esc(testPriceDraft[t.id]||"")}" oninput="onTestPriceDraft('${t.id}',this.value)" placeholder="0">
                 <button style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;padding:0 2px;" onclick="removeCustomTest('${t.id}')">🗑</button>
               </div>`).join("")}
@@ -3672,7 +3710,7 @@ function renderBill(){
             <div class="mt3 divider-top">
               <p class="small faint" style="margin:0 0 6px;font-weight:600;">Add a new test</p>
               <div class="flex gap2 mb2">
-                <input autocomplete="off" autocapitalize="sentences" class="flex1" id="newTestNameDraft" type="text" value="${esc(newTestNameDraft)}" oninput="onNewTestNameDraft(this.value)" placeholder="Test name">
+                <input autocomplete="off" autocapitalize="words" class="flex1" id="newTestNameDraft" type="text" value="${esc(newTestNameDraft)}" oninput="onNewTestNameDraft(this.value)" placeholder="Test name">
                 <input ${NOAC} id="newTestPriceDraft" type="text" inputmode="decimal" style="width:90px;" value="${esc(newTestPriceDraft)}" oninput="onNewTestPriceDraft(this.value)" placeholder="Price">
               </div>
               <button class="btn btn-outline" style="width:100%;" ${!newTestNameDraft.trim()?"disabled":""} onclick="addNewCustomTest()">+ Add test</button>
@@ -3812,8 +3850,9 @@ function renderBill(){
           <div class="mt2">
             ${(bill.daysMode==='perMed' && !bill.fixedMode) ? `
               <div style="display:flex;gap:10px;align-items:flex-start;">
-                <div style="flex:1;min-width:0;"><label class="field-label">Medicine per day</label>${perDayChipsHtml(true)}</div>
-                <div style="flex:1;min-width:0;"><label class="field-label">Number of days</label>${daysChipsHtml('days', true, true)}</div>
+                <div style="flex:3;min-width:0;"><label class="field-label">Medicine per day</label>${perDayChipsHtml(true, true)}</div>
+                <div style="flex:3;min-width:0;"><label class="field-label">Number of days</label>${daysChipsHtml('days', false, true)}</div>
+                <div style="flex:2;min-width:0;"><label class="field-label">&nbsp;</label><div class="flex mb2" style="gap:4px;">${redOneBtnHtml(true)}${redOneBtnHtml(true)}</div></div>
               </div>
             ` : `
               <label class="field-label">${bill.fixedMode ? "Total medicine to add (days ignored)" : "Medicine per day"}</label>
@@ -3853,14 +3892,18 @@ function renderBill(){
     ${testsHtml}
 
     <div class="card" style="padding:12px 14px;">
-      <div class="flex gap2" style="align-items:center;">
+      <div class="flex gap2" style="align-items:center;margin-bottom:8px;">
         <span class="small" style="font-weight:700;width:62px;flex:none;color:var(--text);">Others</span>
-        <div class="flex1"><input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="dressing, transport… amount"></div>
+        <div class="flex1"><input ${NOAC} id="billExtraLabelInput" type="text" maxlength="40" value="${esc(bill.extraLabel||"")}" oninput="onExtraLabel(this.value)" placeholder="Name (optional) \u2014 dressing, transport\u2026"></div>
+      </div>
+      <div class="flex gap2" style="align-items:center;">
+        <span style="width:62px;flex:none;"></span>
+        <div class="flex1"><input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="Amount"></div>
         <button class="btn btn-primary" style="padding:10px 16px;" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
       </div>
       ${bill.extras.length ? bill.extras.map((ex,idx)=>`
         <div class="item-row">
-          <div style="font-size:14px;font-weight:600;">Other charge ${idx+1}</div>
+          <div style="font-size:14px;font-weight:600;">${ex.label ? esc(ex.label) : `Other charge ${idx+1}`}</div>
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(ex.amount)}</span>
             <button onclick="removeExtraItem(${idx})" class="icon-del-btn">🗑</button>
@@ -8779,6 +8822,7 @@ function renderHeaderMenu(){
   if(can("receiptSetup")) items.push({label:"🖌 Receipt design", action:"openReceiptDesign()"});
   items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
   items.push({label:"🎨 Theme", action:"openThemeModal()"});
+  if(can("manageUsers")) items.push({label:"⌨ Keyboard test", action:"openKbTest()"});
   items.push({label:"📋 Stock count", action:"openTools('count')"});
   if(can("manageUsers")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
   items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
