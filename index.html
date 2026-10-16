@@ -476,7 +476,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v87";
+const APP_VERSION = "v88";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -8860,6 +8860,7 @@ const firebaseConfig = {
 // Must match the code checked in your Firestore security rules — see chat for the rules text.
 const SYNC_CODE = "counterbook-9214";
 
+let lastServerConfirmAt = 0;
 let fbDb = null, syncStatus = "offline", suppressPush = false, syncDebounceTimer = null;
 // pushInFlight: true only while OUR OWN pushToCloud() call is actively running. The listener
 // below checks this before touching the badge, so the two never fight over the same status —
@@ -9095,7 +9096,9 @@ async function manualPushToCloud(){
     // follow-up and returned immediately rather than actually finishing — wait for that queued
     // one too, so the toast reflects the real end result instead of firing too early.
     while(pushQueuedAgain || pushInFlight){ await new Promise(r=>setTimeout(r,200)); }
-    showToast(syncStatus==="synced" ? "✓ Uploaded — everything is synced" : "⚠ Still couldn't reach the server — check your connection and try again");
+    if(syncStatus==="synced") showToast("✓ Uploaded — everything is synced");
+    else if(!hasPendingSync() && navigator.onLine!==false) showToast("✓ Nothing left to upload — everything is already synced");   // the check timed out but no unsent changes exist
+    else showToast("⚠ Couldn't reach the server" + (lastSyncError ? " ("+String(lastSyncError).slice(0,80)+")" : "") + " — try again");
   } finally {
     hideUploadProgress();
   }
@@ -9120,9 +9123,9 @@ async function pushToCloud(){
   const wasSynced = (syncStatus === "synced");
   if(!wasSynced){ syncStatus = "syncing"; renderSyncBadge(); }
   try{
-    const snap = await withTimeout(cloudDocRef().get(), 10000);
+    const snap = await withTimeout(cloudDocRef().get(), 25000);
     if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data()); suppressPush=false; processHistorySync(); }
-    await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildCloudPayload())), 10000);
+    await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildCloudPayload())), 30000);
     syncStatus = "synced";
     clearPendingSyncIf(seqAtStart);
     clearSyncError();
@@ -9170,7 +9173,7 @@ function startCloudSync(){
       if(!pushInFlight){
         syncStatus = snap.metadata.fromCache ? "cached" : "synced";
         renderSyncBadge();
-        if(!snap.metadata.fromCache) clearSyncError();
+        if(!snap.metadata.fromCache){ lastServerConfirmAt = Date.now(); clearSyncError(); }
       }
     },
     async err=>{
@@ -10496,7 +10499,7 @@ async function uploadThenDownloadAppUpdate(apkUrl, btn){
   } finally {
     if(btn){ btn.disabled = false; btn.textContent = label; }
   }
-  if(syncStatus === "synced") downloadAppUpdate(apkUrl);
+  if(syncStatus === "synced" || (!hasPendingSync() && navigator.onLine!==false)) downloadAppUpdate(apkUrl);
 }
 function downloadAppUpdate(apkUrl){
   try{
