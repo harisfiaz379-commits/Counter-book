@@ -76,7 +76,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0F5C57">
-<title>Counter Book</title>
+<title>Saad Clinic</title>
 <style>
   :root{
     --page:#F3F6F7; --header:#0F5C57; --headerSub:#CFE9E5;
@@ -414,7 +414,7 @@
 <div id="app">
   <header>
     <div class="header-info" style="padding-right:150px;">
-      <h1>Counter Book</h1>
+      <h1>Saad Clinic</h1>
       <p class="header-sub">Dispensing &amp; billing</p>
       <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
         <span id="syncBadge" class="small" style="color:#fff;opacity:.85;"></span>
@@ -476,7 +476,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v79";
+const APP_VERSION = "v87";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -2677,7 +2677,7 @@ function padLR(left, right, width){
 // --- Receipt shop details (name/address/phone shown at the top of every printed receipt) --
 function getReceiptSettings(){
   let s = {}; try{ s = JSON.parse(localStorage.getItem("clinic_receipt_settings")||"{}"); }catch(e){}
-  return { shopName: s.shopName || "Counter Book", address: s.address || "", phone: s.phone || "" };
+  return { shopName: s.shopName || "Saad Clinic", address: s.address || "", phone: s.phone || "" };
 }
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
 // Which of the 3 scan methods (USB/Bluetooth scanner, take-a-photo, live camera) the single
@@ -3150,7 +3150,7 @@ function editReceiptSettings(){
 function closeReceiptModal(){ receiptUi.open=false; renderOverlays(); }
 function onReceiptField(field,v){ receiptUi[field]=v; }
 function submitReceiptSettings(){
-  saveReceiptSettings({ shopName: receiptUi.shopName.trim()||"Counter Book", address: receiptUi.address.trim(), phone: receiptUi.phone.trim() });
+  saveReceiptSettings({ shopName: receiptUi.shopName.trim()||"Saad Clinic", address: receiptUi.address.trim(), phone: receiptUi.phone.trim() });
   receiptUi.open = false;
   showToast("✓ Receipt details saved");
   render();
@@ -3168,7 +3168,7 @@ function renderReceiptModal(){
         </div>
         <div style="padding:14px 16px;">
           <label class="field-label" style="text-align:left;">Shop / clinic name (printed at the top of every receipt)</label>
-          <input ${NOAC} value="${esc(receiptUi.shopName)}" oninput="onReceiptField('shopName',this.value)" placeholder="e.g. Counter Book" class="mb2">
+          <input ${NOAC} value="${esc(receiptUi.shopName)}" oninput="onReceiptField('shopName',this.value)" placeholder="e.g. Saad Clinic" class="mb2">
           <label class="field-label" style="text-align:left;">Address (optional)</label>
           <input ${NOAC} value="${esc(receiptUi.address)}" oninput="onReceiptField('address',this.value)" placeholder="Leave blank to skip" class="mb2">
           <label class="field-label" style="text-align:left;">Phone number (optional)</label>
@@ -3288,7 +3288,7 @@ function rdSet(k,v){ rdUi.d[k]=v; renderOverlays(); }
 function rdText(k,v){ rdUi.d[k]=v; rdRefreshPreview(); }
 function rdShop(k,v){ rdUi.shop[k]=v; rdRefreshPreview(); }
 function rdReset(){ rdUi.d=Object.assign({},RECEIPT_DESIGN_DEFAULT); renderOverlays(); }
-function rdSave(){ saveReceiptDesign(rdUi.d); saveReceiptSettings({ shopName:(rdUi.shop.shopName||"").trim()||"Counter Book", address:(rdUi.shop.address||"").trim(), phone:(rdUi.shop.phone||"").trim() }); rdUi.open=false; showToast("✓ Receipt design saved"); renderOverlays(); }
+function rdSave(){ saveReceiptDesign(rdUi.d); saveReceiptSettings({ shopName:(rdUi.shop.shopName||"").trim()||"Saad Clinic", address:(rdUi.shop.address||"").trim(), phone:(rdUi.shop.phone||"").trim() }); rdUi.open=false; showToast("✓ Receipt design saved"); renderOverlays(); }
 function rdSample(){
   return { id:"SAMPLE123456", timestamp:Date.now(), patientName:"Ayesha Khan", paymentMode:"Cash", remarks:"Dr. Salman",
     items:[ {name:"Paracetamol 500mg", pills:10, pricePerPill:2, note:"2 x 5 days"}, {name:"Amoxicillin 250mg", pills:15, pricePerPill:8},
@@ -3328,7 +3328,7 @@ function renderReceiptDesignModal(){
 
           ${h("Shop details")}
           ${lbl("Shop / clinic name")}
-          <input ${NOAC} value="${esc(rdUi.shop.shopName)}" oninput="rdShop('shopName',this.value)" placeholder="e.g. Counter Book" class="mb2">
+          <input ${NOAC} value="${esc(rdUi.shop.shopName)}" oninput="rdShop('shopName',this.value)" placeholder="e.g. Saad Clinic" class="mb2">
           ${lbl("Address (optional)")}
           <input ${NOAC} value="${esc(rdUi.shop.address)}" oninput="rdShop('address',this.value)" placeholder="Leave blank to skip" class="mb2">
           ${lbl("Phone number (optional)")}
@@ -7641,7 +7641,7 @@ function renderSetupAdmin(){
   const questionIsCustom = setupUi.question==="custom";
   document.getElementById("main").innerHTML = `
     <div class="card" style="max-width:340px;margin:40px auto 0;text-align:center;">
-      <p style="font-weight:700;font-size:16px;margin:0 0 4px;">Welcome to Counter Book</p>
+      <p style="font-weight:700;font-size:16px;margin:0 0 4px;">Welcome to Saad Clinic</p>
       <p class="small faint" style="margin:0 0 16px;">Let's set up your Admin account first — this is the account with full access to everything.</p>
       <label class="field-label" style="text-align:left;">Your name</label>
       <input ${NOAC} id="setupNameInput" value="${esc(setupUi.name)}" oninput="onSetupName(this.value)" placeholder="e.g. Haris" class="mb2">
@@ -8832,7 +8832,7 @@ function renderHeaderMenu(){
   { const me = profiles.find(x=>x.id===currentProfileId);
     if(GMAIL_LOGIN_ENABLED && window.AppInventor) items.push({label: me && me.email ? "🔗 Gmail: "+me.email+" (change)" : "🔗 Link my Gmail", action:"startLinkGmail()"}); }
   items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
-  el.innerHTML = `<div style="padding:8px 14px 6px;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--faint);border-bottom:1px solid var(--border);">Counter Book · version ${APP_VERSION}</div>` + items.map((it,i)=>`
+  el.innerHTML = `<div style="padding:8px 14px 6px;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--faint);border-bottom:1px solid var(--border);">Saad Clinic · version ${APP_VERSION}</div>` + items.map((it,i)=>`
     <button onclick="closeHeaderMenu();syncMenuHistory();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
   `).join("");
 }
@@ -9918,7 +9918,7 @@ function dataIntegrityIssues(){
 }
 function showStorageHealth(){
   const L=[]; const st=cloudPayloadStats();
-  L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Counter Book ${APP_VERSION}`, ``);
+  L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Saad Clinic ${APP_VERSION}`, ``);
   L.push(`☁️ CLOUD (one shared document, limit 1,024 KB)`);
   L.push(`Size now: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full${st.pct>=70?"  ⚠ getting full":""}`);
   L.push(`Clean-up: ${st.trimmedCount.toLocaleString("en-US")} used-up batches older than a year are left out of the cloud copy (saves ${_hKB(st.saved)}); your phones keep them`);
@@ -10343,7 +10343,7 @@ async function diagRunChecks(){
 async function diagRefresh(){ diagUi.busy=true; renderOverlays(); diagUi.snap=await diagSnapshot(); diagUi.busy=false; renderOverlays(); }
 async function diagChecksNow(){ diagUi.busy=true; renderOverlays(); diagUi.checks=await diagRunChecks(); diagUi.snap=await diagSnapshot(); diagUi.busy=false; renderOverlays(); }
 function diagReport(){
-  const L=[]; L.push("Counter Book diagnostics "+new Date().toLocaleString());
+  const L=[]; L.push("Saad Clinic diagnostics "+new Date().toLocaleString());
   if(diagUi.snap) Object.keys(diagUi.snap).forEach(k=>L.push(k+": "+diagUi.snap[k]));
   if(diagUi.checks){ L.push("-- checks"); diagUi.checks.forEach(c=>L.push((c.ok?"OK   ":"FAIL ")+c.n+" "+c.d)); }
   L.push("-- log"); diagLogBuf.slice(-60).forEach(e=>L.push(new Date(e.t).toLocaleTimeString()+" ["+e.type+"] "+e.msg));
