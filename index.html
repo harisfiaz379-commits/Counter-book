@@ -4322,8 +4322,7 @@ async function openCameraScan(target, _isRetry){
         canvas.width = v.videoWidth; canvas.height = v.videoHeight;
         ctx.drawImage(v, 0, 0);
         frameCount++;
-        const profileIdx = frameCount % ZXING_PROFILES.length;
-        const engineLabel = (nativeDet ? "native+zxing" : "zxing-wasm") + " · " + ZXING_PROFILES[profileIdx].name;
+        let engineLabel = nativeDet ? "native+zxing" : "zxing-wasm";
         try{
           const t0 = performance.now();
           let text = null;
@@ -4333,8 +4332,20 @@ async function openCameraScan(target, _isRetry){
           }
           if(!text){
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const results = await ZXingWASM.readBarcodes(imageData, zxingOptionsFor(profileIdx));
-            if(results && results.length && results[0].text) text = results[0].text;
+            // Plain/default settings, tried on EVERY frame — this is what reads a normal,
+            // cleanly-printed code in milliseconds, so it must never be diluted down to a
+            // fraction of frames. Only when default finds nothing in THIS frame does it also
+            // try one of the other, more specialised profiles (denoise, alternate binarizers —
+            // aimed at dotted/inkjet prints) as a same-frame fallback, cycling through them so
+            // a hard code still gets full coverage within a couple of seconds either way.
+            let results = await ZXingWASM.readBarcodes(imageData, zxingOptionsFor(0));
+            if(results && results.length && results[0].text){ text = results[0].text; engineLabel += " · default"; }
+            else if(ZXING_PROFILES.length>1){
+              const altIdx = 1 + (frameCount % (ZXING_PROFILES.length-1));
+              engineLabel += " · "+ZXING_PROFILES[altIdx].name;
+              results = await ZXingWASM.readBarcodes(imageData, zxingOptionsFor(altIdx));
+              if(results && results.length && results[0].text) text = results[0].text;
+            }
           }
           updateScanDebugLine(frameCount, "", Math.round(performance.now()-t0), engineLabel);
           if(text){
