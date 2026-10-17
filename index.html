@@ -9731,7 +9731,20 @@ setTimeout(aiProcessQueue,6000);
 (function(){
   // Keyboard open = the page got much shorter. Then the "+" sits just above the keyboard; otherwise normal spot above the tab bar.
   let base=window.innerHeight;
-  function chk(){ const h=window.innerHeight; if(h>base) base=h; document.body.classList.toggle("kb-open", h < base*0.8); }
+  let shrunk=false;
+  function chk(){
+    const h=window.innerHeight; if(h>base) base=h;
+    const open=h < base*0.8;
+    document.body.classList.toggle("kb-open", open);
+    if(open) shrunk=true;
+    else if(shrunk){
+      // The keyboard was just closed (hide key / back button). Android keeps the typing box focused when that happens,
+      // and the tab bar stays hidden for as long as a box is focused, so release the box and show the tab bar again.
+      shrunk=false;
+      document.body.classList.remove("kb-typing");
+      const a=document.activeElement; if(a && a!==document.body && typeof typing==="function" && typing(a)) a.blur();
+    }
+  }
   window.addEventListener("resize",chk);
   if(window.visualViewport) window.visualViewport.addEventListener("resize",chk);
   window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=window.innerHeight; chk(); },500));
