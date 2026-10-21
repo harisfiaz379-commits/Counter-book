@@ -406,6 +406,17 @@
   #datePickerModalRoot,#datePickerModalRoot *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
   #datePickerModalRoot button{touch-action:manipulation;}
   body.dp-open,body.dp-open *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
+  /* Branch transfer: drag a medicine card onto the branch oval */
+  [id^="invCard-"]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
+  [id^="invCard-"] input,[id^="invCard-"] textarea{-webkit-user-select:text;user-select:text;}
+  .xfer-src{opacity:.35;}
+  .xfer-ghost{position:fixed;z-index:95;pointer-events:none;max-height:120px;overflow:hidden;opacity:.97;transform:rotate(-2deg);box-shadow:0 14px 34px rgba(0,0,0,.35)!important;border:2px solid var(--primary);margin:0!important;}
+  body.xfer-dragging{overflow:hidden;}
+  body.xfer-dragging [data-branchoval]{animation:xferPulse 1s ease-in-out infinite;background:rgba(255,255,255,.4)!important;}
+  [data-branchoval].xfer-hot{background:#fff!important;color:var(--header)!important;transform:scale(1.15);animation:none!important;box-shadow:0 0 0 3px rgba(255,255,255,.55);}
+  @keyframes xferPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,.7);}50%{box-shadow:0 0 0 6px rgba(255,255,255,0);}}
+  #xferHint{display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));z-index:96;background:#1F2937;color:#fff;padding:9px 16px;border-radius:999px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}
+  .linkbtn{background:none;border:none;color:var(--primary);font:inherit;font-weight:700;text-decoration:underline;padding:0;cursor:pointer;touch-action:manipulation;}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -480,7 +491,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v96";
+const APP_VERSION = "v97";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -3063,6 +3074,7 @@ function renderToolsModal(){
   else if(k==="count"){ title="📋 Stock count"; body=countBodyHtml(); }
   else if(k==="reports"){ title="📊 Reports"; body=reportsBodyHtml(); }
   else if(k==="patient"){ title="🕘 "+esc(toolsUi.histName); body=patientBodyHtml(); }
+  else if(k==="transfer"){ title="🏢 Transfer to another branch"; body=xferBodyHtml(); }
   root.innerHTML=`<div class="modal-overlay" onclick="if(event.target===this) closeTools()"><div class="modal" style="max-height:90vh;"><div class="modal-head"><strong>${title}</strong><button class="modal-x" onclick="closeTools()">✕</button></div><div style="padding:12px 16px 18px;overflow-y:auto;">${body}</div></div></div>`;
 }
 
@@ -3151,6 +3163,265 @@ function renderKbTestModal(){
       </div>
     </div>`;
 }
+
+
+// ======================= Transfer medicine to another branch =======================
+// Long-press a medicine card on the Inventory tab, drag it anywhere on screen and drop it on the branch name oval in the
+// header. A menu then lists the other branches and asks for the quantity (boxes + loose pills).
+// The stock leaves this branch at once; the transfer is saved as a small "xfer_..." record in the cloud and the receiving
+// branch claims it exactly once (a database transaction) the next time any phone in that branch is online.
+let xferUi = { medId:"", toId:"", boxes:"", pills:"", busy:false, manual:false, bq:{} };
+let _xferDrag = null, _xferSuppressClickUntil = 0, transferUnsub = null;
+const _xferClaiming = {};
+function canTransferStock(){ const r = currentRole(); return !!sessionAuthed && (r==="admin" || r==="branchmanager") && visibleBranches().length>1; }
+function xferTargets(){ return visibleBranches().filter(b=>b.id!==activeBranchId); }
+function xferKey(m){ return [m.name, m.mg, m.category].map(x=>String(x||"").trim().toLowerCase()).join("|"); }
+function xferStockText(m){
+  const ppb = Number(m.pillsPerBox)||0, st = Number(m.stockPills)||0;
+  if(ppb>1 && st>=ppb){ const bx = Math.floor(st/ppb), rem = q6(st - bx*ppb); return `${bx} box${bx===1?"":"es"}${rem>0?` + ${fmtInt(rem)} pill${rem===1?"":"s"}`:""} (${fmtInt(st)} in all)`; }
+  return `${fmtInt(st)} ${ppb>1?"pill"+(st===1?"":"s"):"piece"+(st===1?"":"s")}`;
+}
+function xferBatchQty(b, ppb){
+  const q = xferUi.bq[b.id] || {};
+  const bx = Number(String(q.boxes||"").replace(",","."))||0, pl = Number(String(q.pills||"").replace(",","."))||0;
+  return q6((ppb>1 ? bx*ppb : bx) + pl);
+}
+function xferTotalPills(){
+  const m = inventory.find(x=>x.id===xferUi.medId); if(!m) return 0;
+  const ppb = Number(m.pillsPerBox)||0;
+  if(xferUi.manual) return q6(fefoOrder(m).reduce((a,b)=>a+xferBatchQty(b,ppb),0));
+  const bx = Number(String(xferUi.boxes).replace(",","."))||0, pl = Number(String(xferUi.pills).replace(",","."))||0;
+  return q6((ppb>1 ? bx*ppb : bx) + pl);
+}
+// Which batches an AUTOMATIC transfer takes from, in this order:
+//  • batches WITH an expiry date: the one expiring LAST goes first (older stock stays here and keeps selling first);
+//  • batches with NO expiry date come after the dated ones — and if NO batch has an expiry date at all, the batch with the
+//    HIGHEST MRP goes first (a batch with no MRP of its own counts at the medicine's current MRP), newest added breaking ties.
+function xferAutoOrder(m){
+  const t = b => b.expiryDate ? new Date(b.expiryDate).getTime() : NaN;
+  const eff = b => (Number(b.mrpPerBox)>0 ? Number(b.mrpPerBox) : (Number(m.mrpPerBox)||0));
+  const bs = activeBatches(m).slice();
+  const dated = bs.filter(b=>!isNaN(t(b))).sort((a,b)=>(t(b)-t(a)) || ((b.addedAt||0)-(a.addedAt||0)));
+  const undated = bs.filter(b=>isNaN(t(b))).sort((a,b)=>(eff(b)-eff(a)) || ((b.addedAt||0)-(a.addedAt||0)));
+  return dated.concat(undated);
+}
+// Plan (nothing is changed) of how many pills come out of which batch for an automatic transfer of `total` pills.
+function xferAutoPlan(m, total){
+  let rem = total; const plan = [];
+  for(const b of xferAutoOrder(m)){ if(rem<=0) break; const take = Math.min(Number(b.pillsRemaining)||0, rem); if(take<=0) continue; plan.push({ b, pills:q6(take) }); rem = q6(rem-take); }
+  return { plan, rem };
+}
+function xferBatchLabel(b, m){
+  const eff = Number(b.mrpPerBox)>0 ? Number(b.mrpPerBox) : (Number(m.mrpPerBox)||0);
+  return b.expiryDate ? "exp "+fmtExpiryShort(b.expiryDate) : `no expiry · MRP ${CURRENCY}${money(eff)}`;
+}
+function xferManual(on){ xferUi.manual = !!on; xferUi.bq = {}; xferUi.boxes = ""; xferUi.pills = ""; renderOverlays(); }
+function openTransfer(medId){
+  if(!canTransferStock()) return;
+  const t = xferTargets(); if(!t.length){ showToast("Add another branch first"); return; }
+  xferUi = { medId, toId: t.length===1 ? t[0].id : "", boxes:"", pills:"", busy:false, manual:false, bq:{} };
+  openTools("transfer");
+}
+function xferPick(id){ xferUi.toId = id; renderOverlays(); }
+function xferQty(){
+  const m = inventory.find(x=>x.id===xferUi.medId), el = document.getElementById("xferSummary"), go = document.getElementById("xferGo");
+  if(!m) return;
+  const ppb = Number(m.pillsPerBox)||0;
+  if(xferUi.manual){
+    fefoOrder(m).forEach(b=>{
+      const bi = document.getElementById("xferB-"+b.id), pi = document.getElementById("xferP-"+b.id), q = (xferUi.bq[b.id] = xferUi.bq[b.id] || {});
+      if(bi) q.boxes = bi.value.replace(/[^0-9.]/g,""); if(pi) q.pills = pi.value.replace(/[^0-9.]/g,"");
+    });
+  } else {
+    const b = document.getElementById("xferBoxes"), p = document.getElementById("xferPills");
+    if(b) xferUi.boxes = b.value.replace(/[^0-9.]/g,""); if(p) xferUi.pills = p.value.replace(/[^0-9.]/g,"");
+  }
+  if(!el) return;
+  const total = xferTotalPills(), st = Number(m.stockPills)||0;
+  const badBatch = xferUi.manual ? fefoOrder(m).find(b=>xferBatchQty(b,ppb) > (Number(b.pillsRemaining)||0)+1e-9) : null;
+  const over = total>st+1e-9 || !!badBatch, ok = total>0 && !over && !!xferUi.toId;
+  el.innerHTML = total<=0 ? `<span class="faint">Enter how many boxes and/or loose pills to send.</span>`
+    : badBatch ? `<span style="color:var(--danger);font-weight:600;">One batch doesn't have that many (it has ${fmtInt(badBatch.pillsRemaining)}).</span>`
+    : over ? `<span style="color:var(--danger);font-weight:600;">${fmtInt(total)} is more than the ${fmtInt(st)} in stock.</span>`
+    : `<b>${fmtInt(total)}</b> in all · <span class="faint">${fmtInt(q6(st-total))} will be left here</span>`
+      + (xferUi.manual ? "" : `<br><span class="faint">Taken from: ${xferAutoPlan(m,total).plan.map(x=>`${esc(xferBatchLabel(x.b,m))} × ${fmtInt(x.pills)}`).join(" + ")}</span>`);
+  if(go){ go.disabled = !ok || xferUi.busy; go.textContent = xferUi.busy ? "Sending…" : (xferUi.toId ? `Transfer to ${branchName(xferUi.toId)}` : "Choose a branch first"); }
+}
+function xferBodyHtml(){
+  const m = inventory.find(x=>x.id===xferUi.medId); if(!m) return `<p class="small faint">Medicine not found.</p>`;
+  const ppb = Number(m.pillsPerBox)||0, targets = xferTargets();
+  setTimeout(xferQty, 0);
+  const unit = ppb>1 ? "Loose pills" : "Pieces";
+  const howMuch = xferUi.manual
+    ? `<div class="small" style="font-weight:700;margin:0 0 6px;">Which batches, and how much from each</div>
+       ${fefoOrder(m).map(b=>{ const q = xferUi.bq[b.id] || {};
+         return `<div class="card" style="box-shadow:none;border:1px solid var(--border);padding:10px 12px;margin-bottom:8px;">
+           <div class="row" style="margin-bottom:6px;"><strong style="font-size:13px;">${b.expiryDate ? "Expires "+esc(fmtExpiryShort(b.expiryDate)) : "No expiry recorded"}</strong><span class="small">${fmtInt(b.pillsRemaining)} left · ${CURRENCY}${money(Number(b.mrpPerBox)>0 ? Number(b.mrpPerBox) : (Number(m.mrpPerBox)||0))}${ppb>1?" / box":""}</span></div>
+           <div class="flex gap2">
+             ${ppb>1 ? `<div class="flex1"><label class="small" style="display:block;">Boxes</label><input id="xferB-${b.id}" ${NOAC_RAW} inputmode="numeric" value="${esc(q.boxes||"")}" oninput="xferQty()" placeholder="0"></div>` : ""}
+             <div class="flex1"><label class="small" style="display:block;">${unit}</label><input id="xferP-${b.id}" ${NOAC_RAW} inputmode="decimal" value="${esc(q.pills||"")}" oninput="xferQty()" placeholder="0"></div>
+           </div></div>`; }).join("")}
+       <p class="small" style="margin:0 0 6px;"><button type="button" class="linkbtn" onclick="xferManual(false)">Use the latest stock automatically instead</button></p>`
+    : `<div class="small" style="font-weight:700;margin:0 0 6px;">How much</div>
+       <div class="flex gap2">
+         ${ppb>1 ? `<div class="flex1"><label class="small" style="display:block;">Boxes</label><input id="xferBoxes" ${NOAC_RAW} inputmode="numeric" value="${esc(xferUi.boxes)}" oninput="xferQty()" placeholder="0"></div>` : ""}
+         <div class="flex1"><label class="small" style="display:block;">${unit}</label><input id="xferPills" ${NOAC_RAW} inputmode="decimal" value="${esc(xferUi.pills)}" oninput="xferQty()" placeholder="0"></div>
+       </div>
+       <p class="small" style="margin:8px 0 0;">The <b>latest stock</b> is transferred first, so the older stock stays here and keeps selling first.
+         <span class="faint">If none of the batches has an expiry date, the batch with the <b>highest MRP</b> goes first. If only some have expiry dates, the dated batch that expires <b>last</b> goes first and the undated ones come after.</span>
+         If you want to use an older batch or different batches, <button type="button" class="linkbtn" onclick="xferManual(true)">click here</button>.</p>`;
+  return `<div class="card" style="box-shadow:none;border:1px solid var(--border);padding:12px;margin-bottom:12px;">
+      <div style="font-weight:700;font-size:15px;">${esc(m.name)}</div>
+      <div class="small" style="margin-top:2px;">In ${esc(branchName(activeBranchId))}: <b>${esc(xferStockText(m))}</b></div></div>
+    <div class="small" style="font-weight:700;margin:0 0 6px;">Send to</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">${targets.map(b=>`<button type="button" class="btn ${xferUi.toId===b.id?"btn-primary":"btn-outline"}" style="width:100%;text-align:left;" onclick="xferPick('${b.id}')">🏢 ${esc(b.name)}</button>`).join("")}</div>
+    ${howMuch}
+    <div id="xferSummary" class="small" style="margin:10px 0 12px;"></div>
+    <button id="xferGo" class="btn btn-primary" style="width:100%;" onclick="xferGo()">Transfer</button>
+    <p class="small faint" style="margin:10px 0 0;">The stock leaves ${esc(branchName(activeBranchId))} now and appears in the other branch as soon as one of its phones is online. Needs internet to send.</p>`;
+}
+async function xferGo(){
+  if(xferUi.busy) return;
+  const m = inventory.find(x=>x.id===xferUi.medId); if(!m || m.deleted){ showToast("Medicine not found"); return; }
+  if(!canTransferStock()){ showToast("Only the Admin or a Branch Manager can transfer stock"); return; }
+  const toId = xferUi.toId; if(!toId || toId===activeBranchId){ showToast("Choose the branch to send to"); return; }
+  const total = xferTotalPills(); if(!(total>0)){ showToast("Enter a quantity"); return; }
+  if(total > (Number(m.stockPills)||0) + 1e-9){ showToast("That is more than the stock you have"); return; }
+  if(!fbDb){ try{ ensureFirebase(); }catch(e){} showToast("Transfers need the internet — try again in a moment"); return; }
+  // plan which batches the pills come from (nothing is changed yet): the LATEST stock goes to the other branch (see xferAutoOrder),
+  // so the older stock stays here and keeps being sold first
+  let rem = total; const plan = [];
+  if(xferUi.manual){
+    const ppb = Number(m.pillsPerBox)||0;
+    for(const b of fefoOrder(m)){ const q = xferBatchQty(b, ppb); if(q<=0) continue;
+      if(q > (Number(b.pillsRemaining)||0)+1e-9){ showToast("One of the batches doesn't have that many"); return; }
+      plan.push({ b, pills:q6(q) }); rem = q6(rem-q); }
+  } else {
+    const ap = xferAutoPlan(m, total); ap.plan.forEach(x=>plan.push(x)); rem = ap.rem;
+  }
+  if(rem>1e-9){ showToast("Stock changed — please try again"); return; }
+  const me = profiles.find(x=>x.id===currentProfileId), id = uid(), toName = branchName(toId);
+  const doc = { id, kind:"transfer", status:"pending", from:activeBranchId, fromName:branchName(activeBranchId), to:toId, toName, createdAt:Date.now(), by:(me&&me.name)||"",
+    med:{ name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrpPerBox:m.mrpPerBox, pillsPerBox:m.pillsPerBox, lowStockAt:(m.lowStockAt??0), gtin:m.gtin||"" },
+    segments: plan.map(x=>({ pills:x.pills, expiryDate:x.b.expiryDate||null, mrpPerBox:(x.b.mrpPerBox!=null?x.b.mrpPerBox:null) })), totalPills: total };
+  xferUi.busy = true; xferQty();
+  try{
+    await withTimeout(fbDb.collection("sync").doc("xfer_"+id).set(sanitizeForFirestore(doc)), 15000);
+  }catch(e){
+    xferUi.busy = false; xferQty(); showToast("Couldn't send — check the internet connection. Nothing was changed."); return;
+  }
+  // sent: now take the stock out of this branch
+  plan.forEach(x=>{ x.b.pillsRemaining = q6((Number(x.b.pillsRemaining)||0) - x.pills); x.b.updatedAt = Date.now(); });
+  recomputeStock(m); m.updatedAt = Date.now(); saveInventory();
+  logActivity("transfer_out", `${m.name} × ${fmtInt(total)} → ${toName}`);
+  xferUi.busy = false; closeTools(); render();
+  showToast(`✓ ${fmtInt(total)} × ${m.name} sent to ${toName}`);
+}
+// ---- receiving side ----
+function _xferApplied(){ try{ return JSON.parse(localStorage.getItem("clinic_xfer_applied")||"[]"); }catch(e){ return []; } }
+function _xferMarkApplied(id){ try{ const a=_xferApplied(); if(!a.includes(id)){ a.push(id); localStorage.setItem("clinic_xfer_applied", JSON.stringify(a.slice(-300))); } }catch(e){} }
+function applyIncomingTransfer(data){
+  if(!data || !data.id || _xferApplied().includes(data.id)) return false;
+  const md = data.med || {}, key = xferKey(md);
+  let m = inventory.find(x=>!x.deleted && xferKey(x)===key);
+  if(!m){
+    m = { id:uid(), name:md.name||"Medicine", category:md.category||"", specialCategory:md.specialCategory||"", formula:md.formula||"", mg:md.mg||"",
+          mrpPerBox:md.mrpPerBox, pillsPerBox:md.pillsPerBox, lowStockAt:(md.lowStockAt??0), stockPills:0, batches:[], updatedAt:Date.now() };
+    if(md.gtin) m.gtin = md.gtin;
+    inventory.push(m);
+  }
+  if(!Array.isArray(m.batches)) m.batches = [];
+  (data.segments||[]).forEach(sg=>{
+    const p = q6(Number(sg.pills)||0); if(!(p>0)) return;
+    m.batches.push({ id:uid(), boxes:null, pillsRemaining:p, originalPills:p, mrpPerBox:(sg.mrpPerBox!=null?sg.mrpPerBox:null), expiryDate:sg.expiryDate||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false, transferId:data.id });
+  });
+  recomputeStock(m); m.updatedAt = Date.now();
+  _xferMarkApplied(data.id); saveInventory();
+  logActivity("transfer_in", `${m.name} × ${fmtInt(data.totalPills||0)} ← ${data.fromName||"another branch"}`);
+  try{ if(tab==="inventory"||tab==="stock"||tab==="bill") render(); }catch(e){}
+  showToast(`📥 Received ${fmtInt(data.totalPills||0)} × ${m.name} from ${data.fromName||"another branch"}`);
+  return true;
+}
+async function claimTransfer(ref, docId){
+  if(_xferClaiming[docId] || _xferApplied().includes(docId.replace(/^xfer_/,""))) return;
+  _xferClaiming[docId] = true;
+  try{
+    const me = profiles.find(x=>x.id===currentProfileId);
+    const data = await fbDb.runTransaction(async tx=>{
+      const d = await tx.get(ref); if(!d.exists) return null;
+      const v = d.data(); if(v.status!=="pending" || v.to!==activeBranchId) return null;
+      tx.update(ref, { status:"received", receivedAt:Date.now(), receivedBy:(me&&me.name)||"" });
+      return v;
+    });
+    if(data) applyIncomingTransfer(data);
+  }catch(e){ /* offline or someone else got it first: it simply stays pending / is already taken */ }
+  finally{ delete _xferClaiming[docId]; }
+}
+function startTransferInbox(){
+  if(transferUnsub){ try{ transferUnsub(); }catch(e){} transferUnsub = null; }
+  if(!fbDb) return;
+  try{
+    transferUnsub = fbDb.collection("sync").where("kind","==","transfer").where("to","==",activeBranchId).where("status","==","pending")
+      .onSnapshot(snap=>{ snap.forEach(d=>claimTransfer(d.ref, d.id)); }, ()=>{ /* ignore listener errors; it restarts with the next sync start */ });
+  }catch(e){}
+}
+{ const _scs = startCloudSync; startCloudSync = function(){ const r = _scs.apply(this, arguments); try{ startTransferInbox(); }catch(e){} return r; }; }
+
+// ---- long-press + drag a medicine card onto the branch oval ----
+function xferOvalAt(x, y){
+  const ovals = document.querySelectorAll("[data-branchoval]");
+  for(const o of ovals){ const r = o.getBoundingClientRect(); if(x>=r.left-14 && x<=r.right+14 && y>=r.top-14 && y<=r.bottom+14) return o; }
+  return null;
+}
+function xferBeginDrag(card, id, x, y){
+  const m = inventory.find(z=>z.id===id); if(!m || m.deleted) return;
+  if(!xferTargets().length){ showToast("Add another branch first"); return; }
+  try{ window.getSelection().removeAllRanges(); }catch(e){}
+  const g = card.cloneNode(true); g.removeAttribute("id"); g.querySelectorAll("[id]").forEach(n=>n.removeAttribute("id"));
+  const w = Math.min(card.offsetWidth*0.92, window.innerWidth-24);
+  g.className += " xfer-ghost"; g.style.width = w+"px"; g.style.left = (x-w/2)+"px"; g.style.top = (y-34)+"px";
+  document.body.appendChild(g); card.classList.add("xfer-src"); document.body.classList.add("xfer-dragging");
+  let hint = document.getElementById("xferHint");
+  if(!hint){ hint = document.createElement("div"); hint.id = "xferHint"; document.body.appendChild(hint); }
+  hint.textContent = "Drop on the 🏢 branch name at the top to transfer"; hint.style.display = "block";
+  try{ if(navigator.vibrate) navigator.vibrate(25); }catch(e){}
+  _xferDrag = { id, card, ghost:g, w };
+}
+function xferMoveDrag(e){
+  const d = _xferDrag; if(!d) return;
+  d.ghost.style.left = (e.clientX-d.w/2)+"px"; d.ghost.style.top = (e.clientY-34)+"px";
+  const over = xferOvalAt(e.clientX, e.clientY);
+  document.querySelectorAll("[data-branchoval]").forEach(o=>o.classList.toggle("xfer-hot", o===over));
+}
+function xferFinishDrag(e, cancelled){
+  const d = _xferDrag; if(!d) return; _xferDrag = null;
+  const over = (!cancelled && e) ? xferOvalAt(e.clientX, e.clientY) : null;
+  d.ghost.remove(); d.card.classList.remove("xfer-src"); document.body.classList.remove("xfer-dragging");
+  document.querySelectorAll("[data-branchoval]").forEach(o=>o.classList.remove("xfer-hot"));
+  const hint = document.getElementById("xferHint"); if(hint) hint.style.display = "none";
+  _xferSuppressClickUntil = Date.now()+400;
+  if(over) openTransfer(d.id);
+}
+(function(){
+  let timer = null, start = null;
+  const cardOf = el => (el && el.closest) ? el.closest('[id^="invCard-"]') : null;
+  document.addEventListener("pointerdown", e=>{
+    if(tab!=="inventory" || !canTransferStock() || (e.pointerType==="mouse" && e.button!==0)) return;
+    const card = cardOf(e.target); if(!card) return;
+    if(e.target.closest("button,input,textarea,select,a,label")) return;
+    start = { x:e.clientX, y:e.clientY, id:card.id.replace("invCard-",""), card };
+    clearTimeout(timer); timer = setTimeout(()=>{ if(start) xferBeginDrag(start.card, start.id, start.x, start.y); }, 450);
+  }, true);
+  document.addEventListener("pointermove", e=>{
+    if(_xferDrag){ xferMoveDrag(e); return; }
+    if(start && Math.hypot(e.clientX-start.x, e.clientY-start.y) > 10){ clearTimeout(timer); start = null; }
+  }, true);
+  const end = e=>{ clearTimeout(timer); start = null; if(_xferDrag) xferFinishDrag(e, e.type==="pointercancel"); };
+  document.addEventListener("pointerup", end, true); document.addEventListener("pointercancel", end, true);
+  document.addEventListener("touchmove", e=>{ if(_xferDrag && e.cancelable) e.preventDefault(); }, { passive:false, capture:true });
+  document.addEventListener("contextmenu", e=>{ if(cardOf(e.target) && (start || _xferDrag)) e.preventDefault(); }, true);
+  document.addEventListener("click", e=>{ if(Date.now() < _xferSuppressClickUntil && !(e.target.closest && e.target.closest("#toolsModalRoot"))){ e.stopPropagation(); e.preventDefault(); } }, true);
+})();
 
 let scanMethodUi = { open:false, method:"scanner" };
 function editScanMethodSettings(){
@@ -8097,7 +8368,7 @@ function renderUserBadge(){
     <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">${esc(p.name)}</span>
     <span style="opacity:.6;flex-shrink:0;">·</span>
     <span ${p.role==="admin"?'data-rolepill="1"':""} style="display:inline-block;flex-shrink:0;background:rgba(255,255,255,.22);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;white-space:nowrap;${p.role==="admin"?"cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;":""}">${roleLabel(p.role)}</span>
-    ${visibleBranches().length>1 ? `<span ${currentRole()==="admin"?'data-branchpill="1"':""} style="display:inline-block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(255,255,255,.14);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${currentRole()==="admin"?"cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;":""}">🏢 ${esc(branchName(activeBranchId))}</span>` : ""}
+    ${visibleBranches().length>1 ? `<span data-branchoval="1" ${currentRole()==="admin"?'data-branchpill="1"':""} style="display:inline-block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(255,255,255,.14);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;${currentRole()==="admin"?"cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;":""}">🏢 ${esc(branchName(activeBranchId))}</span>` : ""}
   </div>`;
 }
 // The 3 gated actions: Printer Settings + Receipt setup are Admin-only by default; the Monthly
