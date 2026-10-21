@@ -220,6 +220,9 @@
   #copyMenuRoot .copy-pop{background:#fff;border-radius:16px;width:100%;max-width:320px;padding:16px;box-shadow:0 8px 30px rgba(0,0,0,.25);}
   .modal{background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:85vh;
     display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.2);}
+  /* Typing inside a pop-up menu: lift the menu above the on-screen keyboard (see "keep typing boxes visible" in the script) */
+  body.kb-lift .modal-overlay{padding-bottom:var(--kb,0px);box-sizing:border-box;}
+  body.kb-lift .modal-overlay .modal{max-height:calc(100vh - var(--kb,0px) - 14px) !important;}
   .modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);}
   .modal-body{margin:12px 16px;padding:12px;background:var(--page);border:1px solid var(--border);border-radius:8px;
     font-size:12px;font-family:ui-monospace,monospace;white-space:pre-wrap;overflow-y:auto;color:var(--text);}
@@ -491,7 +494,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v97";
+const APP_VERSION = "v111";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -6246,7 +6249,7 @@ function addMedicine(skipRender){
   inventory.push({ id:uid(), name:f.name.trim(), category:f.category||"", specialCategory:f.specialCategory||"", formula:f.formula.trim(), mg:f.mg.trim(),
     mrpPerBox:Number(f.mrp), pillsPerBox:Number(f.pillsPerBox), stockPills:0, lowStockAt:Number(f.lowStockAt)||0, batches:[], sTag:!!f.sTag,
     gtin: f.gtin||"", // captured from a barcode scan, if one was done — lets a future scan of the SAME product recognize it and offer Restock instead of a duplicate entry
-    updatedAt:Date.now(), deleted:false });
+    createdAt:Date.now(), updatedAt:Date.now(), deleted:false });
   logActivity("med_add", f.name.trim());
   saveInventory();
   inv.showForm=false;
@@ -6716,6 +6719,155 @@ function buildInvCard(m){
 // without ever touching #invQueryInput itself. Called once by renderInventory() on a full
 // render, and directly by onInvQuery() on every keystroke — since it never rebuilds the input
 // node, it's safe to call on every single keystroke with no debounce, at any typing speed.
+// ======================= Inventory: ⇅ Arrange (sort) =======================
+// An Android-style "Sort by" list under the search bar. The choice is remembered on this phone.
+const INV_SORTS = [
+  { k:"default", label:"Default (best match)", short:"" },
+  { g:"Name",  k:"az", label:"Name A → Z", short:"A–Z" }, { k:"za", label:"Name Z → A", short:"Z–A" },
+  { g:"Date",  k:"newest", label:"Newest added first", short:"Newest" }, { k:"oldest", label:"Oldest added first", short:"Oldest" }, { k:"changed", label:"Recently changed", short:"Changed" },
+  { g:"Sales", k:"most", label:"Most sold", short:"Most sold", period:true }, { k:"least", label:"Least sold (unsold first)", short:"Least sold", period:true },
+  { g:"Stock, price & size", k:"stockHi", label:"Stock: most first", short:"Stock ↓" }, { k:"stockLo", label:"Stock: least first", short:"Stock ↑" },
+  { k:"mrpHi", label:"Price (MRP): high → low", short:"MRP ↓" }, { k:"mrpLo", label:"Price (MRP): low → high", short:"MRP ↑" },
+  { k:"sizeHi", label:"Pack size: biggest first", short:"Size ↓" }, { k:"sizeLo", label:"Pack size: smallest first", short:"Size ↑" },
+  { g:"Expiry", k:"expiry", label:"Nearest expiry first", short:"Expiry" }
+];
+const INV_SORT_PERIODS = [ {d:7,label:"7 days"}, {d:30,label:"30 days"}, {d:90,label:"90 days"}, {d:0,label:"All time"} ];
+let _invSort = null;
+function invSortState(){
+  if(!_invSort){
+    try{ _invSort = JSON.parse(localStorage.getItem("clinic_inv_sort")||"null"); }catch(e){ _invSort = null; }
+    if(!_invSort || !INV_SORTS.some(x=>x.k===_invSort.key)) _invSort = { key:"default", days:30 };
+    if(!INV_SORT_PERIODS.some(x=>x.d===_invSort.days)) _invSort.days = 30;
+  }
+  return _invSort;
+}
+function invSortSave(){ try{ localStorage.setItem("clinic_inv_sort", JSON.stringify(invSortState())); }catch(e){} }
+function invSortSig(){ const st = invSortState(); return st.key + ((st.key==="most"||st.key==="least") ? ":"+st.days : ""); }
+// when was this medicine added? (new ones store it; older ones carry it inside their id, else the oldest batch / last change)
+function invMedCreated(m){
+  if(m.createdAt) return m.createdAt;
+  const ts = parseInt(String(m.id||"").slice(0,-5), 36);
+  if(ts>1.3e12 && ts<Date.now()+864e5) return ts;
+  const bt = (m.batches||[]).map(b=>b.addedAt||0).filter(Boolean);
+  return bt.length ? Math.min(...bt) : (m.updatedAt||0);
+}
+function invMedNextExpiry(m){
+  let best = Infinity;
+  activeBatches(m).forEach(b=>{ if(b.expiryDate){ const t = new Date(b.expiryDate).getTime(); if(!isNaN(t) && t<best) best = t; } });
+  return best;
+}
+// pills sold per medicine in the chosen period (returns count as negative, so this is the NET sold)
+function invSoldMap(days){
+  const cutoff = days>0 ? Date.now()-days*86400000 : 0, map = {};
+  visibleTransactions().forEach(t=>{
+    if(t.timestamp<cutoff) return;
+    (t.items||[]).forEach(it=>{ if(it.medId) map[it.medId] = (map[it.medId]||0) + (Number(it.pills)||0); });
+  });
+  return map;
+}
+// returns a comparator for the chosen arrangement, or null for "Default" (= the normal best-match order)
+function invSortComparator(q){
+  const st = invSortState(); if(st.key==="default") return null;
+  const nameCmp = (a,b)=>String(a.name||"").localeCompare(String(b.name||""), undefined, {sensitivity:"base"});
+  const sold = (st.key==="most"||st.key==="least") ? invSoldMap(st.days) : null;
+  const by = (val, dir)=>(a,b)=>{ const x=val(a), y=val(b); if(x===y) return nameCmp(a,b); return dir*(x<y?-1:1); };
+  switch(st.key){
+    case "az": return nameCmp;
+    case "za": return (a,b)=>nameCmp(b,a);
+    case "newest": return by(invMedCreated,-1);
+    case "oldest": return by(invMedCreated,1);
+    case "changed": return by(m=>m.updatedAt||0,-1);
+    case "most": return by(m=>sold[m.id]||0,-1);
+    case "least": return by(m=>sold[m.id]||0,1);
+    case "stockHi": return by(m=>Number(m.stockPills)||0,-1);
+    case "stockLo": return by(m=>Number(m.stockPills)||0,1);
+    case "mrpHi": return by(m=>Number(m.mrpPerBox)||0,-1);
+    case "mrpLo": return by(m=>Number(m.mrpPerBox)||0,1);
+    case "sizeHi": return by(m=>Number(m.pillsPerBox)||0,-1);
+    case "sizeLo": return by(m=>Number(m.pillsPerBox)||0,1);
+    case "expiry": return by(invMedNextExpiry,1);
+  }
+  return null;
+}
+function invArrangeBtnHtml(){
+  const st = invSortState(), def = INV_SORTS.find(x=>x.k===st.key), active = st.key!=="default";
+  return `<button type="button" id="invArrangeBtn" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;white-space:nowrap;justify-self:center;background:${active?"var(--primary)":"var(--primarySoft)"};color:${active?"#fff":"var(--primary)"};" onclick="openInvSortSheet()">⇅ ${active?esc(def.short):"Arrange"}</button>`;
+}
+function closeInvSortSheet(){
+  const o=document.getElementById("invSortSheet"); if(o) o.remove();
+  window.removeEventListener("resize", positionInvSortMenu);
+}
+// A small dropdown that opens right at the ⇅ Arrange button — same look as the ☰ Settings menu
+// (white card, rounded corners, soft shadow, thin dividers, tiny faint headings) — instead of a
+// full-height bottom sheet. Related options (Name, Date, Sales, ...) share one row so the whole
+// thing stays short enough to sit in front of the button without scrolling.
+function openInvSortSheet(){
+  closeInvSortSheet();
+  const o = document.createElement("div");
+  o.id = "invSortSheet"; o.dataset.t = String(Date.now());
+  // Invisible full-screen layer: it's only there so a tap anywhere outside the menu closes it,
+  // exactly like the Settings menu. touch-action:none stops a drag on it from scrolling the page
+  // out from under the menu.
+  o.style.cssText = "position:fixed;inset:0;z-index:120;background:transparent;touch-action:none;";
+  o.onclick = e=>{ if(e.target===o && Date.now()-Number(o.dataset.t)>400) closeInvSortSheet(); };
+  document.body.appendChild(o);
+  renderInvSortSheet();
+  window.addEventListener("resize", positionInvSortMenu);
+}
+// Sits the menu directly under the Arrange button (or above it when there's more room there),
+// kept inside the screen, with its own scroll only if it still wouldn't fit.
+function positionInvSortMenu(){
+  const o = document.getElementById("invSortSheet"); const m = o && o.firstElementChild; if(!m) return;
+  const btn = document.getElementById("invArrangeBtn");
+  const vw = window.innerWidth, vh = window.innerHeight, gap = 6, edge = 8;
+  const w = Math.min(310, vw - edge*2);
+  m.style.width = w + "px"; m.style.maxHeight = "none";
+  const r = btn ? btn.getBoundingClientRect() : { left:vw/2, top:vh/2, bottom:vh/2, width:0 };
+  const left = Math.max(edge, Math.min(r.left + r.width/2 - w/2, vw - w - edge));
+  const natural = m.scrollHeight;
+  const below = vh - r.bottom - gap - edge, above = r.top - gap - edge;
+  const placeBelow = natural <= below || below >= above;
+  const maxH = Math.max(120, placeBelow ? below : above);
+  const h = Math.min(natural, maxH);
+  m.style.left = left + "px";
+  m.style.top = (placeBelow ? r.bottom + gap : Math.max(edge, r.top - gap - h)) + "px";
+  m.style.maxHeight = maxH + "px";
+}
+function renderInvSortSheet(){
+  const o = document.getElementById("invSortSheet"); if(!o) return;
+  const st = invSortState();
+  const chip = (k, text) => { const on = st.key===k;
+    return `<button type="button" onclick="setInvSort('${k}')" style="padding:5px 10px;border-radius:999px;border:1px solid ${on?"var(--primary)":"var(--border)"};background:${on?"var(--primary)":"transparent"};color:${on?"#fff":"var(--text)"};font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;">${text}</button>`; };
+  const label = t => `<span style="width:44px;flex:none;font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--faint);text-transform:uppercase;">${t}</span>`;
+  const row = (t, chips, first) => `<div style="display:flex;align-items:center;gap:8px;padding:${first?"7px":"0"} 12px ${first?"7px":"7px"};${first?"border-top:1px solid var(--border);":""}">${label(t)}<div style="display:flex;flex-wrap:wrap;gap:5px;flex:1;">${chips}</div></div>`;
+  const group = (t, items) => row(t, items.map(([k,txt])=>chip(k,txt)).join(""), true);
+  const periodChips = INV_SORT_PERIODS.map(pp=>{ const on = st.days===pp.d;
+    return `<button type="button" onclick="setInvSortPeriod(${pp.d})" style="padding:3px 9px;border-radius:999px;border:1px solid ${on?"var(--primary)":"var(--border)"};background:${on?"var(--primary)":"transparent"};color:${on?"#fff":"var(--text)"};font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;">${pp.d===0?"All":pp.d+"d"}</button>`; }).join("");
+  const defOn = st.key==="default";
+  o.innerHTML = `<div style="position:fixed;left:0;top:0;background:var(--card);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;">
+      <div style="padding:8px 14px 6px;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--faint);border-bottom:1px solid var(--border);">⇅ Arrange medicines</div>
+      <button type="button" onclick="setInvSort('default')" style="display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:${defOn?"var(--primarySoft)":"none"};border:none;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;font-family:inherit;"><span>Default (best match)</span>${defOn?'<span style="color:var(--primary);">✓</span>':""}</button>
+      ${group("Name",  [["az","A → Z"],["za","Z → A"]])}
+      ${group("Date",  [["newest","Newest"],["oldest","Oldest"],["changed","Changed"]])}
+      ${group("Sales", [["most","Most sold"],["least","Least sold"]])}
+      ${row("Period", periodChips, false)}
+      <p style="margin:-2px 12px 7px;font-size:10px;color:var(--faint);">Least sold lists unsold medicines first.</p>
+      ${group("Stock", [["stockHi","Most"],["stockLo","Least"]])}
+      ${group("Price", [["mrpHi","High → Low"],["mrpLo","Low → High"]])}
+      ${group("Pack",  [["sizeHi","Biggest"],["sizeLo","Smallest"]])}
+      ${group("Expiry",[["expiry","Nearest first"]])}
+    </div>`;
+  positionInvSortMenu();
+}
+function setInvSort(k){
+  const st = invSortState(); st.key = k; invSortSave();
+  closeInvSortSheet(); renderInventory();
+}
+function setInvSortPeriod(d){
+  const st = invSortState(); st.days = d; invSortSave();
+  renderInvSortSheet();
+  if(st.key==="most" || st.key==="least") renderInventory();   // the list behind the sheet follows the new period
+}
 function renderInvList(){
   const myToken = ++_invRenderToken;
   const q = inv.query.toLowerCase();
@@ -6725,8 +6877,8 @@ function renderInvList(){
     if(inv.statFilter==='sTag' && !m.sTag) return false;
     if(inv.statFilter==='nonSpecial' && m.specialCategory) return false;
     return !q || medicineMatchesQuery(m,q);
-  }).sort((a,b)=>searchRankScore(b,q)-searchRankScore(a,q));
-  const filterKey = q+"|"+(inv.statFilter||"");
+  }).sort((()=>{ const c = invSortComparator(q); return c ? ((a,b)=>c(a,b) || (searchRankScore(b,q)-searchRankScore(a,q))) : ((a,b)=>searchRankScore(b,q)-searchRankScore(a,q)); })());
+  const filterKey = q+"|"+(inv.statFilter||"")+"|"+invSortSig();
 
   const filterLabels = {special:"Special category", sTag:"S. tagged", nonSpecial:"Non-special"};
   const filterHtml = inv.statFilter ? `
@@ -6812,12 +6964,13 @@ function renderInventory(){
       <span class="search-icon">🔍</span>
       <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
     </div>
-    <div class="mb2" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;">
+    <div class="mb2" style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;padding:0 2px;">
       <div class="flex gap2">
         ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
         ${pillBtn(inv.statFilter==='sTag', '--dangerSoft', '--danger', sTaggedMedicines, 'sTag')}
       </div>
-      <div class="flex gap2">
+      ${invArrangeBtnHtml()}
+      <div class="flex gap2" style="justify-content:flex-end;">
         ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
         ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
       </div>
@@ -10698,6 +10851,37 @@ setTimeout(aiProcessQueue,6000);
   const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
   document.addEventListener("focusin",e=>{ if(typing(e.target)) document.body.classList.add("kb-typing"); });
   document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typing(document.activeElement)) document.body.classList.remove("kb-typing"); },150));
+})();
+
+// ===== Keep the typing box inside a pop-up menu visible ABOVE the on-screen keyboard =====
+// Many phones (and the App Inventor web viewer) do not shrink the page when the keyboard opens, so a pop-up menu that sits at
+// the bottom of the screen ends up behind the keyboard. While a typing box inside a menu is focused we lift the menu by the
+// keyboard's height (measured when the phone reports it, otherwise ~42% of the screen) and scroll the box into view.
+(function(){
+  const root = document.documentElement;
+  const isTyping = el => !!el && (el.tagName==="TEXTAREA" || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
+  const inMenu = el => !!(el && el.closest && el.closest(".modal-overlay"));
+  let base = window.innerHeight;
+  function apply(){
+    base = Math.max(base, window.innerHeight);
+    const a = document.activeElement;
+    if(!(isTyping(a) && inMenu(a))){ document.body.classList.remove("kb-lift"); root.style.setProperty("--kb","0px"); return; }
+    let kb;
+    if(window.innerHeight < base*0.85) kb = 0;      // the page itself already shrank: the menu already sits above the keyboard
+    else {
+      const vv = window.visualViewport;
+      const real = vv ? window.innerHeight - vv.height - vv.offsetTop : 0;
+      kb = real>120 ? real : Math.round(window.innerHeight*0.42);
+    }
+    root.style.setProperty("--kb", kb+"px");
+    document.body.classList.toggle("kb-lift", kb>0);
+    const show = ()=>{ try{ a.scrollIntoView({block:"center"}); }catch(_){} };
+    setTimeout(show, 90); setTimeout(show, 340);     // again once the keyboard's slide-in has finished
+  }
+  document.addEventListener("focusin", ()=>setTimeout(apply,30));
+  document.addEventListener("focusout", ()=>setTimeout(apply,180));
+  window.addEventListener("resize", ()=>setTimeout(apply,60));
+  if(window.visualViewport) window.visualViewport.addEventListener("resize", ()=>setTimeout(apply,60));
 })();
 
 // ===== Draggable "+" button, recent searches, hide-on-scroll search bar =====
