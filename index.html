@@ -2840,9 +2840,9 @@ function getReceiptSettings(){
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
 // Which of the 3 scan methods (USB/Bluetooth scanner, take-a-photo, live camera) the single
 // "📷 Scan barcode" button uses - a one-time choice made in Settings rather than picked per-scan.
-// Defaults to "scanner" since it's the most reliable path fully offline, inside the packaged app.
+// Defaults to "photo" on a device where no choice has been saved yet (the "scanner" mode only focuses a text box, which just pops the keyboard open on a phone with no handheld scanner). A choice saved in Settings is always respected.
 function getScanMethod(){
-  try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="photo"||v==="camera") ? v : "scanner"; }catch(e){ return "scanner"; }
+  try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="scanner"||v==="camera") ? v : "photo"; }catch(e){ return "photo"; }
 }
 function saveScanMethod(v){ try{ localStorage.setItem("clinic_scan_method", v); }catch(e){} }
 // ---- App colour theme (Settings → 🎨 Theme). Only swaps the app's green/white accent colours
@@ -10761,10 +10761,12 @@ window.onNativeBridgeMessage = function(){
   else if(msg === "GOOGLE_CANCELLED"){ clearTimeout(_googleTimer); googleMode=""; }
   else if(msg === "CAMERA_PERMISSION_GRANTED"){
     const t = _pendingCameraTarget; _pendingCameraTarget = null;
+    const r = _takePhotoRetry; _takePhotoRetry = null;
     if(t) openCameraScan(t);
+    else if(r && Date.now() - r.at < 60000) takePhoto(r.cb, r.max, r.hooks);
   }
   else if(msg === "CAMERA_PERMISSION_DENIED"){
-    _pendingCameraTarget = null;
+    _pendingCameraTarget = null; _takePhotoRetry = null;
     showToast("⚠ Camera permission denied — use the scan-and-paste box instead");
   }
 };
@@ -11543,6 +11545,7 @@ async function takeSharpPhoto(c0, v, imgCap){
   if(!blob) blob = await new Promise(res=>best.cv.toBlob(res,"image/jpeg",0.9));
   return { blob, blurry: sharp < BLUR_WARN_BELOW };
 }
+let _takePhotoRetry = null; // { cb, max, hooks, at } — a takePhoto() call waiting on the camera permission round-trip
 async function takePhoto(cb, max, hooks){
   max = max||1; hooks = hooks||{};
   let stream;
@@ -11553,8 +11556,14 @@ async function takePhoto(cb, max, hooks){
     const hasStill = typeof ImageCapture !== "undefined";
     stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:hiRes?(hasStill?2560:3840):1920},height:{ideal:hiRes?(hasStill?1440:2160):1080}}});
   }catch(e){
-    if(window.AppInventor && typeof window.AppInventor.setWebViewString==="function") window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
-    showToast("📷 Camera error ("+(e&&e.name?e.name:"unknown")+") — allow the camera, then tap again");
+    const hasBridge = !!(window.AppInventor && typeof window.AppInventor.setWebViewString==="function");
+    if(hasBridge){
+      // Remember this exact request so it re-opens by itself once Android's permission dialog is allowed
+      // (see CAMERA_PERMISSION_GRANTED in onNativeBridgeMessage). Expires after 60s so it can never fire later by surprise.
+      _takePhotoRetry = { cb:cb, max:max, hooks:hooks, at:Date.now() };
+      window.AppInventor.setWebViewString("REQUEST_CAMERA_PERMISSION");
+    }
+    showToast("📷 Camera error ("+(e&&e.name?e.name:"unknown")+") — "+(hasBridge?"tap Allow on the permission box and the camera will open":"allow the camera, then tap again"));
     try{ hooks.onCancel && hooks.onCancel(); }catch(_){}
     return;
   }
