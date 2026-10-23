@@ -48,11 +48,19 @@
       });
     });
   }
+  // If the phone refuses to store something (e.g. storage full) the app used to carry on silently. Now the
+  // user is told once, so they know recent changes may be lost when the app is closed.
+  function persistFailed(){
+    window.__lsPersistFailed = true;
+    if(!window.__lsWarned && typeof window.showToast === "function"){ window.__lsWarned = true; try{ window.showToast("⚠ Phone storage problem — recent changes may not be saved on this phone"); }catch(e){} }
+  }
   function persist(key, value){
     openDb().then(function(db){
-      var store = db.transaction(STORE, "readwrite").objectStore(STORE);
+      var tx = db.transaction(STORE, "readwrite");
+      tx.onerror = tx.onabort = persistFailed;
+      var store = tx.objectStore(STORE);
       if(value === null) store.delete(key); else store.put(value, key);
-    }).catch(function(){});
+    }).catch(persistFailed);
   }
   var shim = {
     getItem: function(key){ return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null; },
@@ -115,7 +123,7 @@
      safe size no matter how long any tab's content gets. */
   #app{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow-x:hidden;
     overflow-y:auto;-webkit-overflow-scrolling:touch;}
-  .header-actions{top:14px;}
+  .header-actions{top:28px;}   /* kept below the phone's status bar (wifi / battery icons) so the buttons never merge with it */
   header{background:var(--header);color:#fff;padding:18px 16px 14px;position:fixed;top:0;left:0;right:0;width:100%;z-index:30;
     box-shadow:0 1px 3px rgba(0,0,0,.15);display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;
     transform:translateZ(0);-webkit-transform:translateZ(0);backface-visibility:hidden;-webkit-backface-visibility:hidden;}
@@ -262,12 +270,14 @@
     header{padding:8px 16px 6px;}
     header h1{font-size:15px;}
     header .header-sub{display:none;}
-    header .header-info{display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:2px;padding-right:calc(150px + env(safe-area-inset-right));}
+    header .header-info{display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:2px;padding-right:calc(126px + env(safe-area-inset-right));}
     header .header-sync-row{margin-top:0;}
     #currentUserBadge{margin-top:0;}
     header .header-actions{top:50%;transform:translateY(-50%);right:calc(16px + env(safe-area-inset-right));}
-    #refreshBtn, #headerMenuBtn{padding:4px 8px;font-size:10px;}
   }
+  /* the three buttons in the top-right of the header: Refresh, Settings, AI reading */
+  @keyframes settingsIn{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+  .hdr-btn{background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:7px;padding:0 6px;height:22px;font-size:10px;font-weight:600;line-height:1;white-space:nowrap;cursor:pointer;}
   .expiry-tag{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;display:inline-block;}
   .icon-del-btn{background:none;border:none;color:var(--faint);cursor:pointer;font-size:16px;}
   .modal-x{border:none;font-size:18px;padding:4px 8px;}
@@ -427,7 +437,7 @@
 <body>
 <div id="app">
   <header>
-    <div class="header-info" style="padding-right:150px;">
+    <div class="header-info" style="padding-right:126px;">
       <h1>Saad Clinic</h1>
       <p class="header-sub">Dispensing &amp; billing</p>
       <div class="flex gap2 mt2 header-sync-row" style="align-items:center;">
@@ -436,15 +446,15 @@
       </div>
       <div id="currentUserBadge" style="color:#fff;font-size:13px;margin-top:5px;line-height:1.5;"></div>
     </div>
-    <div class="header-actions" style="position:absolute;right:16px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
-     <div style="display:flex;gap:5px;align-items:flex-start;">
-      <button id="refreshBtn" onclick="location.reload()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">🔄 Refresh</button>
+    <div class="header-actions" style="position:absolute;right:16px;display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+     <div style="display:flex;gap:4px;align-items:flex-start;">
+      <button id="refreshBtn" onclick="location.reload()" class="hdr-btn">🔄 Refresh</button>
       <div style="position:relative;display:flex;">
-        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" style="background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">☰ Settings</button>
+        <button id="headerMenuBtn" onclick="toggleHeaderMenu()" class="hdr-btn">☰ Settings</button>
         <div id="headerMenuDropdown" class="hidden" style="position:absolute;top:calc(100% + 6px);right:0;background:#fff;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);overflow:hidden;min-width:160px;z-index:40;"></div>
       </div>
      </div>
-     <button id="aiReadingBtn" onclick="openQuickAdd(false)" style="width:100%;background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:8px;padding:0 7px;height:30px;font-size:11px;font-weight:600;cursor:pointer;">✨ AI reading</button>
+     <button id="aiReadingBtn" onclick="openQuickAdd(false)" class="hdr-btn" style="width:100%;">✨ AI reading</button>
     </div>
     <div id="uploadProgressBar" class="hidden" style="width:100%;height:3px;background:rgba(255,255,255,.18);overflow:hidden;border-radius:2px;position:relative;">
       <div style="position:absolute;top:0;left:-30%;height:100%;width:30%;background:#fff;border-radius:2px;animation:uploadSlide 1.1s ease-in-out infinite;"></div>
@@ -494,7 +504,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v111";
+const APP_VERSION = "v125";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -822,7 +832,7 @@ function loadAll(){
     }
   }
 
-  try{ activityLog = JSON.parse(localStorage.getItem("clinic_activity_log")||"{}"); }catch(e){ activityLog={}; }
+  try{ activityLog = JSON.parse(localStorage.getItem(bk("clinic_activity_log"))||"{}"); }catch(e){ activityLog={}; }
   try{ historyRequests = JSON.parse(localStorage.getItem("clinic_history_requests")||"{}"); }catch(e){ historyRequests={}; }
   try{ historyResponses = JSON.parse(localStorage.getItem("clinic_history_responses")||"{}"); }catch(e){ historyResponses={}; }
   try{ adminReceivedHistory = JSON.parse(localStorage.getItem("clinic_admin_history")||"{}"); }catch(e){ adminReceivedHistory={}; }
@@ -872,7 +882,7 @@ function saveMonthAdjustments(){
   try{ localStorage.setItem(bk("clinic_month_adjustments"), JSON.stringify(monthAdjustments)); }catch(e){}
   schedulePushToCloud();
 }
-function saveActivityLog(){ try{ localStorage.setItem("clinic_activity_log", JSON.stringify(activityLog)); }catch(e){} }
+function saveActivityLog(){ try{ localStorage.setItem(bk("clinic_activity_log"), JSON.stringify(activityLog)); }catch(e){} }
 function saveHistoryRequests(){ try{ localStorage.setItem("clinic_history_requests", JSON.stringify(historyRequests)); }catch(e){} }
 function saveHistoryResponses(){ try{ localStorage.setItem("clinic_history_responses", JSON.stringify(historyResponses)); }catch(e){} }
 function saveAdminReceivedHistory(){ try{ localStorage.setItem("clinic_admin_history", JSON.stringify(adminReceivedHistory)); }catch(e){} }
@@ -1292,6 +1302,57 @@ function activeBatches(m){ return (m.batches||[]).filter(b=>!b.disposed && b.pil
 // q6: rounds away tiny floating-point leftovers (e.g. 0.30000000000000004) from half-tablet doses
 function q6(n){ return Math.round((Number(n)||0)*1e6)/1e6; }
 function recomputeStock(m){ m.stockPills = q6(activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0)); }
+
+/* ===== Stock quantities that survive TWO phones changing the same batch =====
+   Before: a batch stored one number (pillsRemaining) and when two phones changed it, the newer copy simply replaced the
+   other, so one phone's sale could vanish and stock looked too high. Now every phone keeps its OWN running totals per batch
+   (led = { phoneId: [totalAdded, totalRemoved] }, only ever growing) and the batch quantity is
+       originalPills + all added - all removed,
+   merged by taking the biggest total per phone. Both phones' sales therefore always count, in any order, with no
+   dependence on the phones' clocks. "legacy" holds changes made by older versions of the app / before this update. */
+let _devId = null;
+function deviceId(){
+  if(_devId) return _devId;
+  try{ _devId = localStorage.getItem("clinic_device_id"); }catch(e){}
+  if(!_devId){ _devId = "d"+Math.random().toString(36).slice(2,7); try{ localStorage.setItem("clinic_device_id", _devId); }catch(e){} }
+  return _devId;
+}
+// A read-only picture of a batch: its starting quantity and its ledger, with any change that was made WITHOUT the ledger
+// (older app version, very old data) folded into "legacy" so it is not lost.
+function ledView(b){
+  const cur = Number(b.pillsRemaining)||0;
+  let orig = (b.originalPills==null) ? cur : Number(b.originalPills);
+  if(!isFinite(orig)) orig = cur;
+  const led = {};
+  if(b.led && typeof b.led==="object") for(const k in b.led){ const e = b.led[k]; if(Array.isArray(e)) led[k] = [Number(e[0])||0, Number(e[1])||0]; }
+  let q = orig; for(const k in led) q += led[k][0]-led[k][1];
+  const d = q6(cur - Math.max(0, q6(q)));
+  if(d!==0){ const lg = led.legacy || [0,0]; const net = q6(lg[0]-lg[1]+d); led.legacy = [net>0?net:0, net<0?-net:0]; }
+  return { orig, led };
+}
+function ledViewQty(v){ let q = v.orig; for(const k in v.led) q += v.led[k][0]-v.led[k][1]; return Math.max(0, q6(q)); }
+// THE way an existing batch's quantity changes (+ adds, - removes). Never write pillsRemaining directly.
+function batchChange(b, delta){
+  delta = q6(delta); if(!delta) return;
+  const v = ledView(b), id = deviceId(), e = v.led[id] || (v.led[id] = [0,0]);
+  if(delta>0) e[0] = q6(e[0]+delta); else e[1] = q6(e[1]-delta);
+  b.originalPills = v.orig; b.led = v.led;
+  b.pillsRemaining = ledViewQty(v); b.updatedAt = Date.now();
+}
+// Two copies of the same batch (this phone / the cloud): the quantity is the merge of both ledgers; other details
+// (expiry, price, disposed…) come from whichever copy was edited last.
+function mergeBatchPair(lb, rb){
+  const lt = lb.updatedAt||lb.addedAt||0, rt = rb.updatedAt||rb.addedAt||0, newer = rt>lt ? rb : lb;
+  const A = ledView(lb), B = ledView(rb);
+  if(A.orig!==B.orig) return rt>lt ? {...rb} : lb;          // the copies started from different quantities (old data): newest wins, as before
+  const led = {}, keys = Object.keys(A.led).concat(Object.keys(B.led));
+  keys.forEach(k=>{ const x = A.led[k]||[0,0], y = B.led[k]||[0,0], e = [Math.max(x[0],y[0]), Math.max(x[1],y[1])]; if(e[0]||e[1]) led[k] = e; });
+  const out = {...newer, originalPills:A.orig, updatedAt:Math.max(lt,rt)};
+  if(Object.keys(led).length){ out.led = led; out.pillsRemaining = ledViewQty({orig:A.orig, led}); }
+  else { delete out.led; out.pillsRemaining = A.orig; }
+  return out;
+}
+
 function fefoOrder(m, precomputedBatches){
   return (precomputedBatches || activeBatches(m)).slice().sort((a,b)=>{
     const ea = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity;
@@ -1374,15 +1435,17 @@ function nextBatchUnitPrice(m){
 // Overselling is allowed (stock may exist on the shelf without being entered in the app): stock simply
 // stops at 0. Returns how many pills were REALLY taken out of stock, so a later delete/edit of the bill
 // gives back only that much and never creates phantom stock.
+let lastDeductExpiry = null;   // earliest expiry date among the batches the LAST deductStock() took from (null if none had a date)
 function deductStock(m, pills){
   let remaining = Number(pills)||0, taken = 0;
+  lastDeductExpiry = null;
   for(const b of fefoOrder(m)){
     if(remaining<=0) break;
     const take = Math.min(b.pillsRemaining, remaining);
-    b.pillsRemaining = q6(b.pillsRemaining - take);
+    if(take>0 && b.expiryDate && (!lastDeductExpiry || b.expiryDate<lastDeductExpiry)) lastDeductExpiry = b.expiryDate;
+    batchChange(b, -take);
     remaining = q6(remaining - take);
     taken = q6(taken + take);
-    b.updatedAt = Date.now();
   }
   recomputeStock(m);
   return taken;
@@ -1394,7 +1457,7 @@ function returnStock(m, pills){
   // to expiry (the one most likely to have been sold from), or a fresh undated batch.
   pills = Number(pills)||0; if(pills<=0) return;
   const batches = fefoOrder(m);
-  if(batches.length){ batches[0].pillsRemaining = q6(batches[0].pillsRemaining + pills); batches[0].updatedAt = Date.now(); }
+  if(batches.length){ batchChange(batches[0], pills); }
   else {
     m.batches = m.batches||[];
     m.batches.push({ id:uid(), boxes:null, pillsRemaining:pills, originalPills:pills, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
@@ -1403,8 +1466,10 @@ function returnStock(m, pills){
 }
 function adjustStockTo(m, newTotal){
   // Used for manual stock correction in Edit (e.g. accounting for loss/damage).
+  newTotal = Number(newTotal);
+  if(!isFinite(newTotal) || newTotal<0) return;            // never write a negative / non-number stock
   const current = activeBatches(m).reduce((s,b)=>s+b.pillsRemaining,0);
-  const diff = newTotal - current;
+  const diff = q6(newTotal - current);
   if(diff<0) deductStock(m, -diff);
   else if(diff>0){
     m.batches = m.batches||[];
@@ -1476,7 +1541,7 @@ function disposeBatch(medId, batchId){
     const m = inventory.find(x=>x.id===medId);
     if(m){
       const b = (m.batches||[]).find(x=>x.id===batchId);
-      if(b){ b.disposed=true; b.pillsRemaining=0; b.updatedAt=Date.now(); recomputeStock(m); }
+      if(b){ batchChange(b, -(Number(b.pillsRemaining)||0)); b.disposed=true; b.updatedAt=Date.now(); recomputeStock(m); }
     }
     if(m) logActivity("dispose", m.name);
     saveInventory();
@@ -1772,7 +1837,8 @@ function pushNav(resolver){
   history.pushState({ appNav:true }, "", location.href);
 }
 window.addEventListener("popstate", function(){
-  if(window.__boxBusy){ history.pushState({ appNav:true }, "", location.href); return; } // form is being filled — ignore back
+  if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ history.pushState({ appNav:true }, "", location.href); return; } // photo reading in progress — ignore back
+  window.__boxBusy = false;                                                            // (a flag left on by an error must never lock the back button)
   if(navStack.length){
     const resolver = navStack.pop();
     wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
@@ -1936,7 +2002,7 @@ function render(){
     // re-chunking the rest — which is what used to make a button tap land on the wrong
     // medicine after scrolling past the first ~50 while a sync happened to land at that
     // exact moment.
-    if(document.getElementById("invQueryInput")) renderInvList();
+    if(document.getElementById("invQueryInput")){ refreshInvHeader(); renderInvList(); }
     else renderInventory();
   }
   else if(tab==="records") renderRecords();
@@ -2671,7 +2737,11 @@ function completeBill(){
   const retTx = retPending() ? retCommit() : null;      // returned medicine goes back into stock first, so it can be sold again in this same bill
   const hasSale = bill.items.length>0 || (bill.feeIncluded && Number(bill.fee)>0) || bill.extras.length>0 || bill.tests.length>0;
   if(!hasSale){                                          // return only: nothing new was sold
-    saveInventory(); saveTransactions();
+    // Save the transaction record before the stock change it describes (see the matching note
+    // below) — if the app is interrupted between the two saves, the result is a return record
+    // whose stock hasn't been put back yet (noticeable and fixable), not stock silently moving
+    // with no record of why.
+    saveTransactions(); saveInventory();
     const refund = retTx ? -retTx.grandTotal : 0;
     const _savedBill = bill; bill = newBillState(); retReset(); render();
     if(retTx){
@@ -2681,11 +2751,15 @@ function completeBill(){
     } else showToast(`✓ Return saved — give ${CURRENCY}${money(refund)} back`);
     return;
   }
+  // Give every line a stable id of its own, separate from its position in the array. Returns record
+  // which line they came from using this id (srcLid, below) instead of a raw array index, so that if
+  // the bill is later edited and its lines get reordered/added/removed, existing returns still point
+  // at the exact same line rather than silently landing on whatever now happens to sit at that index.
+  bill.items.forEach(it=>{ if(it.lid==null) it.lid = uid(); });
   bill.items.forEach(it=>{
     const med = inventory.find(m=>m.id===it.medId);
-    if(med) it.ded = deductStock(med, it.pills);   // remember what really left stock (overselling allowed)
+    if(med){ it.ded = deductStock(med, it.pills); if(lastDeductExpiry) it.exp = lastDeductExpiry; else delete it.exp; }   // remember what really left stock (overselling allowed) and its expiry
   });
-  saveInventory();
   const tx = { id:uid(), timestamp:Date.now(), updatedAt:Date.now(), patientName:bill.patient.trim() || (_retDraft && _retDraft.name) || "",
     doctorFee: bill.feeIncluded?billFeeGross():0, feeDiscount: bill.feeIncluded?billFeeDiscount():0, items:bill.items, medTotal:billMedTotal(), medsDiscount:billMedDiscount(),
     extras:bill.extras, extrasTotal:billExtrasTotal(),
@@ -2694,7 +2768,15 @@ function completeBill(){
     grandTotal:billGrandTotal() };
   transactions.unshift(tx);
   logActivity("bill_add", `${tx.patientName||"Bill"} · ${money(tx.grandTotal)}`);
+  // Save the bill record BEFORE the stock deduction it describes. Stock was already deducted
+  // in memory above (so the receipt/printout below is correct either way) — this only changes
+  // which of the two localStorage/cloud writes lands first. If the app gets killed between them,
+  // you're left with a bill that exists but whose stock hasn't been written down yet, which is
+  // visible and recoverable (re-open the app, the deduction simply hasn't persisted) — instead
+  // of the old order, where stock could vanish from inventory with no bill on record to explain
+  // where it went.
   saveTransactions();
+  saveInventory();
   autoPrintAfterBill(tx);
   const _savedBill = bill; bill = newBillState(); retReset();
   render();
@@ -3022,11 +3104,11 @@ function topSellersHtml(){
   return `<p class="small" style="margin:0 0 8px;">Top 10 medicines by quantity — last 30 days</p>`+list.map((e,i)=>`<div style="margin-bottom:10px;"><div class="row"><span style="font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i+1}. ${esc(e.name)}</span><span class="small" style="flex-shrink:0;margin-left:8px;">${e.qty} · ${fmtMoney(e.rev)}</span></div>
     <div style="height:6px;border-radius:99px;background:var(--primarySoft);margin-top:4px;"><div style="height:100%;width:${Math.round(e.qty/max*100)}%;border-radius:99px;background:var(--primary);"></div></div></div>`).join("");
 }
-function costPct(){ let v=NaN; try{ v=Number(localStorage.getItem("clinic_cost_pct")); }catch(e){} return isFinite(v)&&v>0&&v<=100 ? v : 80; }
+function costPct(){ let v=NaN; try{ v=Number(localStorage.getItem(bk("clinic_cost_pct"))); }catch(e){} return isFinite(v)&&v>0&&v<=100 ? v : 80; }
 // Two ways to count purchase cost: an average % of the selling price (estimate), or the real TOTAL
 // purchase cost you type in for the chosen period (Today / 7 days / 30 days — each remembered).
-function costMode(){ try{ return localStorage.getItem("clinic_cost_mode")==="total" ? "total" : "pct"; }catch(e){ return "pct"; } }
-function costTotalFor(range){ let v=NaN; try{ v=Number(localStorage.getItem("clinic_cost_total_"+range)); }catch(e){} return isFinite(v)&&v>=0 ? v : 0; }
+function costMode(){ try{ return localStorage.getItem(bk("clinic_cost_mode"))==="total" ? "total" : "pct"; }catch(e){ return "pct"; } }
+function costTotalFor(range){ let v=NaN; try{ v=Number(localStorage.getItem(bk("clinic_cost_total_"+range))); }catch(e){} return isFinite(v)&&v>=0 ? v : 0; }
 function profitCalc(){
   const days=Number(toolsUi.range)||7, today=dayStartTs(Date.now()), a=today-(days-1)*86400000, list=txBetween(a, today+86400000);
   const rev=list.reduce((s,t)=>s+netParts(t).meds,0), total=costMode()==="total";
@@ -3035,13 +3117,13 @@ function profitCalc(){
 }
 function profitOutHtml(){ const p=profitCalc(); return `<div class="row"><span class="small">Medicine sales (after discounts)</span><strong>${fmtMoney(p.rev)}</strong></div>
   <div class="row"><span class="small">${p.total?"Purchase cost (your total)":"Estimated purchase cost"}</span><strong>${fmtMoney(p.cost)}</strong></div><div class="row" style="margin-top:6px;"><span style="font-weight:700;">${p.total?"Profit":"Estimated profit"}</span><strong style="color:var(--success);font-size:18px;">${fmtMoney(p.profit)}</strong></div>`; }
-function setCostMode(m){ try{ localStorage.setItem("clinic_cost_mode", m==="total"?"total":"pct"); }catch(e){} renderToolsModal(); }
+function setCostMode(m){ try{ localStorage.setItem(bk("clinic_cost_mode"), m==="total"?"total":"pct"); }catch(e){} renderToolsModal(); }
 function onCostTotal(v){
   const n=Number(String(v).replace(/[^0-9.]/g,""));
-  try{ localStorage.setItem("clinic_cost_total_"+(Number(toolsUi.range)||7), String(isFinite(n)?n:0)); }catch(e){}
+  try{ localStorage.setItem(bk("clinic_cost_total_"+(Number(toolsUi.range)||7)), String(isFinite(n)?n:0)); }catch(e){}
   const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml();
 }
-function onCostPct(v){ const n=Number(String(v).replace(/[^0-9.]/g,"")); if(n>0&&n<=100){ try{ localStorage.setItem("clinic_cost_pct", String(n)); }catch(e){} } const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml(); }
+function onCostPct(v){ const n=Number(String(v).replace(/[^0-9.]/g,"")); if(n>0&&n<=100){ try{ localStorage.setItem(bk("clinic_cost_pct"), String(n)); }catch(e){} } const el=document.getElementById("profitOut"); if(el) el.innerHTML=profitOutHtml(); }
 function reportsBodyHtml(){
   const tabs=[["closing","Closing"],["week","7 days"],["top","Top sellers"],["profit","Profit"]];
   const seg=`<div class="flex gap2" style="margin-bottom:12px;">${tabs.map(([k,l])=>`<button type="button" class="btn ${toolsUi.tab===k?"btn-primary":"btn-outline"}" style="flex:1;padding:8px 4px;font-size:12px;" onclick="rpSet('tab','${k}')">${l}</button>`).join("")}</div>`;
@@ -3078,6 +3160,7 @@ function renderToolsModal(){
   else if(k==="reports"){ title="📊 Reports"; body=reportsBodyHtml(); }
   else if(k==="patient"){ title="🕘 "+esc(toolsUi.histName); body=patientBodyHtml(); }
   else if(k==="transfer"){ title="🏢 Transfer to another branch"; body=xferBodyHtml(); }
+  else if(k==="cardsCopy"){ title="🏢 Send medicine cards"; body=cardsCopyBodyHtml(); }
   root.innerHTML=`<div class="modal-overlay" onclick="if(event.target===this) closeTools()"><div class="modal" style="max-height:90vh;"><div class="modal-head"><strong>${title}</strong><button class="modal-x" onclick="closeTools()">✕</button></div><div style="padding:12px 16px 18px;overflow-y:auto;">${body}</div></div></div>`;
 }
 
@@ -3281,7 +3364,7 @@ function xferBodyHtml(){
     ${howMuch}
     <div id="xferSummary" class="small" style="margin:10px 0 12px;"></div>
     <button id="xferGo" class="btn btn-primary" style="width:100%;" onclick="xferGo()">Transfer</button>
-    <p class="small faint" style="margin:10px 0 0;">The stock leaves ${esc(branchName(activeBranchId))} now and appears in the other branch as soon as one of its phones is online. Needs internet to send.</p>`;
+    <p class="small faint" style="margin:10px 0 0;">The stock moves right away, with or without internet. The other branch's phones get it the next time this phone syncs.</p>`;
 }
 async function xferGo(){
   if(xferUi.busy) return;
@@ -3290,7 +3373,6 @@ async function xferGo(){
   const toId = xferUi.toId; if(!toId || toId===activeBranchId){ showToast("Choose the branch to send to"); return; }
   const total = xferTotalPills(); if(!(total>0)){ showToast("Enter a quantity"); return; }
   if(total > (Number(m.stockPills)||0) + 1e-9){ showToast("That is more than the stock you have"); return; }
-  if(!fbDb){ try{ ensureFirebase(); }catch(e){} showToast("Transfers need the internet — try again in a moment"); return; }
   // plan which batches the pills come from (nothing is changed yet): the LATEST stock goes to the other branch (see xferAutoOrder),
   // so the older stock stays here and keeps being sold first
   let rem = total; const plan = [];
@@ -3304,71 +3386,167 @@ async function xferGo(){
   }
   if(rem>1e-9){ showToast("Stock changed — please try again"); return; }
   const me = profiles.find(x=>x.id===currentProfileId), id = uid(), toName = branchName(toId);
-  const doc = { id, kind:"transfer", status:"pending", from:activeBranchId, fromName:branchName(activeBranchId), to:toId, toName, createdAt:Date.now(), by:(me&&me.name)||"",
+  const delta = { id, from:activeBranchId, fromName:branchName(activeBranchId), to:toId, toName, createdAt:Date.now(), by:(me&&me.name)||"",
     med:{ name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrpPerBox:m.mrpPerBox, pillsPerBox:m.pillsPerBox, lowStockAt:(m.lowStockAt??0), gtin:m.gtin||"" },
     segments: plan.map(x=>({ pills:x.pills, expiryDate:x.b.expiryDate||null, mrpPerBox:(x.b.mrpPerBox!=null?x.b.mrpPerBox:null) })), totalPills: total };
-  xferUi.busy = true; xferQty();
-  try{
-    await withTimeout(fbDb.collection("sync").doc("xfer_"+id).set(sanitizeForFirestore(doc)), 15000);
-  }catch(e){
-    xferUi.busy = false; xferQty(); showToast("Couldn't send — check the internet connection. Nothing was changed."); return;
-  }
-  // sent: now take the stock out of this branch
-  plan.forEach(x=>{ x.b.pillsRemaining = q6((Number(x.b.pillsRemaining)||0) - x.pills); x.b.updatedAt = Date.now(); });
+  // 1) the stock leaves this branch right now (works without internet; syncs like every other change)
+  plan.forEach(x=>{ batchChange(x.b, -x.pills); });
   recomputeStock(m); m.updatedAt = Date.now(); saveInventory();
+  // 2) and goes into the other branch: its copy stored on this phone right now, its cloud copy as soon as there is internet
+  xferOutboxAdd(delta); xferApplyToStoredBranch(delta);
   logActivity("transfer_out", `${m.name} × ${fmtInt(total)} → ${toName}`);
   xferUi.busy = false; closeTools(); render();
-  showToast(`✓ ${fmtInt(total)} × ${m.name} sent to ${toName}`);
+  showToast(`✓ ${fmtInt(total)} × ${m.name} moved to ${toName}` + ((typeof navigator!=="undefined" && navigator.onLine===false) ? " — it will sync when you are back online" : ""));
+  flushTransferOutbox();
 }
-// ---- receiving side ----
-function _xferApplied(){ try{ return JSON.parse(localStorage.getItem("clinic_xfer_applied")||"[]"); }catch(e){ return []; } }
-function _xferMarkApplied(id){ try{ const a=_xferApplied(); if(!a.includes(id)){ a.push(id); localStorage.setItem("clinic_xfer_applied", JSON.stringify(a.slice(-300))); } }catch(e){} }
-function applyIncomingTransfer(data){
-  if(!data || !data.id || _xferApplied().includes(data.id)) return false;
-  const md = data.med || {}, key = xferKey(md);
-  let m = inventory.find(x=>!x.deleted && xferKey(x)===key);
+// ---- the other branch's side: applied inside the app first, then to its cloud copy whenever there is internet ----
+// A transfer is a small "delta" (which medicine, which batches/expiry, how many). It is applied with fixed ids (xm_/xb_ + transfer id),
+// so applying it again anywhere (this phone, the cloud copy, another phone) can never add the stock twice.
+function xferDeltaApply(inv, d){
+  if(Array.isArray(d.cards)) return xferCardsApply(inv, d);   // "copy all medicine cards" transfer (see below)
+  const md = d.med || {}, key = xferKey(md); let changed = false;
+  let m = inv.find(x=>!x.deleted && xferKey(x)===key);
   if(!m){
-    m = { id:uid(), name:md.name||"Medicine", category:md.category||"", specialCategory:md.specialCategory||"", formula:md.formula||"", mg:md.mg||"",
+    m = { id:"xm_"+d.id, name:md.name||"Medicine", category:md.category||"", specialCategory:md.specialCategory||"", formula:md.formula||"", mg:md.mg||"",
           mrpPerBox:md.mrpPerBox, pillsPerBox:md.pillsPerBox, lowStockAt:(md.lowStockAt??0), stockPills:0, batches:[], updatedAt:Date.now() };
     if(md.gtin) m.gtin = md.gtin;
-    inventory.push(m);
+    inv.push(m); changed = true;
   }
   if(!Array.isArray(m.batches)) m.batches = [];
-  (data.segments||[]).forEach(sg=>{
+  (d.segments||[]).forEach((sg,i)=>{
+    const bid = "xb_"+d.id+"_"+i; if(m.batches.some(b=>b.id===bid)) return;
     const p = q6(Number(sg.pills)||0); if(!(p>0)) return;
-    m.batches.push({ id:uid(), boxes:null, pillsRemaining:p, originalPills:p, mrpPerBox:(sg.mrpPerBox!=null?sg.mrpPerBox:null), expiryDate:sg.expiryDate||null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false, transferId:data.id });
+    m.batches.push({ id:bid, boxes:null, pillsRemaining:p, originalPills:p, mrpPerBox:(sg.mrpPerBox!=null?sg.mrpPerBox:null), expiryDate:sg.expiryDate||null, addedAt:d.createdAt||Date.now(), updatedAt:Date.now(), disposed:false, transferId:d.id });
+    changed = true;
   });
-  recomputeStock(m); m.updatedAt = Date.now();
-  _xferMarkApplied(data.id); saveInventory();
-  logActivity("transfer_in", `${m.name} × ${fmtInt(data.totalPills||0)} ← ${data.fromName||"another branch"}`);
-  try{ if(tab==="inventory"||tab==="stock"||tab==="bill") render(); }catch(e){}
-  showToast(`📥 Received ${fmtInt(data.totalPills||0)} × ${m.name} from ${data.fromName||"another branch"}`);
-  return true;
+  if(changed){ m.updatedAt = Date.now(); recomputeStock(m); }
+  return changed;
 }
-async function claimTransfer(ref, docId){
-  if(_xferClaiming[docId] || _xferApplied().includes(docId.replace(/^xfer_/,""))) return;
-  _xferClaiming[docId] = true;
+function xferOutboxGet(){ try{ return JSON.parse(localStorage.getItem("clinic_xfer_outbox")||"[]"); }catch(e){ return []; } }
+function xferOutboxSet(a){ try{ localStorage.setItem("clinic_xfer_outbox", JSON.stringify(a)); }catch(e){} }
+function xferOutboxAdd(d){ const a = xferOutboxGet(); if(!a.some(x=>x.id===d.id)){ a.push(d); xferOutboxSet(a); } }
+function xferOutboxRemove(id){ xferOutboxSet(xferOutboxGet().filter(x=>x.id!==id)); }
+// the target branch's copy that is stored on this phone (if this phone has opened that branch before)
+function xferApplyToStoredBranch(d){
   try{
-    const me = profiles.find(x=>x.id===currentProfileId);
-    const data = await fbDb.runTransaction(async tx=>{
-      const d = await tx.get(ref); if(!d.exists) return null;
-      const v = d.data(); if(v.status!=="pending" || v.to!==activeBranchId) return null;
-      tx.update(ref, { status:"received", receivedAt:Date.now(), receivedBy:(me&&me.name)||"" });
-      return v;
-    });
-    if(data) applyIncomingTransfer(data);
-  }catch(e){ /* offline or someone else got it first: it simply stays pending / is already taken */ }
-  finally{ delete _xferClaiming[docId]; }
-}
-function startTransferInbox(){
-  if(transferUnsub){ try{ transferUnsub(); }catch(e){} transferUnsub = null; }
-  if(!fbDb) return;
-  try{
-    transferUnsub = fbDb.collection("sync").where("kind","==","transfer").where("to","==",activeBranchId).where("status","==","pending")
-      .onSnapshot(snap=>{ snap.forEach(d=>claimTransfer(d.ref, d.id)); }, ()=>{ /* ignore listener errors; it restarts with the next sync start */ });
+    const key = d.to==="main" ? "clinic_inventory" : "clinic_inventory@"+d.to, raw = localStorage.getItem(key);
+    if(raw==null) return;
+    const inv = JSON.parse(raw||"[]"); if(xferDeltaApply(inv, d)) localStorage.setItem(key, JSON.stringify(inv));
   }catch(e){}
 }
-{ const _scs = startCloudSync; startCloudSync = function(){ const r = _scs.apply(this, arguments); try{ startTransferInbox(); }catch(e){} return r; }; }
+// when a branch is opened on this phone, anything still waiting for it is put in (safe to repeat)
+function xferApplyOutboxLocal(){
+  const mine = xferOutboxGet().filter(d=>d.to===activeBranchId); let any = false;
+  mine.forEach(d=>{ if(xferDeltaApply(inventory, d)) any = true; });
+  if(any) saveInventory();
+}
+let _xferFlushing = false;
+async function flushTransferOutbox(){
+  if(_xferFlushing || typeof fbDb==="undefined" || !fbDb || navigator.onLine===false) return;
+  const box = xferOutboxGet(); if(!box.length) return;
+  _xferFlushing = true;
+  try{
+    for(const d of box){
+      try{
+        const ref = d.to==="main" ? cloudDocRef() : branchDocRef(d.to);
+        await withTimeout(fbDb.runTransaction(async tx=>{
+          const snap = await tx.get(ref), cur = snap.exists ? snap.data() : {};
+          const inv = JSON.parse(JSON.stringify(Array.isArray(cur.inventory) ? cur.inventory : []));
+          if(!xferDeltaApply(inv, d)) return;                       // already there: nothing to do
+          const clean = sanitizeForFirestore(inv);
+          if(snap.exists) tx.update(ref, { inventory:clean, updatedAt:Date.now() });
+          else tx.set(ref, { syncCode:SYNC_CODE, branchId:d.to, inventory:clean, transactions:[], monthAdjustments:[], updatedAt:Date.now() });
+        }), 25000);
+        xferOutboxRemove(d.id);
+      }catch(e){ break; }                                           // no internet / busy: it stays in the outbox and is retried
+    }
+  } finally { _xferFlushing = false; }
+}
+{ const _scs = startCloudSync; startCloudSync = function(){ const r = _scs.apply(this, arguments); try{ xferApplyOutboxLocal(); setTimeout(flushTransferOutbox, 3000); }catch(e){} return r; }; }
+window.addEventListener("online", ()=>setTimeout(flushTransferOutbox, 1500));
+setInterval(()=>{ try{ flushTransferOutbox(); }catch(e){} }, 45000);
+
+
+// ======================= Copy ALL medicine cards to another branch (Settings → Stock & data) =======================
+// Sends only the cards (name, strength, category, pack size, low-stock level…), with stock 0 and NO price (MRP 0), to the other branch.
+// A medicine the other branch already has (same name + strength + category) is skipped. Nothing is removed here.
+// It travels the same safe way as a stock transfer (outbox -> cloud copy of the other branch, applied exactly once by fixed ids).
+const XFER_CARD_FIELDS = ["name","category","specialCategory","formula","mg","pillsPerBox","lowStockAt","gtin","sTag","noWarn"];
+function xferCardsApply(inv, d){
+  const have = new Set(inv.filter(x=>!x.deleted).map(xferKey)); let changed = false;
+  (d.cards||[]).forEach((c,i)=>{
+    const k = xferKey(c); if(have.has(k)) return;
+    const id = "xm_"+d.id+"_"+i; if(inv.some(x=>x.id===id)) return;           // already added by this transfer (even if deleted since)
+    have.add(k);
+    inv.push({ id, name:c.name||"Medicine", category:c.category||"", specialCategory:c.specialCategory||"", formula:c.formula||"", mg:c.mg||"",
+      mrpPerBox:0, pillsPerBox:c.pillsPerBox, stockPills:0, lowStockAt:(c.lowStockAt??0), batches:[], sTag:!!c.sTag, noWarn:!!c.noWarn,
+      gtin:c.gtin||"", createdAt:d.createdAt||Date.now(), updatedAt:Date.now(), deleted:false });
+    changed = true;
+  });
+  return changed;
+}
+let cardsUi = { toId:"", busy:false, q:"", sel:{} };
+function cardsMeds(){ return inventory.filter(m=>!m.deleted && m.name).slice().sort((x,y)=>String(x.name).localeCompare(String(y.name))); }
+function cardsShown(){
+  const q = String(cardsUi.q||"").trim().toLowerCase(), all = cardsMeds();
+  return q ? all.filter(m=>[m.name,m.mg,m.category,m.formula].join(" ").toLowerCase().includes(q)) : all;
+}
+function cardsSelCount(){ const ids = new Set(cardsMeds().map(m=>m.id)); return Object.keys(cardsUi.sel).filter(id=>cardsUi.sel[id] && ids.has(id)).length; }
+function openCardsCopy(){
+  if(!canTransferStock()){ showToast("Only the Admin or a Branch Manager can do this (and there must be 2+ branches)"); return; }
+  const t = xferTargets(); if(!t.length){ showToast("Add another branch first"); return; }
+  const sel = {}; cardsMeds().forEach(m=>{ sel[m.id] = true; });          // everything ticked to start with = "send all"
+  cardsUi = { toId: t.length===1 ? t[0].id : "", busy:false, q:"", sel };
+  openTools("cardsCopy");
+}
+function cardsPick(id){ cardsUi.toId = id; renderOverlays(); }
+function cardsRowsHtml(){
+  const list = cardsShown();
+  if(!list.length) return `<p class="small faint" style="text-align:center;padding:14px 0;">No medicines found.</p>`;
+  return list.map(m=>`<label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border,#E5E7EB);cursor:pointer;">
+      <input type="checkbox" ${cardsUi.sel[m.id]?"checked":""} onchange="cardsToggle('${m.id}',this.checked)" style="width:20px;height:20px;flex:none;">
+      <span style="min-width:0;"><b>${esc(m.name)}</b>${m.mg?` <span class="small">${esc(m.mg)}</span>`:""}<br><span class="small faint">${esc(m.category||"")}</span></span></label>`).join("");
+}
+function cardsRefresh(){
+  const n = cardsSelCount(), go = document.getElementById("cardsGo"), c = document.getElementById("cardsCount");
+  if(c) c.textContent = fmtInt(n)+" of "+fmtInt(cardsMeds().length)+" selected";
+  if(go){ go.disabled = !n || !cardsUi.toId || cardsUi.busy;
+    go.textContent = cardsUi.busy ? "Sending…" : (!cardsUi.toId ? "Choose a branch first" : (n ? `Send ${fmtInt(n)} card${n===1?"":"s"} to ${branchName(cardsUi.toId)}` : "Tick at least one medicine")); }
+}
+function cardsToggle(id, on){ cardsUi.sel[id] = !!on; cardsRefresh(); }
+function cardsSetShown(on){ cardsShown().forEach(m=>{ cardsUi.sel[m.id] = !!on; }); const l = document.getElementById("cardsList"); if(l) l.innerHTML = cardsRowsHtml(); cardsRefresh(); }
+function onCardsSearch(v){ cardsUi.q = v; const l = document.getElementById("cardsList"); if(l) l.innerHTML = cardsRowsHtml(); }
+function cardsCopyBodyHtml(){
+  const t = xferTargets();
+  setTimeout(cardsRefresh, 0);
+  return `
+    <p class="small" style="margin:0 0 8px;">Send medicine cards from <b>${esc(branchName(activeBranchId))}</b> to:</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">${t.map(b=>`<button type="button" class="btn ${cardsUi.toId===b.id?"btn-primary":"btn-outline"}" style="width:100%;text-align:left;" onclick="cardsPick('${b.id}')">🏢 ${esc(b.name)}</button>`).join("")}</div>
+    <div class="search-wrap" style="margin:0 0 8px;"><span class="search-icon">🔍</span><input ${NOAC_RAW} value="${esc(cardsUi.q)}" oninput="onCardsSearch(this.value)" placeholder="Search medicines…"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      <button type="button" class="btn btn-outline" style="flex:none;padding:6px 12px;" onclick="cardsSetShown(true)">Select all</button>
+      <button type="button" class="btn btn-outline" style="flex:none;padding:6px 12px;" onclick="cardsSetShown(false)">Clear</button>
+      <span id="cardsCount" class="small" style="margin-left:auto;"></span>
+    </div>
+    <div id="cardsList" style="max-height:34vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border-top:1px solid var(--border,#E5E7EB);">${cardsRowsHtml()}</div>
+    <p class="small faint" style="margin:10px 0 12px;">Only the medicine cards are sent — <b>no stock and no prices</b>. Stock and price (MRP) start at 0 in the other branch, so set them there. Medicines it already has (same name, strength and category) are skipped. Nothing is removed from this branch.</p>
+    <button id="cardsGo" class="btn btn-primary" style="width:100%;" onclick="cardsCopyGo()">Send</button>`;
+}
+function cardsCopyGo(){
+  if(cardsUi.busy) return;
+  if(!canTransferStock()){ showToast("Only the Admin or a Branch Manager can do this"); return; }
+  const toId = cardsUi.toId; if(!toId || toId===activeBranchId){ showToast("Choose the branch to send to"); return; }
+  const cards = cardsMeds().filter(m=>cardsUi.sel[m.id]).map(m=>{ const c = {}; XFER_CARD_FIELDS.forEach(f=>{ if(m[f]!==undefined) c[f] = m[f]; }); return c; });
+  if(!cards.length){ showToast("Tick at least one medicine"); return; }
+  cardsUi.busy = true;
+  const me = profiles.find(x=>x.id===currentProfileId), toName = branchName(toId);
+  const delta = { id:uid(), kind:"cards", from:activeBranchId, fromName:branchName(activeBranchId), to:toId, toName, createdAt:Date.now(), by:(me&&me.name)||"", cards };
+  xferOutboxAdd(delta); xferApplyToStoredBranch(delta);
+  logActivity("cards_copy", `${cards.length} cards → ${toName}`);
+  cardsUi.busy = false; closeTools();
+  showToast(`✓ ${fmtInt(cards.length)} medicine card${cards.length===1?"":"s"} sent to ${toName}` + ((typeof navigator!=="undefined" && navigator.onLine===false) ? " — it will sync when you are back online" : ""));
+  flushTransferOutbox();
+}
 
 // ---- long-press + drag a medicine card onto the branch oval ----
 function xferOvalAt(x, y){
@@ -6735,13 +6913,13 @@ const INV_SORT_PERIODS = [ {d:7,label:"7 days"}, {d:30,label:"30 days"}, {d:90,l
 let _invSort = null;
 function invSortState(){
   if(!_invSort){
-    try{ _invSort = JSON.parse(localStorage.getItem("clinic_inv_sort")||"null"); }catch(e){ _invSort = null; }
+    try{ _invSort = JSON.parse(localStorage.getItem(bk("clinic_inv_sort"))||"null"); }catch(e){ _invSort = null; }
     if(!_invSort || !INV_SORTS.some(x=>x.k===_invSort.key)) _invSort = { key:"default", days:30 };
     if(!INV_SORT_PERIODS.some(x=>x.d===_invSort.days)) _invSort.days = 30;
   }
   return _invSort;
 }
-function invSortSave(){ try{ localStorage.setItem("clinic_inv_sort", JSON.stringify(invSortState())); }catch(e){} }
+function invSortSave(){ try{ localStorage.setItem(bk("clinic_inv_sort"), JSON.stringify(invSortState())); }catch(e){} }
 function invSortSig(){ const st = invSortState(); return st.key + ((st.key==="most"||st.key==="least") ? ":"+st.days : ""); }
 // when was this medicine added? (new ones store it; older ones carry it inside their id, else the oldest batch / last change)
 function invMedCreated(m){
@@ -6943,8 +7121,9 @@ function toggleInvStatFilter(kind){
   inv.statFilter = (kind==='all' || inv.statFilter===kind) ? null : kind;
   renderInventory();
 }
-function renderInventory(){
-  _invListLoadedFor = null;
+// The row of ovals + the Arrange button. Kept separate so it can be refreshed on its own
+// (branch switch, incoming cloud data) without rebuilding the search box.
+function invHeaderRowHtml(){
   const totalMedicines = inventory.filter(m=>!m.deleted).length;
   // Special category = m.specialCategory is set (same "special medicine" tag used to hide it
   // from the normal New Bill search — see specialMatches()). S. tagged = m.sTag, which is a
@@ -6958,13 +7137,7 @@ function renderInventory(){
   // usual soft tint so it's clear at a glance which filter (if any) is currently applied.
   const pillBtn = (active, softVar, solidVar, count, kind)=>
     `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${fmtInt(count)}</button>`;
-  document.getElementById("main").innerHTML = `
-    <div id="invStickyBar">
-    <div class="search-wrap mb2">
-      <span class="search-icon">🔍</span>
-      <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
-    </div>
-    <div class="mb2" style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;padding:0 2px;">
+  return `
       <div class="flex gap2">
         ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
         ${pillBtn(inv.statFilter==='sTag', '--dangerSoft', '--danger', sTaggedMedicines, 'sTag')}
@@ -6973,7 +7146,25 @@ function renderInventory(){
       <div class="flex gap2" style="justify-content:flex-end;">
         ${pillBtn(!inv.statFilter, '--primarySoft', '--primary', totalMedicines, 'all')}
         ${pillBtn(inv.statFilter==='nonSpecial', '--successSoft', '--success', nonSpecialMedicines, 'nonSpecial')}
-      </div>
+      </div>`;
+}
+// Redraw only the ovals + Arrange button (and keep the search box text in step with inv.query).
+function refreshInvHeader(){
+  const row = document.getElementById("invHeaderRow");
+  if(row) row.innerHTML = invHeaderRowHtml();
+  const qi = document.getElementById("invQueryInput");
+  if(qi && qi!==document.activeElement && qi.value!==inv.query) qi.value = inv.query;
+}
+function renderInventory(){
+  _invListLoadedFor = null;
+  document.getElementById("main").innerHTML = `
+    <div id="invStickyBar">
+    <div class="search-wrap mb2">
+      <span class="search-icon">🔍</span>
+      <input ${NOAC} id="invQueryInput" value="${esc(inv.query)}" oninput="onInvQuery(this.value)" placeholder="Search medicines…">
+    </div>
+    <div id="invHeaderRow" class="mb2" style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;padding:0 2px;">
+      ${invHeaderRowHtml()}
     </div>
     </div>
     <div id="invListContainer"></div>
@@ -7522,7 +7713,7 @@ function deleteTx(id){
   const back = [];
   (t.items||[]).forEach((it,i)=>{
     const med = inventory.find(m=>m.id===it.medId); if(!med || med.deleted) return;
-    const out = q6(Math.max(0, stockBack(it) - retDoneQty(t.id,i)));
+    const out = q6(Math.max(0, stockBack(it) - retDoneQty(t.id,i,it.lid)));
     if(out>0) back.push({ med, out });
   });
   const nRet = visibleTransactions().filter(r=>isReturnTx(r) && r.refOf===t.id).length;
@@ -7621,20 +7812,27 @@ function editTxGrandTotal(){ clampEditDiscounts(); return r2(editTxMedTotal() - 
 function saveEditTx(){
   const t = transactions.find(x=>x.id===recEdit.txId);
   if(!t || !recEdit.patient.trim()) return;
-  // give back stock for the old items, then deduct stock for the new items
-  t.items.forEach(oldIt=>{
+  // Give back stock for the old items, then deduct stock for the new items. Only give back what's
+  // still actually out — i.e. what was sold minus whatever was already returned on this bill before
+  // this edit — the same accounting deleteTx() uses. Otherwise editing a bill that had a partial
+  // return (sell 20, return 5, then edit) would hand back the full 20 instead of the remaining 15,
+  // creating phantom stock.
+  t.items.forEach((oldIt,idx)=>{
     const med = inventory.find(m=>m.id===oldIt.medId);
-    if(med) returnStock(med, stockBack(oldIt));
+    if(med){
+      const owed = q6(Math.max(0, stockBack(oldIt) - retDoneQty(t.id,idx,oldIt.lid)));
+      if(owed>0) returnStock(med, owed);
+    }
   });
   recEdit.items.forEach(newIt=>{
     const med = inventory.find(m=>m.id===newIt.medId);
-    if(med) newIt.ded = deductStock(med, newIt.pills);
+    if(med){ newIt.ded = deductStock(med, newIt.pills); if(lastDeductExpiry) newIt.exp = lastDeductExpiry; else delete newIt.exp; }
   });
   saveInventory();
   t.patientName = recEdit.patient.trim();
   clampEditDiscounts();
   t.doctorFee = r2(Math.max(Number(recEdit.fee)||0,0));
-  t.items = recEdit.items.map(it=>{ const c={...it}; delete c._new; return c; });
+  t.items = recEdit.items.map(it=>{ const c={...it}; delete c._new; if(c.lid==null) c.lid = uid(); return c; });   // any newly-added line gets its own stable id too
   t.medTotal = editTxMedTotal();
   t.medsDiscount = recEdit.medsDiscount||0;
   t.extras = recEdit.extras||[];
@@ -8150,6 +8348,16 @@ async function switchBranch(id){
     try{ transactions = JSON.parse(localStorage.getItem(bk("clinic_transactions"))||"[]"); }catch(e){ transactions=[]; }
     try{ monthAdjustments = JSON.parse(localStorage.getItem(bk("clinic_month_adjustments"))||"{}"); }catch(e){ monthAdjustments={}; }
     _lowStockCache = null; _expiringBatchesCache = null; _expiring2mCache = null; _fsIndex = null; _visibleTxCache = null;
+    _invSort = null;   // Arrange choice is remembered per branch: reload it for the branch we just entered
+    _invListLoadedFor = null;
+    try{ activityLog = JSON.parse(localStorage.getItem(bk("clinic_activity_log"))||"{}"); }catch(e){ activityLog = {}; }
+    // anything open that points at the other branch's medicines/bills is closed
+    toolsUi.open = false; toolsUi.counts = {}; toolsUi.q = ""; toolsUi.histName = "";
+    aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false };
+    xferUi = { medId:"", toId:"", boxes:"", pills:"", busy:false, manual:false, bq:{} };
+    cardsUi = { toId:"", busy:false, q:"", sel:{} };
+    try{ if(typeof renderOverlays==="function") renderOverlays(); }catch(e){}
+    try{ xferApplyOutboxLocal(); }catch(e){}
     // fresh screens: nothing from the other branch (open bill, search, expanded cards) may carry over
     bill = newBillState(); retReset();
     rec.expandedId = null; rec.editingId = null; rec.histOn = false; rec.histBill = ""; rec.searchQuery = "";
@@ -8157,6 +8365,7 @@ async function switchBranch(id){
     warnUi.filter = null; warnUi.q = "";
     syncStatus = "syncing"; renderSyncBadge();
     startCloudSync();
+    if(tab==="inventory"){ try{ renderInventory(); }catch(e){} }   // rebuild the whole Inventory header (ovals + Arrange + search) for the new branch
     render();
     return true;
   } finally { branchSwitching = false; }
@@ -9584,8 +9793,7 @@ function reconcileBatchesForSync(localBatches, remoteBatches){
     seen.add(lb.id);
     const rb = remoteMap.get(lb.id);
     if(!rb) return lb; // batch only exists locally (e.g. restocked here) — keep it
-    const lt = lb.updatedAt||lb.addedAt||0, rt = rb.updatedAt||rb.addedAt||0;
-    return rt>lt ? {...rb} : lb; // newer side's version of THIS batch wins
+    return mergeBatchPair(lb, rb); // quantity = both phones' changes combined; other details from the newer copy
   });
   (remoteBatches||[]).forEach(rb=>{
     if(!seen.has(rb.id)) result.push({...rb}); // batch only exists remotely — add it
@@ -9602,6 +9810,7 @@ function pickNewerMedicine(a,b){
     id: a.id, name: base.name, category: base.category||"", specialCategory: base.specialCategory||"", formula: base.formula||"", mg: base.mg||"",
     mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox, gtin: base.gtin||"",
     lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, sTag: !!base.sTag, deleted: !!base.deleted,
+    createdAt: a.createdAt || b.createdAt || undefined,     // was dropped by every sync merge, so "when added" was lost
     updatedAt: Math.max(aT,bT),
     batches: reconcileBatchesForSync(a.batches, b.batches)
   };
@@ -9858,41 +10067,104 @@ function mergeBackupInto(data){ mergeDataInto(data, mergeInventory, false, "full
 // instead of being silently ignored (or the deleted item quietly reappearing a second later).
 function mergeCloudSnapshotInto(data, scope){ mergeDataInto(data, reconcileInventoryForSync, true, scope||"full"); }
 function toggleBackupModal(){ backupUi.open = !backupUi.open; renderOverlays(); }
+// ---- Settings: a full page in the style of Instagram's settings (search box, grouped sections, icon + label + ›) ----
+let settingsUi = { q:"" };
 function toggleHeaderMenu(){
   headerMenuOpen = !headerMenuOpen;
-  const d = document.getElementById("headerMenuDropdown");
-  if(d) d.classList.toggle("hidden", !headerMenuOpen);
+  if(headerMenuOpen) settingsUi.q = "";
+  renderSettingsPage();
   syncMenuHistory();
 }
 function closeHeaderMenu(){
   headerMenuOpen = false;
-  const d = document.getElementById("headerMenuDropdown");
-  if(d) d.classList.add("hidden");
+  renderSettingsPage();
 }
 function renderHeaderMenu(){
-  const el = document.getElementById("headerMenuDropdown");
-  if(!el) return;
-  if(!currentProfileId || !sessionAuthed){ el.innerHTML=""; return; }
-  const items = [];
-  if(can("printer")) items.push({label:"🖨 Printer", action:"selectPrinter()"});
-  items.push({label:"💾 Backup", action:"toggleBackupModal()"});
-  if(can("receiptSetup")) items.push({label:"🖌 Receipt design", action:"openReceiptDesign()"});
-  items.push({label:"📷 Scan method", action:"editScanMethodSettings()"});
-  items.push({label:"🎨 Theme", action:"openThemeModal()"});
-  if(can("manageUsers")) items.push({label:"⌨ Keyboard test", action:"openKbTest()"});
-  items.push({label:"📋 Stock count", action:"openTools('count')"});
-  if(can("manageStaff")) items.push({label:"👥 Manage Users", action:"toggleManageUsersModal()"});
-  if(can("manageBranches")) items.push({label:"🏢 Branches", action:"toggleBranchesModal()"});
-  items.push({label:"⬆️ Upload offline data", action:"manualPushToCloud()"});
-  if(can("diagnostics")) items.push({label:"📈 Storage & health", action:"showStorageHealth()"});
-  items.push({label: (window.isFabLocked && window.isFabLocked()) ? "📌 + button position: locked (tap to unlock)" : "📍 Lock + button position", action:"toggleFabLock()"});
-  if(can("diagnostics")) items.push({label:"🩺 Diagnostics", action:"openDiag()"}); // Admin always; Semi-Admin only if ticked
-  { const me = profiles.find(x=>x.id===currentProfileId);
-    if(GMAIL_LOGIN_ENABLED && window.AppInventor) items.push({label: me && me.email ? "🔗 Gmail: "+me.email+" (change)" : "🔗 Link my Gmail", action:"startLinkGmail()"}); }
-  items.push({label:"🔁 Logout", action:"logoutUser()", danger:true});
-  el.innerHTML = `<div style="padding:8px 14px 6px;font-size:11px;font-weight:700;letter-spacing:.03em;color:var(--faint);border-bottom:1px solid var(--border);">Saad Clinic${visibleBranches().length>1?" · "+esc(branchName(activeBranchId)):""} · version ${APP_VERSION}</div>` + items.map((it,i)=>`
-    <button onclick="closeHeaderMenu();syncMenuHistory();${it.action};" style="display:block;width:100%;text-align:left;background:none;border:none;padding:10px 14px;font-size:13px;font-weight:600;color:${it.danger?'var(--danger)':'var(--text)'};cursor:pointer;${i>0?'border-top:1px solid var(--border);':''}">${it.label}</button>
-  `).join("");
+  const el = document.getElementById("headerMenuDropdown"); if(el) el.innerHTML = "";   // the old drop-down is no longer used
+  if(headerMenuOpen) renderSettingsPage();                                              // keep the open page in step with role/branch changes
+}
+function settingsSections(){
+  const sec = [];
+  const add = (title, items)=>{ items = items.filter(Boolean); if(items.length) sec.push({ title, items }); };
+  const it = (icon, label, action, sub)=>({ icon, label, action, sub:sub||"" });
+  const me = profiles.find(x=>x.id===currentProfileId);
+  add("Your account", [
+    can("manageStaff") ? it("👥","Manage Users","toggleManageUsersModal()","Staff, roles and PINs") : null,
+    can("manageBranches") ? it("🏢","Branches","toggleBranchesModal()", branchName(activeBranchId)) : null,
+    (GMAIL_LOGIN_ENABLED && window.AppInventor) ? it("🔗", me && me.email ? "Gmail: "+me.email+" (change)" : "Link my Gmail","startLinkGmail()") : null
+  ]);
+  add("Billing & printing", [
+    can("printer") ? it("🖨","Printer","selectPrinter()") : null,
+    can("receiptSetup") ? it("🖌","Receipt design","openReceiptDesign()") : null,
+    it("📷","Scan method","editScanMethodSettings()")
+  ]);
+  add("Stock & data", [
+    it("📋","Stock count","openTools('count')"),
+    canTransferStock() ? it("📤","Send medicine cards to another branch","openCardsCopy()", "Cards only, no stock or prices") : null,
+    it("💾","Backup","toggleBackupModal()"),
+    it("⬆️","Upload offline data","manualPushToCloud()")
+  ]);
+  add("App & display", [
+    it("🎨","Theme","openThemeModal()"),
+    it("📍", (window.isFabLocked && window.isFabLocked()) ? "+ button position: locked" : "Lock + button position","toggleFabLock()", (window.isFabLocked && window.isFabLocked()) ? "Tap to unlock" : "")
+  ]);
+  add("Tools & health", [
+    can("diagnostics") ? it("📈","Storage & health","showStorageHealth()") : null,
+    can("diagnostics") ? it("🩺","Diagnostics","openDiag()") : null,
+    can("manageUsers") ? it("⌨","Keyboard test","openKbTest()") : null
+  ]);
+  return sec;
+}
+function settingsBodyHtml(){
+  const q = String(settingsUi.q||"").trim().toLowerCase();
+  const me = profiles.find(x=>x.id===currentProfileId);
+  const row = x => `<button type="button" onclick="closeHeaderMenu();syncMenuHistory();${x.action};" style="display:flex;align-items:center;gap:14px;width:100%;padding:11px 14px;background:none;border:none;text-align:left;cursor:pointer;color:var(--text);font-family:inherit;border-radius:12px;">
+      <span style="width:36px;height:36px;flex:none;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;">${x.icon}</span>
+      <span style="flex:1;min-width:0;"><span style="display:block;font-size:15px;font-weight:500;">${esc(x.label)}</span>${x.sub?`<span style="display:block;font-size:12px;color:var(--muted);margin-top:1px;">${esc(x.sub)}</span>`:""}</span>
+      <span style="color:var(--faint);font-size:22px;line-height:1;flex:none;">›</span></button>`;
+  let html = "";
+  if(!q && me){
+    html += `<div style="display:flex;align-items:center;gap:14px;margin:4px 8px 6px;padding:14px;background:var(--card);border-radius:16px;box-shadow:0 1px 4px rgba(15,23,30,.08);">
+        <span style="width:52px;height:52px;flex:none;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;">${esc(String(me.name||"?").trim().charAt(0).toUpperCase())}</span>
+        <span style="min-width:0;"><span style="display:block;font-size:17px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(me.name)}</span>
+        <span style="display:block;font-size:13px;color:var(--muted);">${esc(roleLabel(me.role))}${visibleBranches().length>1?" · 🏢 "+esc(branchName(activeBranchId)):""}</span></span></div>`;
+  }
+  let shown = 0;
+  settingsSections().forEach(sc=>{
+    const items = sc.items.filter(x=>!q || (x.label+" "+x.sub+" "+sc.title).toLowerCase().includes(q));
+    if(!items.length) return;
+    shown += items.length;
+    html += `<p style="margin:16px 18px 4px;font-size:13px;font-weight:600;color:var(--muted);">${esc(sc.title)}</p>` + items.map(row).join("");
+  });
+  const showLogout = !q || "log out logout sign out".includes(q);
+  if(showLogout){
+    shown++;
+    html += `<div style="height:8px;"></div><button type="button" onclick="closeHeaderMenu();syncMenuHistory();logoutUser();" style="display:flex;align-items:center;gap:14px;width:100%;padding:11px 14px;background:none;border:none;text-align:left;cursor:pointer;color:var(--danger);font-family:inherit;border-radius:12px;">
+      <span style="width:36px;height:36px;flex:none;border-radius:50%;background:var(--dangerSoft);display:flex;align-items:center;justify-content:center;font-size:18px;">🚪</span>
+      <span style="flex:1;font-size:15px;font-weight:600;">Log out</span></button>`;
+  }
+  if(!shown) html = `<p class="small faint" style="text-align:center;padding:40px 0;">Nothing matches “${esc(settingsUi.q)}”.</p>`;
+  html += `<p style="text-align:center;font-size:11px;color:var(--faint);margin:22px 0 8px;">Saad Clinic${visibleBranches().length>1?" · "+esc(branchName(activeBranchId)):""} · version ${APP_VERSION}</p>`;
+  return html;
+}
+function renderSettingsPage(){
+  let pg = document.getElementById("settingsPage");
+  if(!headerMenuOpen || !currentProfileId || !sessionAuthed){ if(pg) pg.remove(); headerMenuOpen = false; return; }
+  if(!pg){
+    pg = document.createElement("div");
+    pg.id = "settingsPage";
+    pg.style.cssText = "position:fixed;inset:0;z-index:110;background:var(--page);display:flex;flex-direction:column;animation:settingsIn .18s ease-out;";
+    pg.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;padding:calc(env(safe-area-inset-top,0px) + 8px) 8px 6px;">
+        <button type="button" onclick="closeHeaderMenu();syncMenuHistory();" aria-label="Back" style="width:42px;height:42px;flex:none;border:none;background:none;font-size:30px;line-height:1;color:var(--text);cursor:pointer;">‹</button>
+        <strong style="font-size:20px;">Settings</strong>
+      </div>
+      <div style="padding:2px 14px 6px;"><div class="search-wrap" style="margin:0;"><span class="search-icon">🔍</span>
+        <input ${NOAC} id="settingsSearchInput" placeholder="Search settings" oninput="settingsUi.q=this.value;renderSettingsPage()"></div></div>
+      <div id="settingsBody" style="flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 6px calc(24px + env(safe-area-inset-bottom,0px));"></div>`;
+    document.body.appendChild(pg);
+  }
+  document.getElementById("settingsBody").innerHTML = settingsBodyHtml();
 }
 // Closes the header menu when tapping anywhere outside it (the dropdown itself lives outside
 // the render() cycle, in static header HTML, so this is a plain DOM listener rather than state).
@@ -10127,6 +10399,33 @@ function withTimeout(promise, ms){
     new Promise((_,reject)=>setTimeout(()=>reject(new Error("timed out")), ms))
   ]);
 }
+// withTimeout() above only stops US from waiting on a Firestore promise — Promise.race can't
+// actually cancel it, so a "timed out" write keeps running for real in the background and can
+// still commit later, after the caller has already told the user it failed and possibly started
+// a brand-new attempt on the same document. An abandon guard lets a still-running transaction
+// callback notice, at its next checkpoint, that the attempt it belongs to has been given up on,
+// and bail out (throwing aborts a Firestore transaction cleanly — nothing commits) instead of
+// silently writing or re-merging cloud data after the fact. See runGuardedTx() below for the
+// call pattern this pairs with.
+function makeAbandonGuard(){
+  const g = { abandoned:false };
+  g.check = ()=>{ if(g.abandoned) throw Object.assign(new Error("abandoned (timed out)"), {__abandoned:true}); };
+  return g;
+}
+// Runs a Firestore transaction with an abandon guard wired in: build(guard) must start and return
+// the fbDb.runTransaction(...) promise, calling guard.check() at safe checkpoints inside its
+// callback (before it starts, after each await, and right before any t.set/t.update). If the
+// transaction doesn't finish within ms, this still throws "timed out" to the caller exactly like
+// withTimeout() did before — the only change is that guard.abandoned becomes true first, so if
+// the real transaction is still running, its next guard.check() throws and nothing it does from
+// that point commits.
+async function runGuardedTx(build, ms){
+  const guard = makeAbandonGuard();
+  const promise = build(guard);
+  promise.catch(()=>{});   // nothing else is left awaiting this if it's the one that times out
+  try{ await withTimeout(promise, ms); }
+  catch(e){ guard.abandoned = true; throw e; }
+}
 // Firestore rejects any field whose value is literally `undefined` (unlike `null`, which is
 // fine) and rejects the ENTIRE write the moment it finds one, however deeply buried. The bugs
 // above (missing category/formula/mg on older medicine records) were one way that could sneak
@@ -10182,20 +10481,39 @@ async function pushToCloud(){
   const wasSynced = (syncStatus === "synced");
   if(!wasSynced){ syncStatus = "syncing"; renderSyncBadge(); }
   try{
-    const snap = await withTimeout(cloudDocRef().get(), 25000);
-    stillHere();
-    if(snap.exists) { suppressPush=true; mergeCloudSnapshotInto(snap.data(), br==="main" ? "full" : "shared"); suppressPush=false; processHistorySync(); }
+    // Each save is ONE all-or-nothing step (read the cloud copy, combine it with this phone's, write it back). If another
+    // phone saves in between, Firestore re-runs this step with the fresh copy — so two phones saving at the same moment can
+    // no longer overwrite each other's bills.
     if(br==="main"){
-      await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildCloudPayload())), 30000);
+      await runGuardedTx((guard)=>fbDb.runTransaction(async t=>{
+        guard.check();
+        const snap = await t.get(cloudDocRef());
+        stillHere(); guard.check();
+        if(snap.exists){ suppressPush=true; try{ mergeCloudSnapshotInto(snap.data(), "full"); } finally { suppressPush=false; } }
+        guard.check();
+        t.set(cloudDocRef(), sanitizeForFirestore(buildCloudPayload()));
+      }), 40000);
+      stillHere(); processHistorySync();
     } else {
       // Branch phone: its own stock/bills live in their own document, the shared part is MERGED into "state"
       // (merge:true) so the main branch's stock/bills stored there are never touched.
-      const bsnap = await withTimeout(branchDocRef(br).get(), 25000);
-      stillHere();
-      if(bsnap.exists){ suppressPush=true; mergeCloudSnapshotInto(bsnap.data(), "branch"); suppressPush=false; }
-      await withTimeout(cloudDocRef().set(sanitizeForFirestore(buildSharedPayload()), { merge:true }), 30000);
-      stillHere();
-      await withTimeout(branchDocRef(br).set(sanitizeForFirestore(buildBranchPayload())), 30000);
+      await runGuardedTx((guard)=>fbDb.runTransaction(async t=>{
+        guard.check();
+        const snap = await t.get(cloudDocRef());
+        stillHere(); guard.check();
+        if(snap.exists){ suppressPush=true; try{ mergeCloudSnapshotInto(snap.data(), "shared"); } finally { suppressPush=false; } }
+        guard.check();
+        t.set(cloudDocRef(), sanitizeForFirestore(buildSharedPayload()), { merge:true });
+      }), 40000);
+      stillHere(); processHistorySync();
+      await runGuardedTx((guard)=>fbDb.runTransaction(async t=>{
+        guard.check();
+        const bsnap = await t.get(branchDocRef(br));
+        stillHere(); guard.check();
+        if(bsnap.exists){ suppressPush=true; try{ mergeCloudSnapshotInto(bsnap.data(), "branch"); } finally { suppressPush=false; } }
+        guard.check();
+        t.set(branchDocRef(br), sanitizeForFirestore(buildBranchPayload()));
+      }), 40000);
     }
     stillHere();
     syncStatus = "synced";
@@ -10565,7 +10883,7 @@ function aiParseLine(line){
 const AI_LEARN_KEY="clinic_ai_learned";
 const aiNz = x=>String(x||"").toLowerCase().replace(/[^a-z0-9]/g,"");
 function aiLearned(){
-  try{ const v=JSON.parse(localStorage.getItem(AI_LEARN_KEY)||"{}"); return {map:v.map||{}, examples:Array.isArray(v.examples)?v.examples:[]}; }
+  try{ const v=JSON.parse(localStorage.getItem(bk(AI_LEARN_KEY))||"{}"); return {map:v.map||{}, examples:Array.isArray(v.examples)?v.examples:[]}; }
   catch(e){ return {map:{},examples:[]}; }
 }
 // Gemini itself can't be re-trained from here, so the app keeps its own memory: every time you pick a
@@ -10576,7 +10894,7 @@ function aiLearn(r, med){
   if(!key || !med) return;
   const L=aiLearned(); L.map[key]=med.id;
   L.examples=[{k:key,read:words[0],name:med.name}].concat(L.examples.filter(e=>e.k!==key)).slice(0,30);
-  try{ localStorage.setItem(AI_LEARN_KEY,JSON.stringify(L)); }catch(e){}
+  try{ localStorage.setItem(bk(AI_LEARN_KEY),JSON.stringify(L)); }catch(e){}
 }
 function aiPromptExtras(){
   const names=[...new Set(inventory.filter(m=>!m.deleted).map(m=>String(m.name||"").trim()).filter(Boolean))].slice(0,400).map(n=>n.slice(0,40)).join("; ");
@@ -10745,8 +11063,8 @@ function aiResizeImage(file, maxSide){
 // ---- offline-friendly handwriting: photos taken without internet wait in a queue ----
 const AI_QUEUE_KEY="clinic_ai_queue", AI_READY_KEY="clinic_ai_ready";
 let aiQueueBusy=false;
-function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(k)||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
-function aiSetList(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch(e){ return false; } }
+function aiList(k){ try{ const v=JSON.parse(localStorage.getItem(bk(k))||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
+function aiSetList(k,v){ try{ localStorage.setItem(bk(k),JSON.stringify(v)); return true; }catch(e){ return false; } }
 async function aiReadImage(image, customPrompt){
   const imgs=Array.isArray(image)?image:[image];
   // Google retires Gemini models often (gemini-2.5-flash now answers 404), so try a short list of
@@ -10849,8 +11167,20 @@ setTimeout(aiProcessQueue,6000);
   // Belt and braces: some phones never shrink the page when the keyboard opens, so the tab bar would
   // float on top of it. Hide the tab bar as soon as a typing box gets focus, show it again when it loses focus.
   const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
-  document.addEventListener("focusin",e=>{ if(typing(e.target)) document.body.classList.add("kb-typing"); });
-  document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typing(document.activeElement)) document.body.classList.remove("kb-typing"); },150));
+  // Many phones / the App Inventor web viewer give NO signal at all when the keyboard is closed with the hide key or the back
+  // button (the page never resizes and the box stays focused), so the tab bar used to stay hidden until you tapped somewhere.
+  // So the tab bar is also brought back (a) as soon as the screen is touched anywhere that is not a typing box, and
+  // (b) after a short pause in typing. Typing again hides it again.
+  let idleT = null;
+  const showNav = ()=>{ clearTimeout(idleT); if(!document.body.classList.contains("kb-open")) document.body.classList.remove("kb-typing"); };
+  const armIdle = ()=>{ clearTimeout(idleT); idleT = setTimeout(showNav, 3500); };
+  const hideNav = ()=>{ document.body.classList.add("kb-typing"); armIdle(); };
+  document.addEventListener("focusin",e=>{ if(typing(e.target)) hideNav(); });
+  document.addEventListener("input",e=>{ if(typing(e.target)) hideNav(); }, true);
+  document.addEventListener("keydown",e=>{ if(typing(e.target)) hideNav(); }, true);
+  document.addEventListener("pointerdown",e=>{ if(!typing(e.target)) showNav(); }, true);
+  document.addEventListener("touchstart",e=>{ if(!typing(e.target)) showNav(); }, {capture:true, passive:true});
+  document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typing(document.activeElement)) showNav(); },150));
 })();
 
 // ===== Keep the typing box inside a pop-up menu visible ABOVE the on-screen keyboard =====
@@ -10944,9 +11274,9 @@ setTimeout(aiProcessQueue,6000);
 
 (function(){
   // 2) Recent searches: tap into any "Search…" box while it's empty to see its last searches.
-  const STORE="clinic_recent_searches", MAX=6; let box=null, curInput=null;
-  function readAll(){ try{ return JSON.parse(localStorage.getItem(STORE)||"{}")||{}; }catch(e){ return {}; } }
-  function writeAll(o){ try{ localStorage.setItem(STORE,JSON.stringify(o)); }catch(e){} }
+  const MAX=6; const storeKey = ()=>bk("clinic_recent_searches"); let box=null, curInput=null;
+  function readAll(){ try{ return JSON.parse(localStorage.getItem(storeKey())||"{}")||{}; }catch(e){ return {}; } }
+  function writeAll(o){ try{ localStorage.setItem(storeKey(),JSON.stringify(o)); }catch(e){} }
   function keyOf(el){ return el.id ? el.id.replace(/-.*$/,"") : (el.getAttribute("placeholder")||"search"); }
   function isSearch(el){ return el && el.tagName==="INPUT" && /^Search/i.test(el.getAttribute("placeholder")||""); }
   function save(key,term){
@@ -11553,12 +11883,16 @@ var RETURN_FREE_DAYS = 3;
 var RETURN_CUT_CHIPS = [10,20,30,50];
 var retUi = { active:false, name:"", txId:"", qty:{}, pct:null };
 function isReturnTx(t){ return !!(t && t.kind==="return"); }
-function retDoneQty(txId, idx){
+// Which bill line a return belongs to: matched by the line's stable id (lid/srcLid) when both sides
+// have one, which survives the bill being edited and its lines reordered afterwards. Bills saved
+// before this id existed (and any return recorded against them) fall back to matching by raw array
+// position, exactly as before — same limitation they always had, nothing new breaks for old data.
+function retDoneQty(txId, idx, lid){
   return q6(visibleTransactions().filter(t=>isReturnTx(t) && t.refOf===txId)
-    .reduce((a,t)=>a+(t.items||[]).filter(i=>i.srcIdx===idx).reduce((s2,i)=>s2+Math.abs(Number(i.pills)||0),0),0));
+    .reduce((a,t)=>a+(t.items||[]).filter(i=> (lid!=null && i.srcLid!=null) ? i.srcLid===lid : i.srcIdx===idx).reduce((s2,i)=>s2+Math.abs(Number(i.pills)||0),0),0));
 }
 function retLine(t,i){
-  const it=t.items[i], sold=Math.abs(Number(it.pills)||0), left=Math.max(0,q6(sold-retDoneQty(t.id,i)));
+  const it=t.items[i], sold=Math.abs(Number(it.pills)||0), left=Math.max(0,q6(sold-retDoneQty(t.id,i,it.lid)));
   const ratio=(t.medTotal||0)>0 ? ((t.medTotal-(t.medsDiscount||0))/t.medTotal) : 1;   // what was really paid after the bill's medicine discount
   const gross=it.subtotal!=null ? Number(it.subtotal) : (Number(it.pricePerPill)||0)*sold;
   return { it, sold, left, per: sold>0 ? gross/sold*ratio : 0 };
@@ -11619,7 +11953,7 @@ function retCommit(){
     const l=retLine(t,i), q=Math.min(l.left, Math.max(0,Number(retUi.qty[i])||0)); if(!(q>0)) return;
     const value=r2(l.per*q), med=inventory.find(m=>m.id===it.medId);
     if(med && !med.deleted) returnStock(med,q);
-    items.push({ medId:it.medId, name:it.name, pills:-q, pricePerPill:it.pricePerPill, subtotal:-value, ded:0, srcIdx:i, special:it.special||undefined, note:"Return" });
+    items.push({ medId:it.medId, name:it.name, pills:-q, pricePerPill:it.pricePerPill, subtotal:-value, ded:0, srcIdx:i, srcLid:it.lid, special:it.special||undefined, note:"Return" });
   });
   saveInventory();
   const tx={ id:uid(), timestamp:Date.now(), updatedAt:Date.now(), kind:"return", refOf:t.id, patientName:t.patientName,
@@ -11639,6 +11973,28 @@ function buildReturnText(tx){
   return L.join("\n");
 }
 function renderRetModal(){ const r=document.getElementById("retModalRoot"); if(r) r.innerHTML=""; }   // returns now live inside the New Bill screen
+// Expiry check for a medicine being returned: returns {d: days left (negative = already expired), date, exact} when it is
+// expired or expires within 10 days, else null. Bills made from now on remember the expiry of the batch that was sold ("exact");
+// for older bills it looks at the nearest-expiry stock still on the shelf, which is the batch returned pills are added to.
+function retExpiryInfo(it){
+  let date = it && it.exp, exact = !!date;
+  if(!date){
+    const m = inventory.find(x=>x.id===(it&&it.medId) && !x.deleted); if(!m) return null;
+    let best = null;
+    activeBatches(m).forEach(b=>{ if(b.expiryDate && (!best || b.expiryDate<best)) best = b.expiryDate; });
+    date = best;
+  }
+  if(!date) return null;
+  const d = daysUntil(date);
+  if(d===null || d>10) return null;
+  return { d, date, exact };
+}
+function retExpiryNoteHtml(info){
+  if(!info) return "";
+  const exp = esc(fmtExpiryShort(info.date)), expired = info.d<0;
+  const what = expired ? `Already expired${info.d<-1?` ${-info.d} days ago`:" yesterday"} (exp ${exp})` : (info.d===0 ? `Expires today (exp ${exp})` : `Expires in ${info.d} day${info.d===1?"":"s"} (exp ${exp})`);
+  return `<div style="margin-top:6px;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:700;background:${expired?"var(--dangerSoft)":"var(--warningSoft)"};color:${expired?"var(--danger)":"var(--warning)"};">⏳ ${what}${info.exact?"":" · nearest stock of this medicine"}${expired?" — check before putting it back on the shelf":""}</div>`;
+}
 function returnsCardHtml(){
   if(!retUi || !retUi.active) return "";
   const t=retBill(); if(!t){ return ""; }
@@ -11646,13 +12002,16 @@ function returnsCardHtml(){
   const chip=(on,label,click,extra)=>`<button type="button" class="chip${on?" on":""}" style="white-space:nowrap;${extra||""}" onclick="${click}">${label}</button>`;
   const billChips=bills.map(b=>{ const d=Math.floor((Date.now()-b.timestamp)/86400000);
     return chip(b.id===retUi.txId, `${fmtDateTime(b.timestamp)} \u00b7 ${CURRENCY}${money(b.grandTotal)} \u00b7 ${d<=0?"today":d+"d ago"}`, `retPickBill('${b.id}')`); }).join("");
-  let lines="", anyEarlier=false;
+  let lines="", anyEarlier=false, expiryCount=0;
   (t.items||[]).forEach((it,i)=>{
     const l=retLine(t,i), q=Math.min(l.left,Number(retUi.qty[i])||0), done=q6(l.sold-l.left);
     if(done>0) anyEarlier=true;
+    const expInfo = l.left>0 ? retExpiryInfo(it) : null;
+    if(expInfo && q>0) expiryCount++;
     lines+=`<div style="padding:10px 0;border-bottom:1px solid var(--border);">
       <div class="row"><strong style="font-size:14px;">${esc(it.name)}</strong><span style="font-weight:700;font-size:14px;color:${q>0?"var(--danger)":"var(--faint)"};">${q>0?"-"+CURRENCY+money(r2(l.per*q)):"\u2014"}</span></div>
       <div class="small faint" style="margin-top:2px;">${CURRENCY}${money(l.per)} each \u00b7 bought ${fmtInt(l.sold)}${done>0?` \u00b7 <span style="color:var(--danger);">${fmtInt(done)} returned earlier</span>`:""}${l.left>0&&done>0?` \u00b7 ${fmtInt(l.left)} can still return`:""}</div>`
+      +retExpiryNoteHtml(expInfo)
       +(l.left>0?`<div class="flex" style="gap:8px;align-items:center;margin-top:8px;">
         <button type="button" class="chip" style="width:42px;height:38px;padding:0;font-size:18px;" onclick="retQty(${i},-1)">\u2212</button>
         <input ${NOAC} type="text" inputmode="decimal" value="${q||""}" placeholder="0" style="width:84px;text-align:center;padding:9px 8px;" onchange="retQtySet(${i},this.value)">
@@ -11671,6 +12030,7 @@ function returnsCardHtml(){
     <div class="chip-row" style="flex-wrap:nowrap;overflow-x:auto;margin-top:0;">${billChips}</div>
     <div class="row" style="margin:8px 0 0;"><span class="ai-sec" style="margin:0;">Medicines bought</span>
       <span class="flex" style="gap:6px;">${chip(false,"All","retAll()")}${chip(false,"None","retNone()")}</span></div>
+    ${expiryCount?`<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--dangerSoft);color:var(--danger);font-size:13px;font-weight:700;">⚠ ${expiryCount} medicine${expiryCount===1?"":"s"} being returned ${expiryCount===1?"is":"are"} expired or expire${expiryCount===1?"s":""} within 10 days.</div>`:""}
     ${lines||'<p class="small faint">No medicines on this bill.</p>'}
     ${anyEarlier?`<p class="small" style="margin:8px 0 0;color:var(--danger);">Some of these were already returned earlier from this bill, so only the rest can come back. See Records \u2192 \u21a9 Return entries.</p>`:""}
     ${cut}

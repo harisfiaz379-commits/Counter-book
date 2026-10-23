@@ -1,6 +1,12 @@
 // Counter Book offline cache. Bump CACHE_NAME (e.g. v42, v43...) any time index.html is updated
 // on GitHub, so returning devices pick up the new version.
-const CACHE_NAME = "counter-book-v108";
+const CACHE_NAME = "counter-book-v125";
+// Every cache this service worker ever creates is named with this prefix. The activate handler
+// below only ever deletes caches that start with it — if this origin ever hosts another app or
+// another service worker (e.g. a different project under the same GitHub Pages username), its
+// caches share the same per-origin CacheStorage but never match this prefix, so they're left
+// alone instead of being wiped out on every Counter Book update.
+const CACHE_PREFIX = "counter-book-";
 const APP_FILES = ["./", "./index.html"];
 // Big, versioned library files (Firebase SDK, OCR/barcode readers). They never change for a given
 // URL, so after the first download they are served from the phone instead of the network.
@@ -19,7 +25,14 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((names) =>
-      Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
+      // Only ever delete OUR OWN old cache versions (counter-book-v123, -v124, ...), never a cache
+      // that doesn't carry our prefix — CacheStorage is shared per-origin, not per-service-worker,
+      // so an unprefixed name could belong to something else entirely hosted on the same origin.
+      Promise.all(
+        names
+          .filter((n) => n.startsWith(CACHE_PREFIX) && n !== CACHE_NAME)
+          .map((n) => caches.delete(n))
+      )
     )
   );
   self.clients.claim();
@@ -36,8 +49,7 @@ self.addEventListener("fetch", (event) => {
       caches.match(req).then((hit) =>
         hit ||
         fetch(req).then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
+          if (res && (res.ok || res.type === "opaque")) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {}); }
           return res;
         })
       )
@@ -54,7 +66,7 @@ self.addEventListener("fetch", (event) => {
     const busted = new URL(url); busted.searchParams.set("_cb", Date.now());
     const refresh = fetch(busted.toString(), { cache: "no-store" })
       .then((res) => {
-        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)); }
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {}); }
         return res;
       })
       .catch(() => null);
@@ -65,14 +77,25 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // 3) Everything else (e.g. version.json): network first, saved copy if offline.
-  event.respondWith(
-    fetch(req, { cache: "no-store" })
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(req))
-  );
+  // 3) Any other request on OUR OWN origin (e.g. version.json, icons, manifest): network first,
+  // saved copy if offline. These are static assets we control, so caching the response is safe.
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(req, { cache: "no-store" })
+        .then((res) => {
+          if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {}); }   // never replace a good saved copy with an error page
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  // 4) Everything else is a cross-origin request we don't control and haven't explicitly
+  // allow-listed above (Firestore reads/writes, Firebase installations/auth, the Gemini API,
+  // the print-server bridge, etc.). These are live, dynamic, often account- or query-specific —
+  // caching a response here could silently replay stale sync data, a stale AI answer, or a
+  // stale auth/installation response later. So this service worker doesn't touch them at all:
+  // no cache read, no cache write, straight to the network, letting the page's own code handle
+  // a failure (e.g. the app's existing offline/online sync-status handling).
 });
