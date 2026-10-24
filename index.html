@@ -2010,6 +2010,7 @@ function render(){
   else if(tab==="notes") renderNotes();
   renderShareModal();
   renderConfirmModal();
+  try{ notifyPendingRequests(); }catch(e){}
   renderInvFormModal();
   renderBackupModal(); renderDiagModal(); renderRetModal();
   renderPrinterModal();
@@ -8717,7 +8718,52 @@ function savePinEdit(id){
   document.addEventListener("contextmenu", e=>{ if(pillOf(e)) e.preventDefault(); }, true);   // no text-selection / context menu on a long press
 })();
 /* ===================== USERS / ROLES / LOGIN ===================== */
-function visibleProfiles(){ return profiles.filter(p=>!p.deleted); }
+function visibleProfiles(){ return profiles.filter(p=>!p.deleted && !p.pending); }
+// Access requests sent from the login screen: saved as profiles flagged pending (so they sync to the Admin's
+// phone like any other user change) but hidden from the login list until an Admin/Branch Manager approves them.
+function pendingRequests(){ return profiles.filter(p=>!p.deleted && p.pending && canManageProfile(p)); }
+let pendUi = {};          // request id -> role the approver picked
+let _seenPend = null;     // request ids already announced on this phone
+function notifyPendingRequests(){
+  if(!sessionAuthed || !can("manageStaff")) return;
+  const list = pendingRequests();
+  if(_seenPend===null){
+    _seenPend = new Set(list.map(p=>p.id));
+    if(list.length) showToast(`🔔 ${list.length} access request${list.length===1?"":"s"} waiting — open Manage Users`);
+    return;
+  }
+  const fresh = list.filter(p=>!_seenPend.has(p.id));
+  fresh.forEach(p=>_seenPend.add(p.id));
+  if(fresh.length) showToast(`🔔 ${fresh[0].name} is asking to join — open Manage Users to approve`);
+}
+function onPendRole(id,v){ pendUi[id]=v; }
+function approveRequest(id){
+  if(!can("manageStaff")) return;
+  const p = profiles.find(x=>x.id===id);
+  if(!p || !p.pending || p.deleted || !canManageProfile(p)) return;
+  const role = pendUi[id] || "receptionist";
+  if(!roleChoices(true).includes(role)){ showToast("You can't give that role"); return; }
+  p.role = role; p.pending = false;
+  // Semi-Admin starts with no extra privileges — tick them afterwards with Edit (which asks for the Admin PIN as usual).
+  if(role==="semiadmin") p.privileges = { printer:false, receiptSetup:false, monthlyTotal:false, editCategories:false, diagnostics:false };
+  p.updatedAt = Date.now();
+  delete pendUi[id];
+  saveProfiles();
+  showToast(`✓ ${p.name} approved as ${roleLabel(role)} — they can log in now` + (role==="semiadmin" ? " (use Edit to give privileges)" : ""));
+  render();
+}
+function rejectRequest(id){
+  if(!can("manageStaff")) return;
+  const p = profiles.find(x=>x.id===id);
+  if(!p || !p.pending || p.deleted || !canManageProfile(p)) return;
+  askConfirm(`Reject ${p.name}'s request? They will not be able to log in.`, ()=>{
+    p.deleted = true; p.updatedAt = Date.now();
+    delete pendUi[id];
+    saveProfiles();
+    showToast("Request rejected");
+    render();
+  }, "Reject");
+}
 function currentRole(){
   const p = profiles.find(x=>x.id===currentProfileId);
   return p ? p.role : null;
@@ -8948,7 +8994,7 @@ function renderLogin(){
     <div class="card" style="max-width:340px;margin:40px auto 0;">
       <p style="font-weight:700;font-size:16px;margin:0 0 4px;text-align:center;">Who's logging in?</p>
       <div class="mt2" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">
-        <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Add new person</button>
+        <button class="btn btn-outline" style="padding:8px 14px;" onclick="openAddUserFromLogin()">+ Request to join</button>
         ${list.map(p=>`<button class="btn ${p.id===loginUi.pickedId?'btn-primary':'btn-outline'}" style="padding:8px 14px;" onclick="pickLoginProfile('${p.id}')">${esc(p.name)}</button>`).join("")}
       </div>
       ${GMAIL_LOGIN_ENABLED && window.AppInventor ? `<button class="btn btn-outline" style="width:100%;margin-top:12px;" onclick="startGoogleLogin()">🔵 Sign in with Google</button>` : ""}
@@ -9074,98 +9120,57 @@ function renderForgotPinModal(){
 function openAddUserFromLogin(){
   const admins = visibleProfiles().filter(p=>p.role==="admin");
   if(!admins.length){ showToast("No Admin account exists yet"); return; }
-  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
+  addUserLoginUi = { open:true, adminId:admins[0].id, adminPin:"", step:"form", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
   render();
 }
 function closeAddUserFromLogin(){ addUserLoginUi.open=false; render(); }
-function onVerifyAdminPick(v){ addUserLoginUi.adminId=v; addUserLoginUi.error=""; render(); }
-function onVerifyAdminPin(v){ addUserLoginUi.adminPin=v.replace(/[^0-9]/g,"").slice(0,6); }
-function verifyAdminForAddUser(){
-  const admin = profiles.find(x=>x.id===addUserLoginUi.adminId);
-  if(!admin || (admin.pin||"")!==addUserLoginUi.adminPin){
-    addUserLoginUi.error = "Incorrect PIN";
-    render();
-    return;
-  }
-  addUserLoginUi.step = "form";
-  addUserLoginUi.error = "";
-  render();
-}
-function onAddUserLoginName(v){ addUserLoginUi.newName=v; }
-function onAddUserLoginRole(v){ addUserLoginUi.newRole=v; render(); }
+function onAddUserLoginName(v){ addUserLoginUi.newName=v; if(addUserLoginUi.error){ addUserLoginUi.error=""; } }
 function onAddUserLoginPin(v){ addUserLoginUi.newPin=v.replace(/[^0-9]/g,"").slice(0,6); }
-function onAddUserLoginPrivilegeToggle(key){ addUserLoginUi.newPrivileges[key] = !addUserLoginUi.newPrivileges[key]; render(); }
+// Sends an access request: no Admin PIN needed. It is saved as a pending profile that syncs to the Admin,
+// who approves (and picks the role) from Manage Users. Nothing can be used to log in until then.
 function submitAddUserFromLogin(){
   const name = addUserLoginUi.newName.trim();
   const pin = addUserLoginUi.newPin.trim();
-  if(!name){ showToast("Enter a name first"); return; }
+  if(!name){ showToast("Enter your name first"); return; }
   if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
-  const role = addUserLoginUi.newRole==="admin" ? "receptionist" : addUserLoginUi.newRole;
-  const p = { id:uid(), name, role, pin, branchId:activeBranchId, updatedAt:Date.now() };
-  // The Admin PIN check in the "verify" step above already stands in for the privilege
-  // confirmation Manage Users requires separately, so Semi-Admin privileges save directly here.
-  if(role==="semiadmin") p.privileges = { ...addUserLoginUi.newPrivileges };
-  profiles.push(p);
+  const clash = profiles.find(x=>!x.deleted && String(x.name||"").trim().toLowerCase()===name.toLowerCase());
+  if(clash){
+    addUserLoginUi.error = clash.pending ? "A request for this name is already waiting for approval." : "That name is already taken — pick another or log in.";
+    render();
+    return;
+  }
+  profiles.push({ id:uid(), name, role:"receptionist", pin, branchId:activeBranchId, pending:true, updatedAt:Date.now() });
   saveProfiles();
-  showToast(`✓ ${name} added — they can log in now`);
-  addUserLoginUi = { open:false, adminId:"", adminPin:"", step:"verify", error:"", newName:"", newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
+  addUserLoginUi = { open:true, adminId:"", adminPin:"", step:"sent", error:"", newName:name, newRole:"receptionist", newPin:"", newPrivileges:{printer:false,receiptSetup:false,monthlyTotal:false, editCategories:false, diagnostics:false} };
   render();
 }
 function renderAddUserLoginModal(){
   const root = document.getElementById("addUserLoginModalRoot");
   if(!root) return;
   if(!addUserLoginUi.open){ root.innerHTML=""; return; }
-  const admins = visibleProfiles().filter(p=>p.role==="admin");
-  // Only one Admin can exist at a time, so a brand-new account can never be created as Admin —
-  // Admin status only ever moves to an existing account via the "make Admin" transfer flow
-  // (Manage Users > Edit), which requires the current Admin's own PIN.
-  const roleOpt = (selected) => ["branchmanager","semiadmin","doctor","receptionist"].map(r=>
-    `<option value="${r}" ${selected===r?"selected":""}>${roleLabel(r)}</option>`).join("");
-  const PRIVILEGE_ITEMS = [
-    {key:"printer", label:"Printer settings"},
-    {key:"receiptSetup", label:"Receipt setup"},
-    {key:"monthlyTotal", label:"Monthly Total Sales"},
-    {key:"editCategories", label:"Edit medicine categories"},
-    {key:"diagnostics", label:"Diagnostics"}
-  ];
   let body = "";
-  if(addUserLoginUi.step==="verify"){
+  if(addUserLoginUi.step==="sent"){
     body = `
-      <p class="small faint" style="margin:0 0 12px;">Adding a user needs an Admin to confirm it. Enter an Admin's PIN to continue.</p>
-      ${admins.length>1?`
-        <label class="field-label" style="text-align:left;">Which Admin?</label>
-        <select onchange="onVerifyAdminPick(this.value)" class="mb2">${admins.map(a=>`<option value="${a.id}" ${addUserLoginUi.adminId===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select>
-      `:`<label class="field-label" style="text-align:left;">${esc(admins[0]?admins[0].name:"")}'s PIN</label>`}
-      <input ${NOAC} type="password" inputmode="numeric" value="${esc(addUserLoginUi.adminPin)}" oninput="onVerifyAdminPin(this.value)" placeholder="••••" class="mb2">
-      ${addUserLoginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(addUserLoginUi.error)}</p>`:""}
-      <button class="btn btn-primary" style="width:100%;" onclick="verifyAdminForAddUser()">Verify</button>
+      <p style="margin:0 0 8px;font-weight:700;">✓ Request sent</p>
+      <p class="small faint" style="margin:0 0 14px;">${esc(addUserLoginUi.newName)}, your request is waiting for the Admin to approve it in the app. Once approved, your name will appear on this login screen and you can log in with the PIN you just chose.</p>
+      <button class="btn btn-primary" style="width:100%;" onclick="closeAddUserFromLogin()">OK</button>
     `;
-  } else if(addUserLoginUi.step==="form"){
+  } else {
     body = `
-      <label class="field-label" style="text-align:left;">Name</label>
+      <p class="small faint" style="margin:0 0 12px;">Enter your name and choose a PIN. This sends a request to the Admin, who approves it from their side of the app — no Admin PIN needed here.</p>
+      <label class="field-label" style="text-align:left;">Your name</label>
       <input ${NOAC} value="${esc(addUserLoginUi.newName)}" oninput="onAddUserLoginName(this.value)" placeholder="e.g. Sana" class="mb2">
-      <label class="field-label" style="text-align:left;">Role</label>
-      <select onchange="onAddUserLoginRole(this.value)" class="mb2">${roleOpt(addUserLoginUi.newRole)}</select>
-      ${addUserLoginUi.newRole==="semiadmin"?`
-        <label class="field-label" style="text-align:left;">Privileges (Manage Users is never included)</label>
-        <div class="priv-list mb2">
-          ${PRIVILEGE_ITEMS.map(it=>`
-            <label class="priv-row">
-              <input type="checkbox" ${addUserLoginUi.newPrivileges[it.key]?"checked":""} onchange="onAddUserLoginPrivilegeToggle('${it.key}')">
-              <span>${it.label}</span>
-            </label>`).join("")}
-        </div>
-      `:""}
-      <label class="field-label" style="text-align:left;">PIN (4-6 digits)</label>
+      <label class="field-label" style="text-align:left;">Choose a PIN (4-6 digits)</label>
       <input ${NOAC} type="password" inputmode="numeric" value="${esc(addUserLoginUi.newPin)}" oninput="onAddUserLoginPin(this.value)" placeholder="••••" class="mb2">
-      <button class="btn btn-primary" style="width:100%;" onclick="submitAddUserFromLogin()">Add user</button>
+      ${addUserLoginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(addUserLoginUi.error)}</p>`:""}
+      <button class="btn btn-primary" style="width:100%;" onclick="submitAddUserFromLogin()">Send request for approval</button>
     `;
   }
   root.innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) closeAddUserFromLogin()">
       <div class="modal">
         <div class="modal-head">
-          <strong>Add new user</strong>
+          <strong>Request to join</strong>
           <button class="modal-x" onclick="closeAddUserFromLogin()">✕</button>
         </div>
         <div style="padding:14px 16px;">${body}</div>
@@ -9579,6 +9584,19 @@ function renderManageUsersModal(){
           <span>${it.label}</span>
         </label>`).join("")}
     </div>`;
+  const pend = pendingRequests();
+  const pendingHtml = pend.length ? `
+    <p style="font-weight:700;margin:0 0 6px;">⏳ Waiting for approval (${pend.length})</p>
+    ${pend.map(p=>`
+      <div class="card" style="padding:10px 14px;border:1px solid var(--primary);">
+        <p style="font-weight:700;margin:0;">${esc(p.name)}<span class="small faint">${branchTagHtml(p)}</span></p>
+        <p class="small faint" style="margin:2px 0 8px;">Asked to join. Choose their role, then approve.</p>
+        <select onchange="onPendRole('${p.id}',this.value)" class="mb2">${roleOptionsHtmlNoAdmin(pendUi[p.id]||"receptionist")}</select>
+        <div class="flex gap2">
+          <button class="btn btn-primary flex1" onclick="approveRequest('${p.id}')">Approve</button>
+          <button class="btn btn-outline" style="color:var(--danger);" onclick="rejectRequest('${p.id}')">Reject</button>
+        </div>
+      </div>`).join("")}` : "";
   root.innerHTML = `
     <div class="modal-overlay" onclick="if(event.target===this) toggleManageUsersModal()">
       <div class="modal">
@@ -9587,6 +9605,7 @@ function renderManageUsersModal(){
           <button class="modal-x" onclick="toggleManageUsersModal()">✕</button>
         </div>
         <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
+          ${pendingHtml}
           ${list.map(p=>`
             <div class="card" style="padding:10px 14px;">
               ${manageUi.editingId===p.id ? `
@@ -10111,7 +10130,7 @@ function settingsSections(){
   const it = (icon, label, action, sub)=>({ icon, label, action, sub:sub||"" });
   const me = profiles.find(x=>x.id===currentProfileId);
   add("Your account", [
-    can("manageStaff") ? it("👥","Manage Users","toggleManageUsersModal()","Staff, roles and PINs") : null,
+    can("manageStaff") ? it("👥","Manage Users","toggleManageUsersModal()", pendingRequests().length ? "🔔 "+pendingRequests().length+" waiting for approval" : "Staff, roles and PINs") : null,
     can("manageBranches") ? it("🏢","Branches","toggleBranchesModal()", branchName(activeBranchId)) : null,
     (GMAIL_LOGIN_ENABLED && window.AppInventor) ? it("🔗", me && me.email ? "Gmail: "+me.email+" (change)" : "Link my Gmail","startLinkGmail()") : null
   ]);
