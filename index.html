@@ -2840,9 +2840,9 @@ function getReceiptSettings(){
 function saveReceiptSettings(s){ try{ localStorage.setItem("clinic_receipt_settings", JSON.stringify(s)); }catch(e){} }
 // Which of the 3 scan methods (USB/Bluetooth scanner, take-a-photo, live camera) the single
 // "📷 Scan barcode" button uses - a one-time choice made in Settings rather than picked per-scan.
-// Defaults to "photo" on a device where no choice has been saved yet (the "scanner" mode only focuses a text box, which just pops the keyboard open on a phone with no handheld scanner). A choice saved in Settings is always respected.
+// Defaults to "camera" (live in-app camera that reads the barcode by itself, no shutter tap) on a device where no choice has been saved yet. "scanner" only focuses a text box (keyboard pops open), "photo" opens a camera that needs a shutter tap. A choice saved in Settings is always respected.
 function getScanMethod(){
-  try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="scanner"||v==="camera") ? v : "photo"; }catch(e){ return "photo"; }
+  try{ const v = localStorage.getItem("clinic_scan_method"); return (v==="scanner"||v==="photo") ? v : "camera"; }catch(e){ return "camera"; }
 }
 function saveScanMethod(v){ try{ localStorage.setItem("clinic_scan_method", v); }catch(e){} }
 // ---- App colour theme (Settings → 🎨 Theme). Only swaps the app's green/white accent colours
@@ -6480,12 +6480,26 @@ function markStockLost(id){
     }, "Yes, set to 0");
   }, "Mark lost");
 }
+// Runs fn() (which swaps one or more medicine cards in place) and then scrolls #app by exactly
+// however far the card `id` moved, so the card the person tapped stays under their finger instead of
+// the page jumping when another open card above it collapses. Also stamps the time so the
+// hide-on-scroll search bar ignores the scroll events this causes.
+function invPinCard(id, fn){
+  const app = document.getElementById("app"), a = document.getElementById("invCard-"+id);
+  const t0 = (app && a) ? a.getBoundingClientRect().top : null;
+  window._invCardRefreshAt = Date.now();
+  fn();
+  if(t0==null) return;
+  const b = document.getElementById("invCard-"+id); if(!b) return;
+  const d = b.getBoundingClientRect().top - t0;
+  if(Math.abs(d) > 1) app.scrollTop += d;
+}
 function toggleRestock(id){
   const prevEditId = inv.editId, prevRestockId = inv.restockId;
   inv.editId=null; inv.editCopyMenuOpen=false; inv.restockId = inv.restockId===id?null:id;
   inv.restockBoxes=""; inv.restockExpiry=""; inv.restockMrp=""; inv.restockLotNo=""; inv.restockScanText="";
   // Edit/Restock are single global ids, so opening one can close another card's — refresh all involved.
-  refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id);
+  invPinCard(id, ()=>{ refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id); });
 }
 function onRestockBoxes(v){ inv.restockBoxes=v; }
 function onRestockExpiry(v){ inv.restockExpiry=v; }
@@ -6529,7 +6543,7 @@ function openEdit(id){
   const m = inventory.find(x=>x.id===id);
   if(m){ inv.editForm = { name:m.name, category:m.category||"", specialCategory:m.specialCategory||"", formula:m.formula||"", mg:m.mg||"", mrp:String(m.mrpPerBox),
     pillsPerBox:String(m.pillsPerBox), lowStockAt:String(m.lowStockAt??0), stockPills:String(m.stockPills), noWarn:!!m.noWarn, sTag:!!m.sTag, gtin:m.gtin||"" }; }
-  refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id);
+  invPinCard(id, ()=>{ refreshInvCard(prevEditId); refreshInvCard(prevRestockId); refreshInvCard(id); });
 }
 /* ---- Formula suggestions: while typing in a Formula box (New medicine or inline Edit), list similar or
    exact formulas already used by medicines in inventory, so spellings stay consistent. ---- */
@@ -6749,6 +6763,7 @@ let _invRenderToken = 0;
 // Remembers the query+filter combination the medicine list was last FULLY (not just
 // first-batch) populated for. See renderInvList()'s use of it below.
 let _invListLoadedFor = null;
+let _invShownKey = null; // query+filter+sort of the list currently on screen (see renderInvList)
 // Updates ONE medicine's card in place, leaving every other card untouched. Every per-card
 // action (Edit, Restock, Save, S.L, category/S-tag toggles) only ever changes that card, so
 // re-filtering/re-sorting/rebuilding all ~300 cards through render() just to reflect it was
@@ -7064,6 +7079,11 @@ function renderInvList(){
 
   const container = document.getElementById("invListContainer");
   if(!container) return;
+  const _app = document.getElementById("app"), _keepTop = _app ? _app.scrollTop : 0;
+  // Same results as what's already on screen (even if its background loading hadn't finished or was
+  // superseded) = a refresh, not a new search: rebuild everything in one go so the page never shrinks.
+  const sameAsShown = (_invShownKey === filterKey) && !!document.getElementById("invCardsList");
+  _invShownKey = filterKey;
 
   // If this exact result set (same search text + same header-pill filter) was already fully
   // loaded onto the page before, this call is refreshing that SAME view with fresh data —
@@ -7074,12 +7094,14 @@ function renderInvList(){
   // and grows back — which is what could clamp the scroll position mid-scroll and land a tap
   // meant for, say, the 50th medicine's Edit button onto a completely different card that had
   // snapped into that same screen position for an instant.
-  if(_invListLoadedFor === filterKey){
+  if(_invListLoadedFor === filterKey || sameAsShown){
     container.innerHTML = `
       ${filterHtml}
       ${filtered.length===0?`<p class="small faint" style="text-align:center;padding:32px 0;">${inventory.length===0?"No medicines added yet. Tap + to add one.":"No matches."}</p>`:""}
       <div id="invCardsList">${filtered.map(buildInvCard).join("")}</div>
     `;
+    _invListLoadedFor = filterKey;
+    if(_app && _app.scrollTop !== _keepTop) _app.scrollTop = _keepTop;
     return;
   }
 
@@ -11349,6 +11371,7 @@ setTimeout(aiProcessQueue,6000);
   app.addEventListener("scroll",()=>{
     const bar=document.getElementById("invStickyBar"); const y=app.scrollTop, dy=y-last; last=y;
     if(!bar) return;
+    if(Date.now() - (window._invCardRefreshAt||0) < 600) return;   // scroll caused by a card opening/closing, not by the person
     if(y<60 || bar.contains(document.activeElement)){ bar.classList.remove("hide"); acc=0; return; }
     if((dy>0)!==(acc>0)) acc=0;
     acc+=dy;
