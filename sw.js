@@ -1,16 +1,21 @@
 // Counter Book offline cache. Bump CACHE_NAME (e.g. v42, v43...) any time index.html is updated
 // on GitHub, so returning devices pick up the new version.
-const CACHE_NAME = "counter-book-v128";
+const CACHE_NAME = "counter-book-v142";
 // Every cache this service worker ever creates is named with this prefix. The activate handler
 // below only ever deletes caches that start with it — if this origin ever hosts another app or
 // another service worker (e.g. a different project under the same GitHub Pages username), its
 // caches share the same per-origin CacheStorage but never match this prefix, so they're left
 // alone instead of being wiped out on every Counter Book update.
 const CACHE_PREFIX = "counter-book-";
+// The big library files (Firebase, OCR, barcode) live in their OWN cache whose name never changes, so an app
+// update (a new CACHE_NAME above) no longer deletes them. Without this, the first launch after every update
+// had to download them again — and if that launch was offline, sync and scanning could not start.
+const LIB_CACHE = "counter-book-libs";
 const APP_FILES = ["./", "./index.html"];
 // Big, versioned library files (Firebase SDK, OCR/barcode readers). They never change for a given
 // URL, so after the first download they are served from the phone instead of the network.
 const LIBRARY_HOSTS = ["www.gstatic.com", "cdn.jsdelivr.net", "cdnjs.cloudflare.com"];
+const isLibraryUrl = (u) => { try { return LIBRARY_HOSTS.includes(new URL(u).hostname); } catch (e) { return false; } };
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -24,16 +29,27 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((names) =>
-      // Only ever delete OUR OWN old cache versions (counter-book-v123, -v124, ...), never a cache
-      // that doesn't carry our prefix — CacheStorage is shared per-origin, not per-service-worker,
-      // so an unprefixed name could belong to something else entirely hosted on the same origin.
-      Promise.all(
-        names
-          .filter((n) => n.startsWith(CACHE_PREFIX) && n !== CACHE_NAME)
-          .map((n) => caches.delete(n))
-      )
-    )
+    caches.keys().then(async (names) => {
+      // Only ever touch OUR OWN caches (counter-book-...), never one without our prefix — CacheStorage is shared
+      // per-origin, so an unprefixed name could belong to something else hosted on the same origin.
+      const ours = names.filter((n) => n.startsWith(CACHE_PREFIX));
+      const old = ours.filter((n) => n !== CACHE_NAME && n !== LIB_CACHE);
+      // One-time rescue: library files already downloaded into an older versioned cache are copied into the
+      // permanent library cache before that old cache is deleted, so this very update doesn't lose them.
+      try {
+        const libs = await caches.open(LIB_CACHE);
+        for (const n of old) {
+          const c = await caches.open(n);
+          for (const r of await c.keys()) {
+            if (!isLibraryUrl(r.url)) continue;
+            if (await libs.match(r)) continue;
+            const res = await c.match(r);
+            if (res) await libs.put(r, res);
+          }
+        }
+      } catch (e) { /* rescue is best-effort; a missing library is simply downloaded again */ }
+      await Promise.all(old.map((n) => caches.delete(n)));
+    })
   );
   self.clients.claim();
 });
@@ -43,14 +59,25 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // 1) Library scripts: cache-first (instant after the first visit).
+  // 1) Library scripts: cache-first from the permanent library cache (instant after the first visit).
+  // The first download asks for a readable (CORS) copy so a 404/error page is never saved as if it were the
+  // library; if that isn't possible the old behaviour (save whatever came back) is the fallback.
   if (LIBRARY_HOSTS.includes(url.hostname)) {
     event.respondWith(
-      caches.match(req).then((hit) =>
-        hit ||
-        fetch(req).then((res) => {
-          if (res && (res.ok || res.type === "opaque")) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {}); }
-          return res;
+      caches.open(LIB_CACHE).then((lib) =>
+        lib.match(req).then((hit) => {
+          if (hit) return hit;
+          return fetch(req.url, { mode: "cors", credentials: "omit" })
+            .then((res) => {
+              if (res && res.ok) lib.put(req, res.clone()).catch(() => {});
+              return res;                                  // an error response is passed on, never saved
+            })
+            .catch(() =>
+              fetch(req).then((res) => {
+                if (res && (res.ok || res.type === "opaque")) lib.put(req, res.clone()).catch(() => {});
+                return res;
+              })
+            );
         })
       )
     );

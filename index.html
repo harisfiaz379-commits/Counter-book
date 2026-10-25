@@ -504,7 +504,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v125";
+const APP_VERSION = "v142";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -614,7 +614,7 @@ let backupUi = { open:false };
 // to write the result back to the right place.
 let datePickerUi = { open:false, viewYear:0, viewMonth:0, selected:"", targetKind:null, targetArgs:null };
 // Quick add (typed / handwritten text -> bill medicines). See the QUICK ADD section below.
-let aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false };
+let aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false, patientName:"" };
 const AI_URL_KEY = "clinic_ai_url", AI_SECRET_KEY = "clinic_ai_secret";
 const AI_GEMINI_KEY = "clinic_gemini_key", AI_MODEL_KEY = "clinic_gemini_model", AI_DEFAULT_MODEL = "gemini-3.5-flash";
 const aiGeminiKey = ()=>(localStorage.getItem(AI_GEMINI_KEY)||"").trim();
@@ -627,6 +627,15 @@ let loginUi = { pickedId:"", pin:"", error:"" }; // state for the login/lock scr
 // setupHold: on a brand-new device the "set up Admin" screen stays put even if existing accounts arrive from the
 // cloud a few seconds later; the person chooses "Already have an account? Log in" themselves.
 let setupHold = false, setupWantLogin = false;
+// cloudChecked: true once this phone has really heard back from the cloud (a server answer, not just the phone's own
+// cache). Creating the very first Admin is refused until then, so an offline phone can't create a second Admin when the
+// clinic already has accounts. (The "no internet" screen itself lives in the separate offline.html, not here.)
+let cloudChecked = false;
+function markCloudChecked(){
+  if(cloudChecked) return;
+  cloudChecked = true;
+  try{ if(!sessionAuthed && visibleProfiles().length===0) render(); }catch(e){}
+}
 let setupUi = { name:"", pin:"", question:"", customQuestion:"", answer:"", step:"form", generatedCode:"", pendingProfileId:"" }; // state for the very-first-run "set up Admin" screen
 // ---- Branches (see the BRANCHES section further down) ----
 let activeBranchId = "main";        // which branch's stock/bills this phone is showing right now
@@ -771,6 +780,7 @@ function loadAll(){
   });
   try{ transactions = JSON.parse(localStorage.getItem(bk("clinic_transactions"))||"[]"); }catch(e){ transactions=[]; }
   try{ monthAdjustments = JSON.parse(localStorage.getItem(bk("clinic_month_adjustments"))||"{}"); }catch(e){ monthAdjustments={}; }
+  try{ billDocs = mergeBillDocs(JSON.parse(localStorage.getItem(bk("clinic_bill_docs"))||"[]"), []); }catch(e){ billDocs=[]; }
   try{ profiles = JSON.parse(localStorage.getItem("clinic_profiles")||"[]"); }catch(e){ profiles=[]; }
   try{ testPrices = JSON.parse(localStorage.getItem("clinic_test_prices")||"{}"); }catch(e){ testPrices={}; }
   try{ defaultDoctorFee = Number(localStorage.getItem("clinic_default_doctor_fee"))||0; }catch(e){ defaultDoctorFee=0; }
@@ -1311,10 +1321,28 @@ function recomputeStock(m){ m.stockPills = q6(activeBatches(m).reduce((s,b)=>s+b
    merged by taking the biggest total per phone. Both phones' sales therefore always count, in any order, with no
    dependence on the phones' clocks. "legacy" holds changes made by older versions of the app / before this update. */
 let _devId = null;
+// This phone's ID in every batch's ledger. Two phones sharing an ID would have their stock movements mixed up, so it must be unique:
+// "d" + 12 characters from the phone's secure random generator (about 60 bits; the old one was 5 characters from Math.random, about 26 bits).
+// The leading "d" also guarantees it can never clash with the reserved ledger entry "legacy".
+const DEVICE_ID_RE = /^d[0-9a-z]{12}$/;
+function newDeviceId(){
+  let s = "";
+  try{
+    const a = new Uint32Array(3); (window.crypto || window.msCrypto).getRandomValues(a);
+    s = Array.from(a).map(n=>n.toString(36).padStart(7,"0")).join("");
+  }catch(e){}
+  if(s.length<12) s = Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);   // very old web view without a secure generator
+  return "d" + s.slice(0,12);
+}
 function deviceId(){
   if(_devId) return _devId;
-  try{ _devId = localStorage.getItem("clinic_device_id"); }catch(e){}
-  if(!_devId){ _devId = "d"+Math.random().toString(36).slice(2,7); try{ localStorage.setItem("clinic_device_id", _devId); }catch(e){} }
+  let stored = null;
+  try{ stored = localStorage.getItem("clinic_device_id"); }catch(e){}
+  if(stored && DEVICE_ID_RE.test(stored)){ _devId = stored; return _devId; }
+  // First start, or an old short ID: give this phone a long one. An old ID stays in the batches' history (those totals only ever
+  // grow), so no stock movement is lost; new movements are simply recorded under the new ID.
+  _devId = newDeviceId();
+  try{ if(stored) localStorage.setItem("clinic_device_id_old", stored); localStorage.setItem("clinic_device_id", _devId); }catch(e){}
   return _devId;
 }
 // A read-only picture of a batch: its starting quantity and its ledger, with any change that was made WITHOUT the ledger
@@ -1436,13 +1464,18 @@ function nextBatchUnitPrice(m){
 // stops at 0. Returns how many pills were REALLY taken out of stock, so a later delete/edit of the bill
 // gives back only that much and never creates phantom stock.
 let lastDeductExpiry = null;   // earliest expiry date among the batches the LAST deductStock() took from (null if none had a date)
+let lastDeductBatches = null;  // exactly which batch(es) + how many pills the LAST deductStock() took from, in the order taken — lets a later return/undo put pills back into the SAME batches instead of an arbitrary one (see returnStockToBatches())
 function deductStock(m, pills){
   let remaining = Number(pills)||0, taken = 0;
   lastDeductExpiry = null;
+  lastDeductBatches = [];
   for(const b of fefoOrder(m)){
     if(remaining<=0) break;
     const take = Math.min(b.pillsRemaining, remaining);
-    if(take>0 && b.expiryDate && (!lastDeductExpiry || b.expiryDate<lastDeductExpiry)) lastDeductExpiry = b.expiryDate;
+    if(take>0){
+      if(b.expiryDate && (!lastDeductExpiry || b.expiryDate<lastDeductExpiry)) lastDeductExpiry = b.expiryDate;
+      lastDeductBatches.push({ id:b.id, qty:take });
+    }
     batchChange(b, -take);
     remaining = q6(remaining - take);
     taken = q6(taken + take);
@@ -1455,13 +1488,75 @@ function stockBack(it){ return (it && it.ded!=null) ? (Number(it.ded)||0) : (Num
 function returnStock(m, pills){
   // Used when an old bill is edited/undone — put pills back into the batch nearest
   // to expiry (the one most likely to have been sold from), or a fresh undated batch.
-  pills = Number(pills)||0; if(pills<=0) return;
-  const batches = fefoOrder(m);
-  if(batches.length){ batchChange(batches[0], pills); }
+  pills = Number(pills)||0; if(pills<=0) return null;
+  const batches = fefoOrder(m); let placedId;
+  if(batches.length){ batchChange(batches[0], pills); placedId = batches[0].id; }
   else {
     m.batches = m.batches||[];
-    m.batches.push({ id:uid(), boxes:null, pillsRemaining:pills, originalPills:pills, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
+    placedId = uid();
+    m.batches.push({ id:placedId, boxes:null, pillsRemaining:pills, originalPills:pills, expiryDate:null, addedAt:Date.now(), updatedAt:Date.now(), disposed:false });
   }
+  recomputeStock(m);
+  return { id:placedId, qty:pills };      // where the pills went, so a later "delete this return" can take them out of the same batch
+}
+// Puts returned/reversed pills back into the EXACT batch(es) a bill line was originally deducted
+// from (dedBatches, recorded by deductStock() above), undoing the most-recently-drawn-from batch
+// first — the same order a partial undo of the original deduction would follow. This keeps FEFO
+// and expiry tracking accurate instead of returnStock()'s old behavior of always dropping
+// everything into whichever batch currently sorts first, which could be a completely different
+// batch than the one actually sold from. If a recorded batch no longer exists (deleted or
+// disposed since the sale) or the line predates this tracking (dedBatches missing), whatever
+// can't be matched falls back to the old nearest-batch behavior via returnStock() so nothing is
+// ever left unreturned.
+// `alreadyReturned` is how much of this SAME line has already been given back by an earlier,
+// separate return on this bill — it skips that much off the end of dedBatches first, so a second
+// partial return continues the reversal from where the first one left off instead of re-crediting
+// the same batch slot twice.
+function returnStockToBatches(m, dedBatches, qty, alreadyReturned){
+  let remaining = q6(Math.max(0, Number(qty)||0));
+  const placed = [];                                     // [{id, qty}] where the returned pills really went
+  if(remaining<=0) return placed;
+  let skip = q6(Math.max(0, Number(alreadyReturned)||0));
+  const list = Array.isArray(dedBatches) ? dedBatches.slice().reverse() : [];
+  let matchedAny = false;
+  for(const d of list){
+    if(remaining<=0) break;
+    let dQty = q6(Number(d.qty)||0);
+    if(skip>0){
+      const used = Math.min(skip, dQty);
+      skip = q6(skip - used);
+      dQty = q6(dQty - used);
+      if(dQty<=0) continue;                              // this batch's whole share was already returned earlier
+    }
+    const b = (m.batches||[]).find(x=>x.id===d.id && !x.disposed);
+    if(!b) continue;                                     // that batch is gone — leave this portion for the fallback below
+    const give = Math.min(remaining, dQty);
+    if(give<=0) continue;
+    batchChange(b, give);
+    placed.push({ id:b.id, qty:give });
+    remaining = q6(remaining - give);
+    matchedAny = true;
+  }
+  if(matchedAny) recomputeStock(m);
+  if(remaining>0){ const p = returnStock(m, remaining); if(p) placed.push(p); }   // old-style fallback for whatever's left
+  return placed;
+}
+// The reverse of returnStockToBatches(): when a RETURN is deleted, its pills leave stock again — out of the very
+// batch(es) the return put them into (most recent first), not whichever batch happens to sort first. Whatever can't
+// be matched (batch gone/disposed/already sold on, or a return saved before this was recorded) is taken the normal way.
+function takeBackFromBatches(m, placed, qty){
+  let remaining = q6(Math.max(0, Number(qty)||0));
+  if(remaining<=0) return;
+  const list = Array.isArray(placed) ? placed.slice().reverse() : [];
+  for(const d of list){
+    if(remaining<=0) break;
+    const b = (m.batches||[]).find(x=>x.id===d.id && !x.disposed); if(!b) continue;
+    const take = Math.min(remaining, q6(Number(d.qty)||0), Number(b.pillsRemaining)||0);
+    if(take<=0) continue;
+    batchChange(b, -take);
+    remaining = q6(remaining - take);
+  }
+  if(remaining>0) deductStock(m, remaining);
   recomputeStock(m);
 }
 function adjustStockTo(m, newTotal){
@@ -1862,7 +1957,7 @@ window.addEventListener("popstate", function(){
 });
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
-  return !!(headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
+  return !!((!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
     printerUi.open || themeUi.open || (retUi && retUi.open) || kbTestUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open || pinRevealUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
@@ -1874,6 +1969,11 @@ function closeTopMenu(){
   // first — a single back press should only ever close one layer. Safe to call with nothing
   // open at all (e.g. a leftover history entry from a menu closed via its own button) — every
   // check below just falls through and nothing happens.
+  if(!sessionAuthed){
+    if(addUserLoginUi.open){ closeAddUserFromLogin(); return; }
+    if(forgotUi.open){ closeForgotPin(); return; }
+    if(loginUi.pickedId){ loginUi = { pickedId:"", pin:"", error:"" }; render(); return; }
+  }
   if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
   if(scanUi.open){ stopCameraScan(); return; }
   if(shareText!==null){ closeShare(); return; }
@@ -1986,6 +2086,7 @@ function render(){
     renderForgotPinModal();
     renderAddUserLoginModal();
     syncHeaderOffset();
+    syncMenuHistory();
     return;
   }
 
@@ -2243,14 +2344,14 @@ function billMedTotal(){ return r2(bill.items.reduce((s,it)=>s+(Number(it.subtot
 function billManualMedDisc(){ return r2(Math.min(Math.max(Number(bill.medsDiscount)||0,0), billMedTotal())); }
 // "Total discount" (Rs or %) is split across medicines / tests / doctor fee in proportion to what each costs,
 // and the result flows through the existing per-section discounts — so records, receipts, reports and edits
-// all keep working without knowing about it. Others (dressing, transport…) are never discounted.
+// all keep working without knowing about it. Others (dressing, transport…) are never discounted, so a % discount
+// is worked out only on what can actually be discounted (medicines + tests + doctor fee), not on the whole bill.
 function billTotDiscShares(){
   const zero={med:0,tests:0,fee:0,total:0}, v=Number(bill.totDisc)||0;
   if(!(v>0)) return zero;
   const m=r2(billMedTotal()-billManualMedDisc()), t=r2(billTestsGross()-billManualTestsDisc()), f=bill.feeIncluded ? r2(billFeeGross()-billManualFeeDisc()) : 0;
   const cap=r2(m+t+f); if(cap<=0) return zero;
-  const base=r2(cap+billExtrasTotal());
-  let D = (bill.totDiscMode==='pct') ? r2(base*Math.min(v,100)/100) : r2(v);
+  let D = (bill.totDiscMode==='pct') ? r2(cap*Math.min(v,100)/100) : r2(v);
   D = Math.min(D, cap);
   let sm=Math.min(m,r2(D*m/cap)), st=Math.min(t,r2(D*t/cap)), sf=Math.min(f,r2(D*f/cap));
   const rem=r2(D-sm-st-sf);
@@ -2759,7 +2860,7 @@ function completeBill(){
   bill.items.forEach(it=>{ if(it.lid==null) it.lid = uid(); });
   bill.items.forEach(it=>{
     const med = inventory.find(m=>m.id===it.medId);
-    if(med){ it.ded = deductStock(med, it.pills); if(lastDeductExpiry) it.exp = lastDeductExpiry; else delete it.exp; }   // remember what really left stock (overselling allowed) and its expiry
+    if(med){ it.ded = deductStock(med, it.pills); if(lastDeductExpiry) it.exp = lastDeductExpiry; else delete it.exp; it.dedBatches = lastDeductBatches; }   // remember what really left stock (overselling allowed), its expiry, and exactly which batch(es) it came from
   });
   const tx = { id:uid(), timestamp:Date.now(), updatedAt:Date.now(), patientName:bill.patient.trim() || (_retDraft && _retDraft.name) || "",
     doctorFee: bill.feeIncluded?billFeeGross():0, feeDiscount: bill.feeIncluded?billFeeDiscount():0, items:bill.items, medTotal:billMedTotal(), medsDiscount:billMedDiscount(),
@@ -3183,12 +3284,38 @@ function showBillSavedUi(tx, savedBill, snap){
   bar.style.display="flex"; clearTimeout(_undoTimer); _undoTimer=setTimeout(hideUndoBar, 9000);
 }
 function hideUndoBar(){ const bar=document.getElementById("undoBar"); if(bar) bar.style.display="none"; _undoInfo=null; }
+// Reverses exactly what a SALE transaction took out of stock, through the same per-device ledger
+// deductStock() used (via returnStockToBatches(), built for fix #4) — not by overwriting the
+// medicine's batch list wholesale. This is what makes undo safe across devices: a ledger-based
+// reversal merges correctly with whatever another phone did to the same batch in the few seconds
+// the Undo button is up, where a raw snapshot restore (the old approach) would silently throw
+// that other change away.
+function undoReverseSale(t){
+  (t.items||[]).forEach(it=>{
+    const med = inventory.find(m=>m.id===it.medId); if(!med) return;
+    const amt = stockBack(it); if(amt<=0) return;
+    returnStockToBatches(med, it.dedBatches, amt, 0);
+    med.updatedAt = Date.now();
+  });
+}
+// Reverses a RETURN transaction (medicine that was put back into stock) by taking it back out
+// again — the same plain FEFO deduction deleteReturnTx() already uses for exactly this, kept
+// consistent with it rather than inventing a second way to undo a return.
+function undoReverseReturn(rt){
+  (rt.items||[]).forEach(it=>{
+    const med = inventory.find(m=>m.id===it.medId); if(!med) return;
+    const amt = Math.abs(Number(it.pills)||0); if(amt<=0) return;
+    deductStock(med, amt);
+    med.updatedAt = Date.now();
+  });
+}
 function undoLastBill(){
   const u=_undoInfo; if(!u) return; hideUndoBar();
   const t=transactions.find(x=>x.id===u.txId); if(!t || t.deleted){ return; }
-  Object.keys(u.snap).forEach(id=>{ const m=inventory.find(x=>x.id===id); if(!m) return; m.batches=JSON.parse(JSON.stringify(u.snap[id])); m.batches.forEach(b=>{ b.updatedAt=Date.now(); }); m.updatedAt=Date.now(); recomputeStock(m); });
+  if(isReturnTx(t)) undoReverseReturn(t); else undoReverseSale(t);
   t.deleted=true; t.updatedAt=Date.now(); logActivity("bill_del", (t.patientName||"Bill")+" (undone)");
-  const _rt = u.retTxId ? transactions.find(x=>x.id===u.retTxId) : null; if(_rt){ _rt.deleted=true; _rt.updatedAt=Date.now(); }
+  const _rt = u.retTxId ? transactions.find(x=>x.id===u.retTxId) : null;
+  if(_rt && !_rt.deleted){ undoReverseReturn(_rt); _rt.deleted=true; _rt.updatedAt=Date.now(); }
   saveInventory(); saveTransactions();
   bill=u.savedBill; if(u.retDraft) retUi=u.retDraft; if(tab!=="bill") setTab("bill"); else render();
   showToast(t.kind==="return" ? "↩ Return undone — stock and totals are back as they were." : "↩ Bill undone — stock restored. A receipt that already printed can't be recalled.");
@@ -3262,7 +3389,13 @@ let _xferDrag = null, _xferSuppressClickUntil = 0, transferUnsub = null;
 const _xferClaiming = {};
 function canTransferStock(){ const r = currentRole(); return !!sessionAuthed && (r==="admin" || r==="branchmanager") && visibleBranches().length>1; }
 function xferTargets(){ return visibleBranches().filter(b=>b.id!==activeBranchId); }
-function xferKey(m){ return [m.name, m.mg, m.category].map(x=>String(x||"").trim().toLowerCase()).join("|"); }
+// Identifies a medicine for cross-branch transfer. Used to be just name+strength+category, so two
+// genuinely different products sharing a name and strength (a tablet vs a syrup of the same drug,
+// or two different pack sizes) could be treated as "the same medicine" and merged into one entry
+// at the destination branch. Formula (dosage form) and pack size are now part of the identity too —
+// the price (mrpPerBox) deliberately isn't, since the same medicine can legitimately be priced
+// differently at different branches, and that's not a reason to treat it as a different product.
+function xferKey(m){ return [m.name, m.mg, m.category, m.formula, m.pillsPerBox].map(x=>String(x||"").trim().toLowerCase()).join("|"); }
 function xferStockText(m){
   const ppb = Number(m.pillsPerBox)||0, st = Number(m.stockPills)||0;
   if(ppb>1 && st>=ppb){ const bx = Math.floor(st/ppb), rem = q6(st - bx*ppb); return `${bx} box${bx===1?"":"es"}${rem>0?` + ${fmtInt(rem)} pill${rem===1?"":"s"}`:""} (${fmtInt(st)} in all)`; }
@@ -3465,7 +3598,8 @@ async function flushTransferOutbox(){
 }
 { const _scs = startCloudSync; startCloudSync = function(){ const r = _scs.apply(this, arguments); try{ xferApplyOutboxLocal(); setTimeout(flushTransferOutbox, 3000); }catch(e){} return r; }; }
 window.addEventListener("online", ()=>setTimeout(flushTransferOutbox, 1500));
-setInterval(()=>{ try{ flushTransferOutbox(); }catch(e){} }, 45000);
+setInterval(()=>{ if(document.visibilityState === "hidden") return; try{ flushTransferOutbox(); }catch(e){} }, 45000);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "visible") setTimeout(flushTransferOutbox, 1500); });   // catch up right after the app comes back
 
 
 // ======================= Copy ALL medicine cards to another branch (Settings → Stock & data) =======================
@@ -4434,7 +4568,7 @@ function renderBill(){
         <div class="flex1"><input ${NOAC} id="billTotDiscInput" type="text" inputmode="decimal" value="${esc(bill.totDisc)}" oninput="onBillTotDisc(this.value)" placeholder="total discount"></div>
         <div class="seg"><button type="button" class="${(bill.totDiscMode||'rs')==='rs'?'on':''}" onclick="setBillTotDiscMode('rs')">Rs</button><button type="button" class="${bill.totDiscMode==='pct'?'on':''}" onclick="setBillTotDiscMode('pct')">%</button></div>
       </div>
-      ${billTotDiscShares().total>0 ? `<p class="small" style="margin:6px 0 0;">Takes off ${CURRENCY}${money(billTotDiscShares().total)} from medicines, tests and doctor fee${(bill.totDiscMode==='pct'&&billTotDiscShares().total<r2((billMedTotal()-billManualMedDisc()+billTestsGross()-billManualTestsDisc()+(bill.feeIncluded?billFeeGross()-billManualFeeDisc():0)+billExtrasTotal())*Math.min(Number(bill.totDisc)||0,100)/100))?" (Others aren't discounted)":""}</p>` : ""}
+      ${billTotDiscShares().total>0 ? `<p class="small" style="margin:6px 0 0;">Takes off ${CURRENCY}${money(billTotDiscShares().total)} from medicines, tests and doctor fee${bill.totDiscMode==='pct'&&billExtrasTotal()>0?" (other charges aren't discounted)":""}</p>` : ""}
     </div>
 
     <div class="card primary">
@@ -5298,7 +5432,7 @@ function parseBoxTextDetails(text){
 function aiAddBillOffline(){ aiPickPhoto("print"); }
 // "Add medicine offline": photos of the box -> on-phone text reader -> fills the New medicine form.
 function aiAddMedOffline(){
-  aiUi.open=false; aiUi.rows=null; aiUi.error=""; renderAiModal();
+  aiUi.open=false; aiUi.rows=null; aiUi.error=""; aiUi.patientName=""; renderAiModal();
   // The camera request goes out first and the barcode scanners and reading engines start in the same instant,
   // side by side with it; each photo is processed the moment it is captured.
   const session = createBoxSession();
@@ -7736,14 +7870,15 @@ function deleteTx(id){
   const back = [];
   (t.items||[]).forEach((it,i)=>{
     const med = inventory.find(m=>m.id===it.medId); if(!med || med.deleted) return;
-    const out = q6(Math.max(0, stockBack(it) - retDoneQty(t.id,i,it.lid)));
-    if(out>0) back.push({ med, out });
+    const already = retDoneQty(t.id,i,it.lid);
+    const out = q6(Math.max(0, stockBack(it) - already));
+    if(out>0) back.push({ med, out, dedBatches:it.dedBatches, already });
   });
   const nRet = visibleTransactions().filter(r=>isReturnTx(r) && r.refOf===t.id).length;
   const doDelete = (returnIt)=>{
     // Soft-delete (tombstone) rather than removing it outright, so the deletion itself can
     // sync to other devices via updatedAt instead of the record quietly reappearing.
-    if(returnIt){ back.forEach(b=>returnStock(b.med, b.out)); saveInventory(); }
+    if(returnIt){ back.forEach(b=>returnStockToBatches(b.med, b.dedBatches, b.out, b.already)); saveInventory(); }
     t.deleted = true; t.updatedAt = Date.now();
     t.delStock = (returnIt || !back.length) ? "back" : "kept";   // remembered, so deleting one of its returns later keeps the stock right
     logActivity("bill_del", (t.patientName||"Bill") + (back.length ? (returnIt ? " (stock returned)" : " (stock kept deducted)") : ""));
@@ -7767,7 +7902,7 @@ function deleteReturnTx(t){
   askConfirm(`Delete this return? Everything goes back to how it was before it: the ${CURRENCY}${money(refund)} refund is removed from your totals, the medicines can be returned again from the bill`
       + (lines.length ? `, and ${lines.length} medicine line${lines.length===1?"":"s"} ${lines.length===1?"is":"are"} taken back out of stock.` : (settled ? ". Stock stays as it is (the original bill was already deleted and its stock returned)." : ".")),
     ()=>{
-      lines.forEach(it=>{ const med=inventory.find(m=>m.id===it.medId); if(med) deductStock(med, Math.abs(Number(it.pills)||0)); });
+      lines.forEach(it=>{ const med=inventory.find(m=>m.id===it.medId); if(med) takeBackFromBatches(med, it.retBatches, Math.abs(Number(it.pills)||0)); });
       if(lines.length) saveInventory();
       t.deleted = true; t.updatedAt = Date.now();
       logActivity("bill_del", (t.patientName||"Return") + " (return deleted" + (lines.length ? ", stock taken back out" : "") + ")");
@@ -7780,7 +7915,7 @@ function deleteReturnTx(t){
 function openEditTx(id){
   const t = transactions.find(x=>x.id===id);
   if(!t) return;
-  recEdit = { txId:id, patient:t.patientName, fee:String(t.doctorFee), items:t.items.map(it=>({...it})), query:"", pills:"", selectedMedId:null,
+  recEdit = { txId:id, patient:t.patientName, fee:String(t.doctorFee), items:t.items.map((it,i)=>({...it, _oi:i})), query:"", pills:"", selectedMedId:null,
     extras:t.extras?t.extras.map(ex=>({...ex})):[], extrasTotal:t.extrasTotal||0,
     tests:t.tests?t.tests.map(x=>({...x})):[], testsTotal:t.testsTotal||0, testsDiscount:t.testsDiscount||0, feeDiscount:t.feeDiscount||0, medsDiscount:t.medsDiscount||0 };
   rec.editingId = id;
@@ -7832,6 +7967,27 @@ function clampEditDiscounts(){
   recEdit.testsDiscount = r2(Math.min(Math.max(Number(recEdit.testsDiscount)||0,0), Number(recEdit.testsTotal)||0));
 }
 function editTxGrandTotal(){ clampEditDiscounts(); return r2(editTxMedTotal() - recEdit.medsDiscount + Math.max(Number(recEdit.fee)||0,0) - recEdit.feeDiscount + (Number(recEdit.extrasTotal)||0) + (Number(recEdit.testsTotal)||0) - recEdit.testsDiscount); }
+function editTxApplyStock(t, items){
+  // Lines that stay on the bill are LEFT EXACTLY AS THEY WERE (their stock, the batches they came from and their
+  // expiry are not touched — before, every line was handed back and sold again, which could move pills between
+  // batches and, on a bill with a partial return, lose the returned pills from stock). Only lines you REMOVED give
+  // their stock back (into the batch they came from) and only lines you ADDED are taken out of stock.
+  const keptIdx = new Set(items.filter(x=>!x._new && x._oi!=null).map(x=>x._oi));
+  t.items.forEach((oldIt,idx)=>{
+    if(keptIdx.has(idx)) return;
+    const med = inventory.find(m=>m.id===oldIt.medId);
+    if(med){
+      const alreadyRet = retDoneQty(t.id,idx,oldIt.lid);
+      const owed = q6(Math.max(0, stockBack(oldIt) - alreadyRet));
+      if(owed>0) returnStockToBatches(med, oldIt.dedBatches, owed, alreadyRet);
+    }
+  });
+  items.forEach(newIt=>{
+    if(!newIt._new) return;
+    const med = inventory.find(m=>m.id===newIt.medId);
+    if(med){ newIt.ded = deductStock(med, newIt.pills); if(lastDeductExpiry) newIt.exp = lastDeductExpiry; else delete newIt.exp; newIt.dedBatches = lastDeductBatches; }
+  });
+}
 function saveEditTx(){
   const t = transactions.find(x=>x.id===recEdit.txId);
   if(!t || !recEdit.patient.trim()) return;
@@ -7840,22 +7996,12 @@ function saveEditTx(){
   // this edit — the same accounting deleteTx() uses. Otherwise editing a bill that had a partial
   // return (sell 20, return 5, then edit) would hand back the full 20 instead of the remaining 15,
   // creating phantom stock.
-  t.items.forEach((oldIt,idx)=>{
-    const med = inventory.find(m=>m.id===oldIt.medId);
-    if(med){
-      const owed = q6(Math.max(0, stockBack(oldIt) - retDoneQty(t.id,idx,oldIt.lid)));
-      if(owed>0) returnStock(med, owed);
-    }
-  });
-  recEdit.items.forEach(newIt=>{
-    const med = inventory.find(m=>m.id===newIt.medId);
-    if(med){ newIt.ded = deductStock(med, newIt.pills); if(lastDeductExpiry) newIt.exp = lastDeductExpiry; else delete newIt.exp; }
-  });
+  editTxApplyStock(t, recEdit.items);
   saveInventory();
   t.patientName = recEdit.patient.trim();
   clampEditDiscounts();
   t.doctorFee = r2(Math.max(Number(recEdit.fee)||0,0));
-  t.items = recEdit.items.map(it=>{ const c={...it}; delete c._new; if(c.lid==null) c.lid = uid(); return c; });   // any newly-added line gets its own stable id too
+  t.items = recEdit.items.map(it=>{ const c={...it}; delete c._new; delete c._oi; if(c.lid==null) c.lid = uid(); return c; });   // any newly-added line gets its own stable id too
   t.medTotal = editTxMedTotal();
   t.medsDiscount = recEdit.medsDiscount||0;
   t.extras = recEdit.extras||[];
@@ -8361,7 +8507,9 @@ async function switchBranch(id){
       localStorage.setItem(bk("clinic_inventory"), JSON.stringify(inventory));
       localStorage.setItem(bk("clinic_transactions"), JSON.stringify(transactions));
       localStorage.setItem(bk("clinic_month_adjustments"), JSON.stringify(monthAdjustments));
+      localStorage.setItem(bk("clinic_bill_docs"), JSON.stringify(billDocs));
     }catch(e){}
+    stopExtraListeners();
     if(snapshotUnsubscribe){ try{ snapshotUnsubscribe(); }catch(e){} snapshotUnsubscribe = null; }
     if(branchUnsubscribe){ try{ branchUnsubscribe(); }catch(e){} branchUnsubscribe = null; }
     clearTimeout(syncDebounceTimer);
@@ -8370,13 +8518,14 @@ async function switchBranch(id){
     try{ inventory = JSON.parse(localStorage.getItem(bk("clinic_inventory"))||"[]"); }catch(e){ inventory=[]; }
     try{ transactions = JSON.parse(localStorage.getItem(bk("clinic_transactions"))||"[]"); }catch(e){ transactions=[]; }
     try{ monthAdjustments = JSON.parse(localStorage.getItem(bk("clinic_month_adjustments"))||"{}"); }catch(e){ monthAdjustments={}; }
+    try{ billDocs = mergeBillDocs(JSON.parse(localStorage.getItem(bk("clinic_bill_docs"))||"[]"), []); }catch(e){ billDocs=[]; }
     _lowStockCache = null; _expiringBatchesCache = null; _expiring2mCache = null; _fsIndex = null; _visibleTxCache = null;
     _invSort = null;   // Arrange choice is remembered per branch: reload it for the branch we just entered
     _invListLoadedFor = null;
     try{ activityLog = JSON.parse(localStorage.getItem(bk("clinic_activity_log"))||"{}"); }catch(e){ activityLog = {}; }
     // anything open that points at the other branch's medicines/bills is closed
     toolsUi.open = false; toolsUi.counts = {}; toolsUi.q = ""; toolsUi.histName = "";
-    aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false };
+    aiUi = { open:false, text:"", rows:null, busy:false, error:"", setupOpen:false, patientName:"" };
     xferUi = { medId:"", toId:"", boxes:"", pills:"", busy:false, manual:false, bq:{} };
     cardsUi = { toId:"", busy:false, q:"", sel:{} };
     try{ if(typeof renderOverlays==="function") renderOverlays(); }catch(e){}
@@ -8757,7 +8906,7 @@ function rejectRequest(id){
   const p = profiles.find(x=>x.id===id);
   if(!p || !p.pending || p.deleted || !canManageProfile(p)) return;
   askConfirm(`Reject ${p.name}'s request? They will not be able to log in.`, ()=>{
-    p.deleted = true; p.updatedAt = Date.now();
+    p.deleted = true; p.updatedAt = Math.max(Date.now(), (p.updatedAt||0)+1);
     delete pendUi[id];
     saveProfiles();
     showToast("Request rejected");
@@ -8865,6 +9014,7 @@ async function submitSetupAdmin(){
   if(pin.length<4){ showToast("Choose a PIN with at least 4 digits"); return; }
   if(!question){ showToast("Choose or type a security question"); return; }
   if(!answer){ showToast("Enter an answer to your security question"); return; }
+  if(!cloudChecked){ showToast("Connect to the internet first, so we can check for existing accounts"); render(); return; }
   if(visibleProfiles().length>0){
     // Existing accounts arrived from the cloud while this form was open — don't create a second Admin.
     showToast("Accounts already exist on this clinic — please log in instead");
@@ -8999,7 +9149,8 @@ function renderLogin(){
       </div>
       ${GMAIL_LOGIN_ENABLED && window.AppInventor ? `<button class="btn btn-outline" style="width:100%;margin-top:12px;" onclick="startGoogleLogin()">🔵 Sign in with Google</button>` : ""}
       ${picked ? `
-        <label class="field-label mt3" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
+        <button type="button" style="background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;margin-top:12px;cursor:pointer;padding:0;" onclick="pickLoginProfile('')">← Back</button>
+        <label class="field-label mt1" style="text-align:left;">Enter PIN for ${esc(picked.name)}</label>
         <input ${NOAC} id="loginPinInput" type="password" inputmode="numeric" value="${esc(loginUi.pin)}" oninput="onLoginPin(this.value)" placeholder="••••" class="mb2">
         ${loginUi.error?`<p class="small" style="color:var(--danger);margin:0 0 10px;">${esc(loginUi.error)}</p>`:""}
         <button class="btn btn-primary" style="width:100%;" onclick="submitLogin()">Log in</button>
@@ -9157,6 +9308,7 @@ function renderAddUserLoginModal(){
     `;
   } else {
     body = `
+      <button type="button" style="background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;margin:0 0 10px;cursor:pointer;padding:0;" onclick="closeAddUserFromLogin()">← Back to login</button>
       <p class="small faint" style="margin:0 0 12px;">Enter your name and choose a PIN. This sends a request to the Admin, who approves it from their side of the app — no Admin PIN needed here.</p>
       <label class="field-label" style="text-align:left;">Your name</label>
       <input ${NOAC} value="${esc(addUserLoginUi.newName)}" oninput="onAddUserLoginName(this.value)" placeholder="e.g. Sana" class="mb2">
@@ -9402,7 +9554,7 @@ function deleteOwnAccountAfterTransfer(){
   const p = profiles.find(x=>x.id===postTransferChoiceUi.actorId);
   if(!p) return;
   askConfirm(`Delete your account "${p.name}"? You will be logged out and this cannot be undone.`, ()=>{
-    p.deleted = true; p.updatedAt = Date.now();
+    p.deleted = true; p.updatedAt = Math.max(Date.now(), (p.updatedAt||0)+1);
     saveProfiles();
     try{ localStorage.removeItem("clinic_notes_"+p.id); }catch(e){}
     currentProfileId = null;
@@ -9452,7 +9604,7 @@ function deleteProfile(id){
   askConfirm(`Remove "${p.name}"? They will no longer be able to log in, and their private notes will be deleted. This cannot be undone.`, ()=>{
     // Soft-delete (tombstone) so the removal itself can sync to other devices, same as
     // medicines/bills/notes — otherwise it just reappears once another device's data syncs back.
-    p.deleted = true; p.updatedAt = Date.now();
+    p.deleted = true; p.updatedAt = Math.max(Date.now(), (p.updatedAt||0)+1);
     saveProfiles();
     try{ localStorage.removeItem("clinic_notes_"+id); }catch(e){}
     if(currentProfileId===id){
@@ -9780,7 +9932,7 @@ function renderNotes(){
     </div>
     <div id="notesEmptyMsg"></div>
     <div id="notesList"></div>
-    <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes. Medicines, bills, and records are shared with everyone on this device.</p>
+    <p class="small faint" style="text-align:center;">Only ${esc(profiles.find(p=>p.id===currentProfileId)?.name||"you")} can see these notes in the app. Medicines, bills, and records are shared with everyone on this device. Notes are also saved to the clinic's cloud copy so they follow you to another phone.</p>
   `;
   renderNotesListBody();
 }
@@ -9799,9 +9951,25 @@ function mergeById(localArr, incomingArr){
 }
 function mergeInventory(localInv, incomingInv){
   const result = (localInv||[]).map(m=>({...m, batches:(m.batches||[]).slice()}));
+  // Two values "agree" if either side is blank (so older records missing a field can still
+  // reconcile normally — this function already fills a blank field in from whichever side has
+  // it, right below) or they're the same once trimmed/lowercased.
+  const agrees = (a,b)=>{ a=String(a||"").trim().toLowerCase(); b=String(b||"").trim().toLowerCase(); return !a || !b || a===b; };
+  const sameText = (a,b)=> String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase();
+  const samePack = (a,b)=> (Number(a)||0) === (Number(b)||0);
   (incomingInv||[]).forEach(im=>{
     let match = result.find(m=>m.id===im.id);
-    if(!match) match = result.find(m=>m.name.trim().toLowerCase()===im.name.trim().toLowerCase());
+    // Same id is the only sure match. A name-only fallback used to be enough to treat two
+    // DIFFERENT products — different strength, dosage form or category, but sharing a name — as
+    // the same medicine, silently merging their stock together. Now the fallback also requires
+    // strength/category/formula to not actively DISAGREE between the two records. Strength and box size are what
+    // really tell two products apart (500 mg vs 250 mg, a pack of 10 vs 20), so for those two a blank on ONE side
+    // and a value on the other is NOT treated as agreeing — at worst that leaves a visible duplicate to tidy up,
+    // never two different products silently merged into one stock count. Both blank still agrees (nothing to compare).
+    if(!match) match = result.find(m=>
+      m.name.trim().toLowerCase()===im.name.trim().toLowerCase() &&
+      sameText(m.mg, im.mg) && samePack(m.pillsPerBox, im.pillsPerBox) &&
+      agrees(m.category, im.category) && agrees(m.formula, im.formula));
     if(match){
       match.batches = mergeById(match.batches, im.batches);
       match.category = match.category || im.category || "";
@@ -9882,6 +10050,7 @@ function mergeByIdForSync(localArr, incomingArr){
     const r = incomingMap.get(l.id);
     if(!r) return l;
     const lt = l.updatedAt||l.timestamp||0, rt = r.updatedAt||r.timestamp||0;
+    if(rt===lt) return (r.deleted && !l.deleted) ? r : l;   // same timestamp: a deletion wins, so a removed item can't come back
     return rt>lt ? r : l;
   });
   (incomingArr||[]).forEach(r=>{ if(!seen.has(r.id)) result.push(r); });
@@ -10054,6 +10223,7 @@ function mergeDataInto(data, inventoryMergeFn, live, scope){
     // side touched it most recently wins. Safe either way since it's just an override number,
     // never a quantity that could be double-counted or lost.
     monthAdjustments = mergeMonthAdjustments(monthAdjustments, data.monthAdjustments);
+    billDocs = mergeBillDocs(billDocs, data.billDocs);     // which extra bill documents exist (see "Cloud storage that does not run out")
   }
 
   if(doShared){
@@ -10085,7 +10255,7 @@ function mergeDataInto(data, inventoryMergeFn, live, scope){
     mergeHistorySync(data);
   }
 
-  if(doBranchData){ saveInventory(); saveTransactions(); saveMonthAdjustments(); }
+  if(doBranchData){ saveInventory(); saveTransactions(); saveMonthAdjustments(); saveBillDocs(); }
   if(doShared){
     saveProfiles(); saveBranches();
     if(currentProfileId && !visibleProfiles().some(p=>p.id===currentProfileId)){
@@ -10263,6 +10433,161 @@ function cloudDocRef(){ return fbDb.collection("sync").doc("state"); }
    no longer affects stock, prices or warnings. Phones that already have it keep it (batches merge by id,
    so nothing is deleted anywhere); a brand-new phone just won't download year-old used-up batches. */
 const CLOUD_TRIM_BATCH_AGE_MS = 365*24*60*60*1000;
+/* ===================== Cloud storage that does not run out ("extra documents") =====================
+   Firestore refuses any document bigger than 1 MiB. Bills are the only part that grows without limit, so: while the main
+   document (for a branch: that branch's document) is below about 70% full NOTHING changes. Once it reaches that, NEW bills
+   are saved in a second document ("…__x1"), then a third ("…__x2") and so on. Bills already saved never move; a bill stays in
+   the document it started in, so editing / returning / deleting an old bill updates that same document. Every phone listens to
+   all of them and still sees ONE list of bills. Stock, staff and settings stay in the main document. */
+const CLOUD_SPILL_AT = Math.round(1048576*0.70);          // a document this full stops receiving NEW bills
+const CLOUD_NONSPILL_WARN_AT = Math.round(1048576*0.80);  // the part that cannot spill over (stock, staff, settings) → warn the Admin
+let billDocs = [];                 // numbers of the extra bill documents of the branch on screen (1, 2, 3…); the main document is 0
+const extraUnsubs = {};            // live listeners on the extra documents, keyed "branch:number"
+function utf8Len(str){ try{ return new TextEncoder().encode(str).length; }catch(e){ return unescape(encodeURIComponent(str)).length; } }
+function jsonBytes(o){ return utf8Len(JSON.stringify(o)); }
+function saveBillDocs(){ try{ localStorage.setItem(bk("clinic_bill_docs"), JSON.stringify(billDocs)); }catch(e){} }
+function mergeBillDocs(a, b){
+  const set = new Set();
+  (a||[]).concat(b||[]).forEach(n=>{ n = Number(n); if(n>=1) set.add(n); });
+  return Array.from(set).sort((x,y)=>x-y);
+}
+function baseDocName(br){ br = br||activeBranchId; return br==="main" ? "state" : "branch_"+br; }
+function baseDocRef(br){ br = br||activeBranchId; return br==="main" ? cloudDocRef() : branchDocRef(br); }
+function extraDocRef(n, br){ return fbDb.collection("sync").doc(baseDocName(br)+"__x"+n); }
+function tagTxs(arr, n){ return (arr||[]).map(t=>{ const c = {...t}; if(n>0) c._d = n; else delete c._d; return c; }); }
+function mergeExtraDocTxs(n, data){
+  if(!data) return;
+  transactions = mergeByIdForSync(transactions, tagTxs(data.transactions, n));
+  transactions.sort((a,b)=>b.timestamp-a.timestamp);
+}
+function saveTransactionsQuiet(){
+  try{ localStorage.setItem(bk("clinic_transactions"), JSON.stringify(transactions)); }catch(e){}
+  _visibleTxCache = null;
+}
+function cloudTxFor(n){ return (transactions||[]).filter(t=>(t._d||0)===n); }   // bills that live in document n (0 = main)
+
+// Decides which cloud document every bill belongs in. remoteTx = {documentNumber: bills as read from that document}, existing = the
+// extra documents that exist. Bills already in the cloud keep their document; only bills that are in NO document yet (new ones, or
+// made while offline) are placed — into the newest document, and into the next one as soon as that would pass the 70% mark.
+function planBillDocs(remoteTx, existing, sizeBase, sizeExtra){
+  const where = new Map();
+  Object.keys(remoteTx).forEach(k=>(remoteTx[k]||[]).forEach(t=>where.set(t.id, Number(k))));
+  const parts = {}, unwritten = [];
+  (transactions||[]).forEach(t=>{
+    if(where.has(t.id)){ const n = where.get(t.id); if(n>0) t._d = n; else delete t._d; (parts[n] = parts[n]||[]).push(t); }
+    else unwritten.push(t);
+  });
+  const newest = Math.max(0, ...existing);
+  let w = newest;
+  let size = w===0 ? sizeBase(parts[0]||[]) : sizeExtra(w, parts[w]||[]);
+  const newDocs = new Set();
+  unwritten.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0)).forEach(t=>{
+    const b = utf8Len(JSON.stringify(t)) + 2;
+    if(size + b > CLOUD_SPILL_AT){ w++; size = sizeExtra(w, []); }
+    if(w>0) t._d = w; else delete t._d;
+    (parts[w] = parts[w]||[]).push(t); size += b;
+    if(w>newest) newDocs.add(w);
+  });
+  return { parts, newDocs: Array.from(newDocs).sort((x,y)=>x-y), newest };
+}
+// Inside ONE Firestore transaction: read the base document and every extra document, merge them into this phone, then work out where each bill goes.
+async function cloudSyncDataDocs(t, br, baseSnap, scope, guard, stillHere, buildBase){
+  const remoteTx = { 0: [] }, existing = [], readSet = new Set(), remoteVer = {};
+  const note = (n, arr)=>{ remoteTx[n] = arr||[]; const m = new Map(); (arr||[]).forEach(x=>m.set(x.id, x.updatedAt||x.timestamp||0)); remoteVer[n] = m; };
+  if(baseSnap.exists){
+    const d = baseSnap.data(); note(0, d.transactions);
+    suppressPush = true; try{ mergeCloudSnapshotInto(d, scope); } finally { suppressPush = false; }
+  } else note(0, []);
+  const readExtra = async n=>{
+    if(readSet.has(n)) return; readSet.add(n);
+    const s2 = await t.get(extraDocRef(n, br)); stillHere(); guard.check();
+    if(s2.exists){
+      const d = s2.data(); existing.push(n); note(n, d.transactions);
+      suppressPush = true; try{ mergeExtraDocTxs(n, d); } finally { suppressPush = false; }
+    }
+  };
+  for(const n of mergeBillDocs(billDocs, [])) await readExtra(n);
+  const sizeBase = txs => jsonBytes(sanitizeForFirestore(buildBase(txs, [])));
+  const sizeExtra = (n, txs) => jsonBytes({ syncCode:SYNC_CODE, part:n, branchId:br, transactions:txs, updatedAt:Date.now() });
+  let plan;
+  for(let round=0; round<8; round++){
+    plan = planBillDocs(remoteTx, existing, sizeBase, sizeExtra);
+    // a document we are about to create is READ first, so if another phone just created it we notice (and the transaction retries) instead of overwriting it
+    const unread = plan.newDocs.filter(n=>!readSet.has(n));
+    if(!unread.length) break;
+    for(const n of unread) await readExtra(n);
+  }
+  return { plan, existing, remoteVer };
+}
+// Writes (inside the same transaction): the base document always (as before), and only those extra documents that are new or changed.
+function cloudWriteDataDocs(t, br, ctx, buildBase){
+  const all = new Set(ctx.existing); ctx.plan.newDocs.forEach(n=>all.add(n));
+  const list = Array.from(all).sort((x,y)=>x-y);
+  t.set(baseDocRef(br), sanitizeForFirestore(buildBase(ctx.plan.parts[0]||[], list)));
+  list.forEach(n=>{
+    const txs = ctx.plan.parts[n]||[], rv = ctx.remoteVer[n] || new Map();
+    const changed = ctx.plan.newDocs.indexOf(n)>=0 || txs.some(x=>!rv.has(x.id) || (x.updatedAt||x.timestamp||0) > rv.get(x.id));
+    if(changed) t.set(extraDocRef(n, br), sanitizeForFirestore({ syncCode:SYNC_CODE, part:n, branchId:br, transactions:txs, updatedAt:Date.now() }));
+  });
+  return list;
+}
+function cloudAfterCommit(ctx, list, br){
+  if(br!==activeBranchId) return;
+  billDocs = mergeBillDocs(billDocs, list); saveBillDocs();
+  saveTransactionsQuiet();                     // remember which document each bill lives in
+  if(ctx.plan.newDocs.length){
+    try{ localStorage.setItem("clinic_cloud_extra_added", String(Date.now())); }catch(e){}
+    showToast("☁ Cloud storage: extra document added");
+    if(typeof diagLog==="function") diagLog("cloud", "extra bill document(s) added: "+ctx.plan.newDocs.join(", "));
+  }
+  syncExtraListeners();
+  cloudCheckNonSpill();
+}
+// The only part that cannot spill over is stock + staff + settings: tell the Admin (at most every 12 hours) if it passes 80% of a document.
+let _cloudNonSpillBytes = 0;
+function cloudCheckNonSpill(){
+  try{
+    const p = activeBranchId==="main" ? buildCloudPayload([]) : buildBranchPayload([]);
+    _cloudNonSpillBytes = jsonBytes(sanitizeForFirestore(p));
+    if(_cloudNonSpillBytes>=CLOUD_NONSPILL_WARN_AT){
+      const last = Number(localStorage.getItem("clinic_cloud_nonspill_warn")||0);
+      if(Date.now()-last > 12*3600*1000){
+        localStorage.setItem("clinic_cloud_nonspill_warn", String(Date.now()));
+        showToast(`⚠ Cloud: stock, staff and settings use ${Math.round(_cloudNonSpillBytes/1048576*100)}% of a document — open Settings › Storage & health`);
+      }
+    }
+  }catch(e){}
+}
+function stopExtraListeners(){ Object.keys(extraUnsubs).forEach(k=>{ try{ extraUnsubs[k](); }catch(e){} delete extraUnsubs[k]; }); }
+// Listen to every extra document of this branch (new phones and newly created documents are picked up automatically).
+function syncExtraListeners(){
+  if(!fbDb) return;
+  const br = activeBranchId;
+  mergeBillDocs(billDocs, []).forEach(n=>{
+    const key = br+":"+n; if(extraUnsubs[key]) return;
+    try{
+      extraUnsubs[key] = extraDocRef(n, br).onSnapshot(snap=>{
+        if(br!==activeBranchId || !snap.exists) return;
+        suppressPush = true; try{ mergeExtraDocTxs(n, snap.data()); saveTransactions(); } finally { suppressPush = false; }
+        scheduleSearchRender();
+      }, err=>{ delete extraUnsubs[key]; setSyncError(err); });
+    }catch(e){}
+  });
+}
+async function fetchExtraDocsOnce(){
+  if(!fbDb) return;
+  const br = activeBranchId;
+  for(const n of mergeBillDocs(billDocs, [])){
+    try{
+      const s2 = await withTimeout(extraDocRef(n, br).get(), 10000);
+      if(s2.exists && br===activeBranchId){ suppressPush = true; try{ mergeExtraDocTxs(n, s2.data()); saveTransactions(); } finally { suppressPush = false; } }
+    }catch(e){}
+  }
+  scheduleSearchRender();
+}
+function buildMainBase(txs, list){ const p = buildCloudPayload(txs); p.billDocs = list; return p; }
+function buildBranchBase(txs, list){ const p = buildBranchPayload(txs); p.billDocs = list; return p; }
+
 function trimInventoryForCloud(inv){
   const cutoff = Date.now()-CLOUD_TRIM_BATCH_AGE_MS; let removed = 0;
   const out = (inv||[]).map(m=>{
@@ -10278,15 +10603,16 @@ function trimInventoryForCloud(inv){
   trimInventoryForCloud.lastRemoved = removed;
   return out;
 }
-function buildCloudPayload(){
+function buildCloudPayload(txs){
   const p = buildFullStatePayload();
   p.inventory = trimInventoryForCloud(p.inventory);
+  if(txs) p.transactions = txs;      // only the bills that belong in THIS document (see planBillDocs)
   return p;
 }
 function buildFullStatePayload(){
   return {
     syncCode: SYNC_CODE,
-    inventory, transactions, profiles, monthAdjustments, branches, branchId: activeBranchId,
+    inventory, transactions, profiles, monthAdjustments, branches, branchId: activeBranchId, billDocs,
     notesByProfile: collectAllNotes(),
     customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
     defaultDoctorFee, defaultDoctorFeeUpdatedAt,
@@ -10300,11 +10626,11 @@ function buildFullStatePayload(){
 // data) — they send only the shared part there, and their own stock/bills to their own document.
 function buildSharedPayload(){
   const p = buildFullStatePayload();
-  delete p.inventory; delete p.transactions; delete p.monthAdjustments; delete p.branchId;
+  delete p.inventory; delete p.transactions; delete p.monthAdjustments; delete p.branchId; delete p.billDocs;
   return p;
 }
-function buildBranchPayload(){
-  return { syncCode: SYNC_CODE, branchId: activeBranchId, inventory: trimInventoryForCloud(inventory), transactions, monthAdjustments, updatedAt: Date.now() };
+function buildBranchPayload(txs){
+  return { syncCode: SYNC_CODE, branchId: activeBranchId, inventory: trimInventoryForCloud(inventory), transactions: txs || transactions, monthAdjustments, billDocs, updatedAt: Date.now() };
 }
 function syncScope(){ return activeBranchId==="main" ? "full" : "shared"; }
 function branchDocRef(id){ return fbDb.collection("sync").doc("branch_"+(id||activeBranchId)); }
@@ -10319,7 +10645,7 @@ function renderCloudSizeBadge(){
   const el = document.getElementById("cloudSizeBadge");
   if(!el) return;
   const bytes = estimatedCloudDataSize();
-  el.textContent = (bytes!=null && fbDb) ? `(${formatBytes(bytes)})` : "";
+  el.textContent = (bytes!=null && fbDb) ? `(${formatBytes(bytes)}${billDocs.length?` + ${billDocs.length} extra doc${billDocs.length===1?"":"s"}`:""})` : "";
 }
 function formatSyncError(e){
   if(!e) return "Unknown error";
@@ -10366,6 +10692,7 @@ function applyRemoteSnapshot(data, scope){
   mergeCloudSnapshotInto(data, scope || syncScope());
   suppressPush = false;
   if(scope!=="branch") processHistorySync();
+  if(scope!=="shared") syncExtraListeners();     // the list of extra bill documents may just have changed
   // Routed through the same trailing-debounce used for search boxes so a background sync event
   // can never land mid-keystroke in any search box on any tab.
   scheduleSearchRender();
@@ -10525,14 +10852,16 @@ async function pushToCloud(){
     // Each save is ONE all-or-nothing step (read the cloud copy, combine it with this phone's, write it back). If another
     // phone saves in between, Firestore re-runs this step with the fresh copy — so two phones saving at the same moment can
     // no longer overwrite each other's bills.
+    let ctx = null, listOut = null;
     if(br==="main"){
       await runGuardedTx((guard)=>fbDb.runTransaction(async t=>{
         guard.check();
         const snap = await t.get(cloudDocRef());
         stillHere(); guard.check();
-        if(snap.exists){ suppressPush=true; try{ mergeCloudSnapshotInto(snap.data(), "full"); } finally { suppressPush=false; } }
+        const c = await cloudSyncDataDocs(t, br, snap, "full", guard, stillHere, buildMainBase);
         guard.check();
-        t.set(cloudDocRef(), sanitizeForFirestore(buildCloudPayload()));
+        const l = cloudWriteDataDocs(t, br, c, buildMainBase);
+        ctx = c; listOut = l;
       }), 40000);
       stillHere(); processHistorySync();
     } else {
@@ -10551,11 +10880,14 @@ async function pushToCloud(){
         guard.check();
         const bsnap = await t.get(branchDocRef(br));
         stillHere(); guard.check();
-        if(bsnap.exists){ suppressPush=true; try{ mergeCloudSnapshotInto(bsnap.data(), "branch"); } finally { suppressPush=false; } }
+        const c = await cloudSyncDataDocs(t, br, bsnap, "branch", guard, stillHere, buildBranchBase);
         guard.check();
-        t.set(branchDocRef(br), sanitizeForFirestore(buildBranchPayload()));
+        const l = cloudWriteDataDocs(t, br, c, buildBranchBase);
+        ctx = c; listOut = l;
       }), 40000);
     }
+    stillHere();
+    if(ctx) cloudAfterCommit(ctx, listOut, br);
     stillHere();
     syncStatus = "synced";
     clearPendingSyncIf(seqAtStart);
@@ -10583,6 +10915,7 @@ async function initialCloudFetch(){
   try{
     const snap = await withTimeout(cloudDocRef().get(), 10000);
     if(snap.exists && br===activeBranchId) applyRemoteSnapshot(snap.data(), br==="main" ? "full" : "shared");
+    if(!snap.metadata.fromCache) markCloudChecked();
   }catch(e){
     // No special handling needed — the realtime listener below keeps retrying regardless,
     // and this was only ever a best-effort head start.
@@ -10593,6 +10926,7 @@ async function initialCloudFetch(){
       if(bs.exists && br===activeBranchId) applyRemoteSnapshot(bs.data(), "branch");
     }catch(e){}
   }
+  fetchExtraDocsOnce();      // bills that live in extra documents (a new phone reads them all once)
 }
 // A branch phone also listens to its own branch's document (stock, bills).
 function startBranchListener(){
@@ -10614,10 +10948,12 @@ function startCloudSync(){
   if(!fbDb) { syncStatus="offline"; renderSyncBadge(); return; }
   if(snapshotUnsubscribe){ snapshotUnsubscribe(); snapshotUnsubscribe = null; }
   if(branchUnsubscribe){ try{ branchUnsubscribe(); }catch(e){} branchUnsubscribe = null; }
+  stopExtraListeners();
   syncStatus="syncing"; renderSyncBadge();
   initialCloudFetch();  snapshotUnsubscribe = cloudDocRef().onSnapshot(
     snap=>{
       if(snap.exists) applyRemoteSnapshot(snap.data(), syncScope());
+      if(!snap.metadata.fromCache) markCloudChecked();
       // Firestore fires this listener once immediately from local cache (even with zero
       // internet) and again later once it actually reaches the server. Without checking
       // fromCache, the badge would say "Synced" on that first cache-only firing even while
@@ -10668,6 +11004,7 @@ function startCloudSync(){
     }
   );
   startBranchListener();
+  syncExtraListeners();
 }
 // Automatic sync-on-reconnect: as soon as the browser/WebView reports connectivity again, push
 // right away rather than waiting for the user's next edit or the periodic listener retry. Any
@@ -10702,7 +11039,10 @@ try{
 // 2) visibilitychange — covers the very common case of the phone being locked/backgrounded
 //    while offline, then unlocked once back in range: the tab becoming visible again is a
 //    strong hint it's worth trying right now instead of waiting out the rest of the interval.
-setInterval(trySyncNow, 15000);
+// Both timers skip a tick while the app is hidden (phone locked, another app in front): nothing is lost —
+// edits are already saved on the phone and pushed when they happen — and the moment the app is visible
+// again the handler below (and the one for the transfer outbox) syncs straight away. Saves battery and reads.
+setInterval(function(){ if(document.visibilityState !== "hidden") trySyncNow(); }, 15000);
 document.addEventListener("visibilitychange", function(){
   if(document.visibilityState === "visible") trySyncNow();
   // expiringBatches() is cached (see its definition) for render speed — its "days until
@@ -10721,34 +11061,54 @@ function collectAllNotes(){
   });
   return out;
 }
+// "Last backup" is only recorded once the file has really been handed over — it used to be recorded FIRST, so a failed or
+// cancelled export still said "backed up".
+//  • Browser: recorded after the download was started successfully.
+//  • App Inventor: the page can only hand the file to the Blocks. If your Blocks tell the page how it went
+//    (EXPORT_OK / EXPORT_FAILED, see onNativeBridgeMessage) the date is recorded ONLY on EXPORT_OK. Until the Blocks
+//    have confirmed once, the date is recorded when the file is handed over (as before), so nothing nags forever.
+function markBackupDone(){ try{ localStorage.setItem("clinic_last_backup", String(Date.now())); }catch(e){} }
+function onExportConfirmed(ok){
+  if(ok){ try{ localStorage.setItem("clinic_export_confirms","1"); }catch(e){} markBackupDone(); showToast("✓ Backup file saved"); try{ render(); }catch(e){} }
+  else showToast("⚠ The backup file was NOT saved — please try again");
+}
 function exportBackup(){
-  try{ localStorage.setItem("clinic_last_backup", String(Date.now())); }catch(e){}
-  const payload = {
-    version: 1,
-    exportedAt: Date.now(),
-    inventory, transactions, profiles, monthAdjustments, branches, branchId: activeBranchId,
-    notesByProfile: collectAllNotes(),
-    customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
-    defaultDoctorFee, defaultDoctorFeeUpdatedAt,
-    defaultDoctorName, defaultDoctorNameUpdatedAt,
-    medCategories: MED_CATEGORIES, specialCategories: SPECIAL_CATEGORIES, categoriesUpdatedAt
-  };
+  let payload;
+  try{
+    payload = {
+      version: 1,
+      exportedAt: Date.now(),
+      inventory, transactions, profiles, monthAdjustments, branches, branchId: activeBranchId,
+      notesByProfile: collectAllNotes(),
+      customTests, testNameOverrides, hiddenBuiltInTestIds, testPrices, testSettingsUpdatedAt, testItemUpdatedAt,
+      defaultDoctorFee, defaultDoctorFeeUpdatedAt,
+      defaultDoctorName, defaultDoctorNameUpdatedAt,
+      medCategories: MED_CATEGORIES, specialCategories: SPECIAL_CATEGORIES, categoriesUpdatedAt
+    };
+  }catch(e){ showToast("⚠ Couldn't create the backup — nothing was saved"); return; }
   // Inside the App Inventor app, a normal blob/<a download> click has nowhere to land (no
   // native download handler registered), so hand the data to the native side instead via
   // App Inventor's JS bridge — Blocks picks this up on WebViewStringChange and saves it with
   // the File component.
   if(window.AppInventor && typeof window.AppInventor.setWebViewString === "function"){
-    window.AppInventor.setWebViewString("EXPORT:" + JSON.stringify(payload));
+    try{
+      window.AppInventor.setWebViewString("EXPORT:" + JSON.stringify(payload));
+    }catch(e){ showToast("⚠ Couldn't hand the backup to the app — nothing was saved"); return; }
+    let strict = false; try{ strict = localStorage.getItem("clinic_export_confirms")==="1"; }catch(e){}
+    if(!strict) markBackupDone();            // the Blocks have never confirmed: keep the old behaviour
     showToast("✓ Saving backup file…");
     return;
   }
-  const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const stamp = localDateStr();
-  a.href = url; a.download = `counter-book-backup-${stamp}.json`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  try{
+    const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = localDateStr();
+    a.href = url; a.download = `counter-book-backup-${stamp}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }catch(e){ showToast("⚠ Couldn't save the backup file — nothing was saved"); return; }
+  markBackupDone();
   showToast("✓ Backup file downloaded");
 }
 function triggerImportPicker(){
@@ -10798,6 +11158,8 @@ window.onNativeBridgeMessage = function(){
   const msg = window.AppInventor.getWebViewString();
   if(typeof msg !== "string") return;
   if(msg.indexOf("IMPORT:") === 0) handleImportedBackupText(msg.slice(7));
+  else if(msg === "EXPORT_OK") onExportConfirmed(true);          // sent by the Blocks after File.SaveFile worked
+  else if(msg === "EXPORT_FAILED") onExportConfirmed(false);     // sent by the Blocks if saving the file failed
   else if(msg.indexOf("GOOGLE_EMAIL:") === 0) handleGoogleEmail(msg.slice(13));
   else if(msg === "GOOGLE_CANCELLED"){ clearTimeout(_googleTimer); googleMode=""; }
   else if(msg === "CAMERA_PERMISSION_GRANTED"){
@@ -10829,7 +11191,8 @@ function estimatedCloudDataSize(){
   // measuring its JSON size gives a close real-world estimate of what's stored in the cloud,
   // even though Firestore itself doesn't expose a "how big is my data" API to client apps.
   try{
-    const payload = activeBranchId==="main" ? buildCloudPayload() : buildBranchPayload();
+    const mine = cloudTxFor(0);     // only the bills that live in the main document (the rest are in the extra documents)
+    const payload = activeBranchId==="main" ? buildCloudPayload(mine) : buildBranchPayload(mine);
     const bytes = new Blob([JSON.stringify(payload)]).size;
     _cloudSizeCache = { bytes, at: now };
     return bytes;
@@ -10977,7 +11340,9 @@ function aiFindMeds(tokens){
 function aiParseText(text){
   text = String(text||"");
   const pm = text.match(/^\s*patient\s*:\s*(.+)$/im);
-  if(pm && pm[1].trim() && !String(bill.patient||"").trim()) bill.patient = pm[1].trim().replace(/\s+/g," ").slice(0,60);
+  // The patient name found on the page is only REMEMBERED here (aiUi.patientName). It is put on the bill when you tap
+  // "Add to bill" (see aiConfirmAdd) — reading a photo must never change the live bill, because you may cancel.
+  aiUi.patientName = (pm && pm[1].trim()) ? pm[1].trim().replace(/\s+/g," ").slice(0,60) : "";
   const dm = text.match(/^\s*days\s*:\s*(\d+)/im);
   const dt = text.match(/^\s*days_text\s*:\s*(.+)$/im);
   aiUi.daysNote = dm ? (dm[1]+" days"+(dt?" (read as “"+dt[1].trim()+"”)":"")) : "";
@@ -10991,8 +11356,16 @@ function aiParseText(text){
     return r;
   });
 }
+// Which number decides how much is billed when BOTH "Per day x Days" and a typed "Total" are filled in:
+// whichever one was changed LAST. Typing a Total means "bill exactly this"; changing Per day or Days goes back
+// to Per day x Days. A line that was only read (nothing typed yet) keeps using Per day x Days, as before.
+function aiRowByDose(r){
+  const dd = (r.perDay>0 && r.days>0);
+  if(!dd) return false;
+  return !(r.lead==="qty" && r.qty>0);
+}
 function aiRowPills(r){
-  if(r.perDay>0 && r.days>0) return r.perDay*r.days;
+  if(aiRowByDose(r)) return r.perDay*r.days;
   return r.qty>0 ? r.qty : 0;
 }
 function openQuickAdd(photo){
@@ -11002,7 +11375,7 @@ function openQuickAdd(photo){
   renderOverlays();
   if(photo) aiPickPhoto("hand");
 }
-function closeQuickAdd(){ aiUi.open=false; aiUi.rows=null; aiUi.busy=false; aiUi.error=""; renderOverlays(); }
+function closeQuickAdd(){ aiUi.open=false; aiUi.rows=null; aiUi.busy=false; aiUi.error=""; aiUi.patientName=""; renderOverlays(); }
 function aiReadText(){
   const rows = aiParseText(aiUi.text);
   if(!rows.length){ aiUi.error="Type or paste at least one medicine first."; render(); return; }
@@ -11040,7 +11413,11 @@ function aiSetAllDays(){
   renderOverlays();
 }
 function aiRowMed(i,id){ aiUi.rows[i].medId=id; aiRowInfo(i); }
-function aiRowSet(i,field,v){ aiUi.rows[i][field]=Number(v)||0; aiRowInfo(i); }
+function aiRowSet(i,field,v){
+  const r=aiUi.rows[i]; r[field]=Number(v)||0;
+  r.lead = (field==="qty" && r.qty>0) ? "qty" : "dose";   // the number you touched last decides (see aiRowByDose)
+  aiRowInfo(i);
+}
 function aiRowInfo(i){
   const r=aiUi.rows[i], el=document.getElementById("aiInfo"+i);
   if(el){
@@ -11048,6 +11425,11 @@ function aiRowInfo(i){
     let t = !r.medId ? "Skipped" : pills>0 ? `= ${pills} to bill` : "Fill per day + days, or total";
     if(med && pills>(med.stockPills||0)) t += ` · ⚠ only ${med.stockPills||0} in stock`;
     if(r.assumed && r.medId) t += ` · ${r.assumed}`;
+    // Both filled in and they disagree: say which one is being used, so nothing is silently ignored.
+    if(r.medId && r.perDay>0 && r.days>0 && r.qty>0 && r.perDay*r.days!==r.qty){
+      t += aiRowByDose(r) ? ` · Total ${r.qty} ignored (Per day × Days used) — clear Per day or Days to use it`
+                          : ` · Per day × Days (${r.perDay*r.days}) ignored — Total used`;
+    }
     el.textContent=t;
     el.style.color = (!r.medId || pills<=0) ? "var(--faint)" : "var(--primary)";
   }
@@ -11060,7 +11442,7 @@ function aiConfirmAdd(){
     const med=inventory.find(x=>x.id===r.medId && !x.deleted), pills=aiRowPills(r);
     if(med && r.medId!==((r.cands&&r.cands[0])?r.cands[0].id:"")) aiLearn(r, med);
     if(!med || !(pills>0)) return;
-    const lc=lineCalc(med, pills, billPendingSkip(med.id)), pricePerPill=lc.pricePerPill, byDose=r.perDay>0 && r.days>0;
+    const lc=lineCalc(med, pills, billPendingSkip(med.id)), pricePerPill=lc.pricePerPill, byDose=aiRowByDose(r);
     if(med.specialCategory){
       const base=lc.subtotal;
       bill.items.push({medId:med.id, name:med.name, pills, pricePerPill, subtotal:base, note:"", perDay:null, linkedToGlobalDays:false,
@@ -11072,6 +11454,8 @@ function aiConfirmAdd(){
     added++;
   });
   if(bill.applyingFeeMode==='whole') recomputeWholeApplyingFee();
+  if(added && aiUi.patientName && !String(bill.patient||"").trim()) bill.patient = aiUi.patientName;   // only now, and only if the bill still has no name
+  aiUi.patientName = "";
   aiUi.open=false; aiUi.rows=null; aiUi.text="";
   if(added && typeof tab!=="undefined" && tab!=="bill") setTab("bill"); else render();
   showToast(added ? `✓ ${added} medicine${added>1?"s":""} added — check them below` : "Nothing was added");
@@ -11406,7 +11790,8 @@ function _hBytes(v){ try{ const t=JSON.stringify(v); return (typeof TextEncoder!
 function _hKB(b){ return (b/1024).toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1})+" KB"; }
 function _hTime(fn){ const t0=performance.now(); try{ fn(); }catch(e){} return Math.max(0.1, performance.now()-t0).toFixed(1)+" ms"; }
 function cloudPayloadStats(){
-  const payload = sanitizeForFirestore(buildCloudPayload());
+  const mine = cloudTxFor(0);
+  const payload = sanitizeForFirestore(activeBranchId==="main" ? buildCloudPayload(mine) : buildBranchPayload(mine));
   const trimmedCount = trimInventoryForCloud.lastRemoved||0;
   const fullBytes = _hBytes(sanitizeForFirestore(buildFullStatePayload()));
   const total = _hBytes(payload), parts = [];
@@ -11415,9 +11800,14 @@ function cloudPayloadStats(){
   const nTx = (transactions||[]).length, txBytes = _hBytes(transactions);
   const since = Date.now()-30*86400000, recent = (transactions||[]).filter(t=>(t.timestamp||0)>=since).length;
   const perDay = recent/30, perBill = nTx ? txBytes/nTx : 0;
-  const room = Math.max(0, CLOUD_DOC_LIMIT-total);
-  const daysLeft = (perDay>0 && perBill>0) ? Math.floor(room/(perDay*perBill)) : null;
-  return { total, saved: Math.max(0, fullBytes-total), trimmedCount, pct: total/CLOUD_DOC_LIMIT*100, parts, nTx, perDay, perBill, daysLeft };
+  const extraDocs = billDocs.length;
+  // Until the 70% mark is reached the document is the one that will spill; afterwards bills continue in extra documents by themselves,
+  // so the figure that matters is the part that can NOT spill (stock, staff, settings).
+  const room = Math.max(0, CLOUD_SPILL_AT-total);
+  const daysToExtra = (!extraDocs && perDay>0 && perBill>0) ? Math.floor(room/(perDay*perBill)) : null;
+  const nonSpill = jsonBytes(sanitizeForFirestore(activeBranchId==="main" ? buildCloudPayload([]) : buildBranchPayload([])));
+  return { total, saved: Math.max(0, fullBytes-total), trimmedCount, pct: total/CLOUD_DOC_LIMIT*100, parts, nTx, perDay, perBill, extraDocs, daysToExtra, nonSpill, nonSpillPct: nonSpill/CLOUD_DOC_LIMIT*100,
+           extraAdded: Number(localStorage.getItem("clinic_cloud_extra_added")||0) };
 }
 function dataIntegrityIssues(){
   const out = [], meds = (inventory||[]).filter(m=>!m.deleted);
@@ -11449,12 +11839,16 @@ function dataIntegrityIssues(){
 function showStorageHealth(){
   const L=[]; const st=cloudPayloadStats();
   L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Saad Clinic ${APP_VERSION}`, ``);
-  L.push(`☁️ CLOUD (one shared document, limit 1,024 KB)`);
-  L.push(`Size now: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full${st.pct>=70?"  ⚠ getting full":""}`);
+  L.push(`☁️ CLOUD (each document can hold 1,024 KB)`);
+  L.push(`Main document: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full`);
+  L.push(st.extraDocs ? `Extra bill documents: ${st.extraDocs}${st.extraAdded?` (first one added ${fmtDateTime(st.extraAdded)})`:""} — new bills continue there automatically` : `Extra bill documents: none yet (a second one starts by itself at 70% full)`);
+  L.push(`Stock, staff & settings (cannot spill over): ${_hKB(st.nonSpill)} — ${st.nonSpillPct.toFixed(1)}% of a document${st.nonSpillPct>=80?"  ⚠ getting full":""}`);
+  L.push(`This phone's ID: ${deviceId()} (keeps this phone's stock movements apart from the other phones')`);
   L.push(`Clean-up: ${st.trimmedCount.toLocaleString("en-US")} used-up batches older than a year are left out of the cloud copy (saves ${_hKB(st.saved)}); your phones keep them`);
   L.push(`Biggest parts: `+st.parts.slice(0,5).map(p=>`${p[0]} ${_hKB(p[1])}`).join(" · "));
   L.push(`Bills: ${st.nTx.toLocaleString("en-US")} saved, about ${st.perDay.toFixed(1)}/day over the last 30 days, ~${(st.perBill/1024).toFixed(2)} KB each`);
-  L.push(st.daysLeft==null ? `Time until full: not enough recent bills to estimate` : `At this pace the document fills in about ${st.daysLeft.toLocaleString("en-US")} days (~${(st.daysLeft/365).toFixed(1)} years)`);
+  if(st.extraDocs) L.push(`Bills no longer fill the main document: they continue in extra documents automatically.`);
+  else L.push(st.daysToExtra==null ? `Time until an extra document starts: not enough recent bills to estimate` : `At this pace an extra document starts in about ${st.daysToExtra.toLocaleString("en-US")} days (~${(st.daysToExtra/365).toFixed(1)} years)`);
   L.push(``, `📱 THIS PHONE'S APP STORAGE (limit about 5,000 KB)`);
   let tot=0; const keys=[];
   try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(!k) continue; const b=(k.length+String(localStorage.getItem(k)||"").length)*2; tot+=b; keys.push([k,b]); } }catch(e){}
@@ -11473,14 +11867,14 @@ function showStorageHealth(){
   else { L.push(`${issues.length} thing(s) to look at:`); issues.slice(0,40).forEach(x=>L.push("• "+x)); if(issues.length>40) L.push(`…and ${issues.length-40} more`); }
   openShare(L.join("\n"));
 }
-// Once a day, quietly warn if the shared cloud document is getting close to its size limit.
+// Once a day, quietly warn if the part of the cloud data that cannot spill over into extra documents (stock, staff, settings) is getting close to the limit.
 function checkCloudHeadroom(){
   try{
     if(!currentProfileId || !sessionAuthed) return;
     const day=localDateStr(); if(localStorage.getItem("clinic_headroom_checked")===day) return;
     localStorage.setItem("clinic_headroom_checked",day);
     const st=cloudPayloadStats();
-    if(st.pct>=70) showToast(`⚠ Cloud data is ${Math.round(st.pct)}% full — open Settings › Storage & health`);
+    if(st.nonSpillPct>=80) showToast(`⚠ Cloud: stock, staff and settings use ${Math.round(st.nonSpillPct)}% of a document — open Settings › Storage & health`);
   }catch(e){}
 }
 window.addEventListener("load",()=>{ window.__bootMs = performance.now(); setTimeout(checkCloudHeadroom, 15000); });
@@ -11741,7 +12135,8 @@ function renderAiModal(){
         <p id="aiInfo${i}" class="small" style="margin:6px 0 0;"></p>
       </div>`;
     }).join("");
-    body = `${err}<p class="small faint" style="margin:0 0 8px;">Check each line — fix the medicine or numbers if needed. “Total” is used only when Per day × Days is empty.</p>
+    const pnHint = (aiUi.patientName && !String(bill.patient||"").trim()) ? `<p class="small" style="margin:0 0 8px;">Patient name found: <strong>${esc(aiUi.patientName)}</strong> — filled in when you tap “Add to bill”.</p>` : "";
+    body = `${err}${pnHint}<p class="small faint" style="margin:0 0 8px;">Check each line — fix the medicine or numbers if needed. If both Per day × Days and Total are filled in, the one you changed last is used.</p>
       <div class="card" style="padding:10px;margin-bottom:8px;">
         <div class="small faint" style="margin-bottom:6px;">${aiUi.daysNote?"Days found on the page: <strong>"+esc(aiUi.daysNote)+"</strong>":"No total days found on the page."} Wrong? Set it for all lines:</div>
         <div class="flex" style="gap:8px;"><input id="aiAllDays" ${NOAC} type="number" inputmode="numeric" placeholder="Days for all lines" style="flex:1;"><button class="btn btn-outline" style="width:auto;padding:8px 14px;" onclick="aiSetAllDays()">Apply</button></div>
@@ -11995,18 +12390,24 @@ function retRefresh(){
   const nb=document.getElementById("retNetBox"); if(nb) nb.outerHTML=retNetHtml();
   refreshCompleteBillBtn();
 }
-// Saves the return entry and puts the medicines back into stock. Called by completeBill() BEFORE the sale is saved,
-// so returned medicine can be sold again in the same bill.
+// Puts the returned medicines back into stock (in memory) and builds the return entry. Called by
+// completeBill() BEFORE the sale, so returned medicine can be sold again in the same bill — that
+// only needs the in-memory inventory updated, which returnStockToBatches() already does on its
+// own. Persisting to disk/cloud is deliberately left to the caller: completeBill() always saves
+// transactions (which now includes the return tx this function adds to the list) before saving
+// inventory. Saving inventory here, separately and earlier, would reopen exactly the crash window
+// already closed elsewhere — stock already shows as returned on disk with no return record yet to
+// explain it if the app is interrupted in between.
 function retCommit(){
   const t=retBill(), T=retTotals(); if(!t || !(T.n>0) || T.need) return null;
   const pct=T.within?0:(retUi.pct||0), items=[];
   (t.items||[]).forEach((it,i)=>{
     const l=retLine(t,i), q=Math.min(l.left, Math.max(0,Number(retUi.qty[i])||0)); if(!(q>0)) return;
     const value=r2(l.per*q), med=inventory.find(m=>m.id===it.medId);
-    if(med && !med.deleted) returnStock(med,q);
-    items.push({ medId:it.medId, name:it.name, pills:-q, pricePerPill:it.pricePerPill, subtotal:-value, ded:0, srcIdx:i, srcLid:it.lid, special:it.special||undefined, note:"Return" });
+    let placed;
+    if(med && !med.deleted) placed = returnStockToBatches(med, it.dedBatches, q, retDoneQty(t.id,i,it.lid));
+    items.push({ medId:it.medId, name:it.name, pills:-q, pricePerPill:it.pricePerPill, subtotal:-value, ded:0, srcIdx:i, srcLid:it.lid, retBatches:(placed&&placed.length)?placed:undefined, special:it.special||undefined, note:"Return" });
   });
-  saveInventory();
   const tx={ id:uid(), timestamp:Date.now(), updatedAt:Date.now(), kind:"return", refOf:t.id, patientName:t.patientName,
     doctorFee:0, feeDiscount:0, items, medTotal:-T.V, medsDiscount:-T.D, extras:[], extrasTotal:0, tests:[], testsTotal:0, testsDiscount:0,
     paymentMode:t.paymentMode||"Cash", returnPct:pct, returnDeduct:T.D,
