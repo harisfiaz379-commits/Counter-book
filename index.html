@@ -24,57 +24,101 @@
   var DB_NAME = "localStorageShim", STORE = "kv";
   var memory = {};
   var dbPromise = null;
+  var pending = 0, waiters = [], failCount = 0, lastWarn = 0;
+  window.__lsHydrationFailed = false;
   function openDb(){
     if(dbPromise) return dbPromise;
     dbPromise = new Promise(function(resolve, reject){
       var req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = function(){ req.result.createObjectStore(STORE); };
       req.onsuccess = function(){ resolve(req.result); };
-      req.onerror = function(){ reject(req.error); };
+      req.onerror = function(){ dbPromise = null; reject(req.error); };
     });
     return dbPromise;
   }
-  function hydrate(){
+  // Reads everything into a scratch copy first and only uses it when the read finished completely, so a read that
+  // dies half-way can never leave the app running on a partial copy of the saved data.
+  function hydrateOnce(){
     return openDb().then(function(db){
       return new Promise(function(resolve, reject){
+        var tmp = {};
         var tx = db.transaction(STORE, "readonly");
         var req = tx.objectStore(STORE).openCursor();
         req.onsuccess = function(e){
           var cursor = e.target.result;
-          if(cursor){ memory[cursor.key] = cursor.value; cursor.continue(); }
-          else resolve();
+          if(cursor){ tmp[cursor.key] = cursor.value; cursor.continue(); }
+          else resolve(tmp);
         };
         req.onerror = function(){ reject(req.error); };
       });
     });
   }
-  // If the phone refuses to store something (e.g. storage full) the app used to carry on silently. Now the
-  // user is told once, so they know recent changes may be lost when the app is closed.
+  function hydrate(tries){
+    return hydrateOnce().then(function(tmp){ memory = tmp; }, function(){
+      if(tries > 1) return new Promise(function(r){ setTimeout(r, 700); }).then(function(){ return hydrate(tries-1); });
+      // Still unreadable after several tries: from now on NOTHING is written to the phone's saved copy, so a blank or
+      // partial copy can never replace the real saved data. The app shows a stop screen (see the boot code).
+      window.__lsHydrationFailed = true;
+    });
+  }
+  // If the phone refuses to store something (e.g. storage full) the user is told — every time, at most once per 15 s.
   function persistFailed(){
-    window.__lsPersistFailed = true;
-    if(!window.__lsWarned && typeof window.showToast === "function"){ window.__lsWarned = true; try{ window.showToast("⚠ Phone storage problem — recent changes may not be saved on this phone"); }catch(e){} }
+    failCount++; window.__lsPersistFailed = true;
+    var now = Date.now();
+    if(now - lastWarn > 15000 && typeof window.showToast === "function"){ lastWarn = now; try{ window.showToast("⚠ Phone storage problem — recent changes may not be saved on this phone"); }catch(e){} }
   }
+  function settle(){ pending--; if(pending <= 0){ pending = 0; var w = waiters; waiters = []; w.forEach(function(f){ f(); }); } }
+  // One write = one transaction; it counts as saved only when the phone confirms the commit (tx.oncomplete).
   function persist(key, value){
+    if(window.__lsHydrationFailed){ persistFailed(); return; }
+    pending++;
     openDb().then(function(db){
-      var tx = db.transaction(STORE, "readwrite");
-      tx.onerror = tx.onabort = persistFailed;
-      var store = tx.objectStore(STORE);
-      if(value === null) store.delete(key); else store.put(value, key);
-    }).catch(persistFailed);
+      return new Promise(function(resolve, reject){
+        var tx = db.transaction(STORE, "readwrite");
+        tx.oncomplete = function(){ resolve(); };
+        tx.onerror = tx.onabort = function(){ reject(tx.error); };
+        var store = tx.objectStore(STORE);
+        if(value === null) store.delete(key); else store.put(value, key);
+      });
+    }).then(settle, function(){ persistFailed(); settle(); });   // count the failure BEFORE waking anyone waiting on a flush
   }
+  // Resolves true when every write started so far has been confirmed by the phone (false on a failure or after ms).
+  window.__lsFlush = function(ms){
+    var before = failCount;
+    return new Promise(function(resolve){
+      if(window.__lsHydrationFailed) return resolve(false);
+      if(pending === 0) return resolve(failCount === before);
+      var done = false;
+      var t = setTimeout(function(){ if(!done){ done = true; resolve(false); } }, ms || 5000);
+      waiters.push(function(){ if(!done){ done = true; clearTimeout(t); resolve(failCount === before); } });
+    });
+  };
   var shim = {
     getItem: function(key){ return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null; },
     setItem: function(key, value){ value = String(value); memory[key] = value; persist(key, value); },
     removeItem: function(key){ delete memory[key]; persist(key, null); },
     key: function(i){ return Object.keys(memory)[i] || null; },
-    clear: function(){ memory = {}; openDb().then(function(db){ db.transaction(STORE,"readwrite").objectStore(STORE).clear(); }).catch(function(){}); }
+    clear: function(){ memory = {}; if(window.__lsHydrationFailed) return; openDb().then(function(db){ db.transaction(STORE,"readwrite").objectStore(STORE).clear(); }).catch(function(){}); }
   };
   Object.defineProperty(shim, "length", { get: function(){ return Object.keys(memory).length; } });
   function install(){
     try{ Object.defineProperty(window, "localStorage", { value: shim, configurable: true }); }
     catch(e){ window.localStorage = shim; }
   }
-  window.__localStorageReady = hydrate().then(install).catch(install);
+  window.__localStorageReady = hydrate(3).then(install, install);
+})();
+</script>
+<script>
+// Paint the last-used theme colours from the very first frame. The saved theme is only read after the phone-storage
+// workaround has loaded (a fraction of a second), and until then the page's built-in green showed through. applyTheme()
+// leaves the colours it applied in a cookie, which can be read straight away; replaying them here removes the green flash.
+(function(){
+  try{
+    var m = document.cookie.match(/(?:^|;\s*)cb_theme=([^;]*)/); if(!m) return;
+    var d = JSON.parse(decodeURIComponent(m[1])), r = document.documentElement;
+    if(d.m) r.setAttribute("data-mode", d.m);
+    for(var k in d.v) r.style.setProperty(k, d.v[k]);
+  }catch(e){}
 })();
 </script>
 
@@ -86,6 +130,7 @@
 <meta name="theme-color" content="#0F5C57">
 <title>Saad Clinic</title>
 <style>
+  html, body { touch-action: pan-x pan-y; }   /* scrolling only: no pinch-zoom and no double-tap zoom anywhere in the app */
   :root{
     --page:#F3F6F7; --header:#0F5C57; --headerSub:#CFE9E5;
     --primary:#0F5C57; --primarySoft:#E4F1EF;
@@ -94,6 +139,8 @@
     --success:#0E9F6E; --successSoft:#E5F8F1;
     --danger:#DC3B2C; --dangerSoft:#FCEAE8;
     --warning:#B4650A; --warningSoft:#FDF3E3;
+    /* Special-category medicines get their own violet so they never blend with the orange/other themes */
+    --special:#6D28D9; --specialSoft:#EDE4FD;
     --header-h:90px; /* fallback before JS measures the real header height (syncHeaderOffset) */
   }
   *{box-sizing:border-box;
@@ -185,7 +232,9 @@
   .row.big .val{font-size:20px;font-weight:700;}
   .btn{border:none;border-radius:10px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;}
   .btn-primary{background:var(--primary);color:#fff;}
-  .btn-success{background:var(--success);color:#fff;}
+  /* Action buttons (Complete bill, Share bill, etc.) follow the chosen theme colour instead of a fixed green;
+     the old class name is kept so no button markup had to change. */
+  .btn-success{background:var(--primary);color:#fff;}
   .btn-danger{background:var(--danger);color:#fff;}
   .btn-outline{background:none;border:1px solid var(--border);color:var(--muted);}
   .btn-dashed{background:none;border:2px dashed var(--primary);color:var(--primary);width:100%;padding:12px;
@@ -480,6 +529,7 @@
 <div id="copyMenuRoot"></div>
 <div id="invFormModalRoot"></div>
 <div id="backupModalRoot"></div>
+<div id="delMedModalRoot"></div>
 <div id="diagModalRoot"></div>
 <div id="retModalRoot"></div>
 <div id="printerModalRoot"></div>
@@ -512,7 +562,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v146";
+const APP_VERSION = "v155";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -866,11 +916,185 @@ function loadAll(){
   try{ sessionAuthed = localStorage.getItem("clinic_session_authed")==="1" && !!currentProfileId; }catch(e){ sessionAuthed=false; }
   loadNotesForCurrentProfile();
 }
+/*VAULT-BEGIN*/
+// ===================== Medicine safety net =====================
+// Independent of the normal phone storage and of the cloud, on purpose: if one of them ever loses a medicine, this still
+// has it. It keeps (1) a register of every medicine this phone has ever held in each branch, and (2) rolling snapshots of
+// the whole medicine list. A medicine that is in the register as live but is missing from the list — not deleted, simply
+// gone — is put back automatically from the newest snapshot that has it. A medicine somebody deleted on purpose is NOT
+// brought back automatically; it waits in Settings > Deleted medicines.
+const VAULT_DB = "counterBookVault", VAULT_KEEP_RECENT = 15, VAULT_KEEP_DAYS = 14;
+const vaultIO = {
+  _db:null,
+  open(){
+    if(this._db) return this._db;
+    this._db = new Promise((res,rej)=>{
+      try{
+        const r = indexedDB.open(VAULT_DB, 1);
+        r.onupgradeneeded = ()=>{ const d=r.result; d.createObjectStore("snaps"); d.createObjectStore("reg"); };
+        r.onsuccess = ()=>res(r.result);
+        r.onerror = ()=>{ this._db=null; rej(r.error); };
+      }catch(e){ this._db=null; rej(e); }
+    });
+    return this._db;
+  },
+  _run(store, mode, fn){
+    return this.open().then(db=>new Promise((res,rej)=>{
+      const tx = db.transaction(store, mode); let r;
+      tx.oncomplete = ()=>res(r ? r.result : undefined);
+      tx.onerror = tx.onabort = ()=>rej(tx.error || new Error("vault"));
+      r = fn(tx.objectStore(store));
+    }));
+  },
+  put(s,k,v){ return this._run(s,"readwrite",os=>os.put(v,k)); },
+  get(s,k){ return this._run(s,"readonly",os=>os.get(k)); },
+  keys(s){ return this._run(s,"readonly",os=>os.getAllKeys()); },
+  del(s,k){ return this._run(s,"readwrite",os=>os.delete(k)); }
+};
+let _vaultTimer = null, _vaultRetry = null, _vaultSnapT = {}, _invDirty = false, _snapPending = false;
+let _vaultInfo = { snaps:0, lastT:0, ok:true, recovered:0 };
+function vaultNote(){ _invDirty = true; clearTimeout(_vaultTimer); _vaultTimer = setTimeout(()=>{ vaultWrite(); }, 400); }
+function _vaultSnapKeyT(k){ return parseInt(String(k).split("|")[1],10) || 0; }
+// Newest 15 snapshots, plus the last snapshot of each of the last 14 days, so a loss noticed a week later is still recoverable.
+function _vaultPrune(mine, now){
+  const keep = new Set(mine.slice(-VAULT_KEEP_RECENT));
+  const perDay = {};
+  mine.forEach(k=>{ const t=_vaultSnapKeyT(k), day=Math.floor(t/86400000); if(now-t <= VAULT_KEEP_DAYS*86400000) perDay[day]=k; });
+  Object.keys(perDay).forEach(d=>keep.add(perDay[d]));
+  return mine.filter(k=>!keep.has(k));
+}
+async function vaultWrite(){
+  clearTimeout(_vaultTimer);
+  try{
+    const br = activeBranchId, now = Date.now();
+    const reg = (await vaultIO.get("reg", br)) || { ids:{} }; if(!reg.ids) reg.ids = {};
+    let changed = false;
+    for(const m of inventory){
+      if(!m || !m.id) continue;
+      const d = m.deleted ? 1 : 0, n = String(m.name||"").slice(0,60), cur = reg.ids[m.id];
+      if(!cur || cur.d!==d || cur.n!==n){ reg.ids[m.id] = { n, d }; changed = true; }
+    }
+    if(changed){ reg.t = now; await vaultIO.put("reg", br, reg); }
+    let mine = (await vaultIO.keys("snaps")).filter(k=>String(k).indexOf(br+"|")===0).sort();
+    const last = mine.length ? _vaultSnapKeyT(mine[mine.length-1]) : 0;
+    _vaultSnapT[br] = last; _vaultInfo.snaps = mine.length; _vaultInfo.lastT = last;
+    const gap = now - last;
+    const due = !last || ((changed || _snapPending) && gap>=5000) || (_invDirty && gap>=900000);
+    if(due){
+      const key = br+"|"+String(now).padStart(15,"0");
+      await vaultIO.put("snaps", key, { branch:br, t:now, inv:inventory });
+      _invDirty = false; _snapPending = false; _vaultSnapT[br] = now;
+      mine.push(key);
+      for(const k of _vaultPrune(mine, now)) await vaultIO.del("snaps", k);
+      mine = mine.filter(k=>true);
+      _vaultInfo.snaps = Math.min(mine.length, VAULT_KEEP_RECENT+VAULT_KEEP_DAYS); _vaultInfo.lastT = now;
+    } else if(changed || _snapPending){
+      // Changed again within 5 s of the last snapshot: take one right after, so the newest change is never only in the register.
+      _snapPending = true;
+      clearTimeout(_vaultRetry); _vaultRetry = setTimeout(()=>{ vaultWrite(); }, Math.max(300, 5300-gap));
+    }
+    _vaultInfo.ok = true; return true;
+  }catch(e){ _vaultInfo.ok = false; return false; }
+}
+function vaultFlush(ms){ return Promise.race([ vaultWrite(), new Promise(r=>setTimeout(()=>r(false), ms||4000)) ]); }
+// true only when BOTH the phone storage and the safety net have confirmed the latest save
+function whenStored(ms){
+  ms = ms||5000;
+  return Promise.all([ window.__lsFlush ? window.__lsFlush(ms) : true, vaultFlush(ms) ]).then(r=>r.every(Boolean)).catch(()=>false);
+}
+function vaultReportGet(){ try{ return JSON.parse(localStorage.getItem(bk("clinic_vault_report"))||"[]"); }catch(e){ return []; } }
+function vaultReportPush(entry){ try{ const a=vaultReportGet(); a.unshift(entry); localStorage.setItem(bk("clinic_vault_report"), JSON.stringify(a.slice(0,20))); }catch(e){} }
+let _lastAudit = 0, _auditRunning = false;
+// Finds medicines the register says are live but that are gone from the list, and puts them back.
+async function vaultAudit(){
+  if(_auditRunning) return { missing:[], recovered:[], lost:[] };
+  _auditRunning = true; _lastAudit = Date.now();
+  try{
+    const br = activeBranchId;
+    const reg = await vaultIO.get("reg", br);
+    if(!reg || !reg.ids) return { missing:[], recovered:[], lost:[] };
+    const have = new Set(inventory.map(m=>m && m.id));
+    const missingIds = Object.keys(reg.ids).filter(id=>reg.ids[id].d===0 && !have.has(id));
+    if(!missingIds.length) return { missing:[], recovered:[], lost:[] };
+    const keys = (await vaultIO.keys("snaps")).filter(k=>String(k).indexOf(br+"|")===0).sort().reverse();
+    const need = new Set(missingIds), recovered = [];
+    for(const k of keys){
+      if(!need.size) break;
+      const snap = await vaultIO.get("snaps", k);
+      if(!snap || !Array.isArray(snap.inv)) continue;
+      snap.inv.forEach(m=>{
+        if(m && need.has(m.id) && !m.deleted && !inventory.some(x=>x.id===m.id)){
+          const copy = JSON.parse(JSON.stringify(m));
+          recomputeStock(copy);
+          inventory.push(copy); recovered.push(copy.name); need.delete(m.id);
+        }
+      });
+    }
+    const lost = [...need].map(id=>reg.ids[id].n);
+    if(recovered.length){
+      _vaultInfo.recovered += recovered.length;
+      _liveN = null;
+      try{ logActivity("med_recovered", recovered.join(", ")); }catch(e){}
+      saveInventory();
+      try{ if(typeof render==="function") render(); }catch(e){}
+    }
+    if(recovered.length || lost.length) vaultReportPush({ t:Date.now(), recovered, lost });
+    if(recovered.length) showToast(`♻ ${recovered.length} medicine${recovered.length===1?" had":"s had"} gone missing and ${recovered.length===1?"was":"were"} put back automatically: ${recovered.slice(0,5).join(", ")}${recovered.length>5?" …":""}`);
+    if(lost.length) showToast(`⚠ ${lost.length} medicine${lost.length===1?"":"s"} went missing and could not be recovered: ${lost.slice(0,5).join(", ")}${lost.length>5?" …":""}. Please add ${lost.length===1?"it":"them"} again.`);
+    return { missing:missingIds, recovered, lost };
+  }catch(e){ return { missing:[], recovered:[], lost:[], error:true }; }
+  finally{ _auditRunning = false; }
+}
+/*VAULT-END*/
+let delMedUi = { open:false };
+function deletedMedicines(){ return inventory.filter(m=>m && m.deleted).sort((a,b)=>(b.deletedAt||b.updatedAt||0)-(a.deletedAt||a.updatedAt||0)); }
+function openDelMeds(){ delMedUi.open = true; renderDelMedModal(); try{ syncMenuHistory(); }catch(e){} }
+function closeDelMeds(){ delMedUi.open = false; renderDelMedModal(); try{ syncMenuHistory(); }catch(e){} }
+function restoreMedicine(id){
+  const m = inventory.find(x=>x.id===id); if(!m || !m.deleted) return;
+  m.deleted = false; m.updatedAt = Math.max(Date.now(), (m.updatedAt||0)+1);   // newer than the deletion, so it wins on every phone
+  delete m.deletedBy; delete m.deletedAt;
+  try{ logActivity("med_add", m.name+" (restored)"); }catch(e){}
+  saveInventory(); showToast("♻ "+m.name+" restored");
+  renderDelMedModal(); try{ render(); }catch(e){}
+}
+function renderDelMedModal(){
+  const root = document.getElementById("delMedModalRoot"); if(!root) return;
+  if(!delMedUi.open){ root.innerHTML = ""; return; }
+  const list = deletedMedicines(), rpt = vaultReportGet().slice(0,3);
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeDelMeds()">
+      <div class="modal">
+        <div class="modal-head"><strong>Deleted medicines</strong><button class="modal-x" onclick="closeDelMeds()">✕</button></div>
+        <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
+          <p class="small faint" style="margin:0 0 10px;">Medicines in your list: ${inventory.filter(m=>m&&!m.deleted).length}. Safety copies kept on this phone: ${_vaultInfo.snaps||0}${_vaultInfo.ok?"":" (safety copy is not working on this phone)"}.</p>
+          ${rpt.length?`<div class="card" style="padding:10px 14px;">${rpt.map(r=>`<p class="small" style="margin:0 0 4px;">${fmtDateTime(r.t)} — ${r.recovered&&r.recovered.length?"♻ put back: "+esc(r.recovered.join(", ")):""}${r.lost&&r.lost.length?" ⚠ could not recover: "+esc(r.lost.join(", ")):""}</p>`).join("")}</div>`:""}
+          ${list.length?list.map(m=>`
+            <div class="card" style="padding:10px 14px;">
+              <p style="font-weight:700;margin:0;">${esc(m.name)} ${esc(m.mg||"")}</p>
+              <p class="small faint" style="margin:2px 0 8px;">${m.stockPills||0} pills · deleted ${fmtDateTime(m.deletedAt||m.updatedAt||0)}${m.deletedBy?" by "+esc(m.deletedBy):""}</p>
+              <button class="btn btn-primary" style="width:100%;" onclick="restoreMedicine('${m.id}')">Restore</button>
+            </div>`).join(""):`<p class="small faint" style="text-align:center;padding:24px 0;">No deleted medicines.</p>`}
+        </div>
+      </div>
+    </div>`;
+}
+let _liveN = null, _liveBranch = null, _dropExpected = 0;   // medicine-count watch: a drop nobody asked for is announced (see saveInventory)
 function saveInventory(){
   try{ localStorage.setItem(bk("clinic_inventory"), JSON.stringify(inventory)); saveError=""; }
-  catch(e){ saveError="That change may not have saved. Storage might be full."; }
+  catch(e){ saveError="That change may not have saved. Storage might be full."; try{ showToast("⚠ "+saveError); }catch(x){} }
   _lowStockCache = null; _expiringBatchesCache = null; _expiring2mCache = null; _fsIndex = null; // inventory changed — caches above are now stale
-  schedulePushToCloud();
+  try{ vaultNote(); }catch(e){}                                       // independent safety copy (see "Medicine safety net")
+  try{
+    const n = inventory.filter(m=>m && !m.deleted).length;
+    if(_liveBranch!==activeBranchId){ _liveN = null; _liveBranch = activeBranchId; }   // another branch has its own count
+    if(_liveN!==null && n<_liveN){
+      if(_dropExpected>0) _dropExpected--;
+      else showToast(`ℹ ${_liveN-n} medicine${_liveN-n===1?"":"s"} no longer in your list (deleted here or on another phone). Settings › Deleted medicines can bring ${_liveN-n===1?"it":"them"} back.`);
+    }
+    _liveN = n;
+  }catch(e){}
+  schedulePushToCloud(true);                                           // a changed medicine goes to the cloud almost at once
 }
 function saveTransactions(){
   try{ localStorage.setItem(bk("clinic_transactions"), JSON.stringify(transactions)); saveError=""; }
@@ -1933,7 +2157,23 @@ let wasMenuOpen = false; // menu-open state as of the last render(), for edge-de
 // by an "empty" back press specifically, not by normal menu/tab navigation), and a fresh set is
 // pushed every time the app is actually reopened anyway. Deliberately NOT pushed via
 // pushNav()/navStack — these aren't real menus/tabs, just plumbing to keep GoBack() functional.
-for(let i=0;i<500;i++) history.pushState({ floor:true }, "", location.href);
+// WHY THE FLOOR ENTRIES ARE NOW ADDED ON THE FIRST TOUCH, NOT AT LOAD: Chrome's WebView ignores ("skips") any history entry a
+// page adds before the person has touched the page at all (its "history manipulation intervention"). Entries added at load were
+// therefore skipped, so on a freshly opened app the first Back press found nothing to step back to and the double-back-to-exit
+// never started — it only worked after some menu had been opened (that push happens inside a tap, so it counted). Adding the
+// floor entries from inside the first real touch / key press makes them count. The buffer is topped up again whenever it runs low.
+let _floorLeft = 0;
+function addFloors(n){ for(let i=0;i<n;i++) history.pushState({ floor:true }, "", location.href); _floorLeft += n; }
+(function(){
+  let done = false;
+  const evs = ["pointerup","touchend","click","keydown"];
+  const first = function(){
+    if(done) return; done = true;
+    evs.forEach(t=>window.removeEventListener(t, first, true));
+    addFloors(100);
+  };
+  evs.forEach(t=>window.addEventListener(t, first, true));
+})();
 let lastEmptyBackAt = 0;
 function pushNav(resolver){
   navStack.push(resolver);
@@ -1948,6 +2188,8 @@ window.addEventListener("popstate", function(){
     resolver();
     return;
   }
+  if(_floorLeft>0) _floorLeft--;
+  if(_floorLeft<25) addFloors(60);                                  // keep the buffer topped up (this runs inside a Back press, which counts as a real touch)
   const now = Date.now();
   if(now - lastEmptyBackAt < 2000){
     // TEMPORARY diagnostic — remove once the exit-app bridge is confirmed working. If this
@@ -1965,7 +2207,7 @@ window.addEventListener("popstate", function(){
 });
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
-  return !!((!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
+  return !!(delMedUi.open || (!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
     printerUi.open || themeUi.open || (retUi && retUi.open) || kbTestUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open || pinRevealUi.open ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
@@ -1977,6 +2219,7 @@ function closeTopMenu(){
   // first — a single back press should only ever close one layer. Safe to call with nothing
   // open at all (e.g. a leftover history entry from a menu closed via its own button) — every
   // check below just falls through and nothing happens.
+  if(delMedUi.open){ closeDelMeds(); return; }
   if(!sessionAuthed){
     if(addUserLoginUi.open){ closeAddUserFromLogin(); return; }
     if(forgotUi.open){ closeForgotPin(); return; }
@@ -2039,7 +2282,7 @@ function syncMenuHistory(){
 // current tab (e.g. all 300+ medicines on Inventory), which made every menu take about a second to open.
 function renderOverlays(){
   renderShareModal(); renderConfirmModal(); renderNumberPromptModal(); renderPinRevealGate(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderRetModal(); renderPrinterModal();
-  renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderBranchesModal(); renderMoveStaffModal(); renderHistoryModal();
+  renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderDelMedModal(); renderBranchesModal(); renderMoveStaffModal(); renderHistoryModal();
   renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
   renderScanMethodModal(); renderThemeModal(); renderKbTestModal(); renderReceiptDesignModal(); renderToolsModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
   syncMenuHistory(); syncHeaderOffset();
@@ -2126,7 +2369,7 @@ function render(){
   renderAiModal();
   renderMonthBreakdownModal();
   renderCategoryModal();
-  renderManageUsersModal();
+  renderManageUsersModal(); renderDelMedModal();
   renderHistoryModal();
   renderAdminTransferModal();
   renderPostTransferChoiceModal();
@@ -2970,7 +3213,13 @@ function getThemeId(){
   try{ const v=localStorage.getItem("clinic_theme"); return THEMES.some(t=>t.id===v) ? v : "green"; }catch(e){ return "green"; }
 }
 function hexMix(a,b,r){ const pa=[1,3,5].map(i=>parseInt(a.substr(i,2),16)), pb=[1,3,5].map(i=>parseInt(b.substr(i,2),16)); return "#"+pa.map((v,i)=>Math.round(v*r+pb[i]*(1-r)).toString(16).padStart(2,"0")).join(""); }
-const DARK_VARS = {"--page":"#0E1417","--card":"#192127","--text":"#E8EEF2","--muted":"#9AA9B6","--faint":"#6F7F8C","--border":"#2B3640","--successSoft":"#12342A","--dangerSoft":"#3A1C19","--warningSoft":"#3A2B12"};
+const DARK_VARS = {"--page":"#0E1417","--card":"#192127","--text":"#E8EEF2","--muted":"#9AA9B6","--faint":"#6F7F8C","--border":"#2B3640","--successSoft":"#12342A","--dangerSoft":"#3A1C19","--warningSoft":"#3A2B12","--special":"#C4B5FD","--specialSoft":"#2E2447"};
+// The default violet used for special-category pills (see --special/--specialSoft in :root) sits right next to
+// the Purple theme's own header/primary violet, so a special-category pill and a plain category pill became
+// almost the same colour once Purple was picked — the one theme where the two are supposed to look different
+// stopped showing a difference. Purple alone swaps --special/--specialSoft for a teal instead; every other
+// theme keeps the normal violet, which was already picked to stay clear of their colours.
+const SPECIAL_OVERRIDE = { purple: { light:{"--special":"#0E7490","--specialSoft":"#E0F2FE"}, dark:{"--special":"#67E8F9","--specialSoft":"#143442"} } };
 function applyTheme(id){
   const t = THEMES.find(x=>x.id===id) || THEMES[0], root = document.documentElement, st = root.style, dark = isDarkMode();
   root.setAttribute("data-mode", dark ? "dark" : "light");
@@ -2980,7 +3229,20 @@ function applyTheme(id){
   st.setProperty("--headerSub", t.sub);
   st.setProperty("--primarySoft", dark ? hexMix(t.header,"#192127",.35) : t.soft);
   if(!dark) st.setProperty("--page", t.page);
+  const ov = SPECIAL_OVERRIDE[t.id] && SPECIAL_OVERRIDE[t.id][dark?"dark":"light"];
+  if(ov) Object.keys(ov).forEach(k=>st.setProperty(k, ov[k]));
   const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute("content", t.header);
+  // Remember exactly what was just applied, so the very next start can paint the right colours from the first frame
+  // (see the small script right after the storage workaround at the top of the file). Best effort: if cookies are
+  // unavailable nothing changes, the colours are simply applied a moment later as before.
+  try{
+    const vars = {};
+    // Reads back whatever is actually sitting on the root right now — the chosen theme's colours, the dark-mode
+    // overrides, and (when Purple) the teal special-category override above — rather than re-deriving each one,
+    // so the saved snapshot can never drift from what was really applied.
+    ["--header","--primary","--headerSub","--primarySoft","--page", ...Object.keys(DARK_VARS)].forEach(k=>{ const v=st.getPropertyValue(k); if(v) vars[k]=v.trim(); });
+    document.cookie = "cb_theme="+encodeURIComponent(JSON.stringify({ m:dark?"dark":"light", v:vars }))+"; max-age=31536000; path="+location.pathname.replace(/[^\/]*$/,"")+"; SameSite=Lax";
+  }catch(e){}
 }
 let themeUi = { open:false };
 function openThemeModal(){ themeUi.open=true; renderOverlays(); }
@@ -3057,8 +3319,8 @@ function patientHintHtml(){
     const last = exact[0];
     return `<div class="hint-card"><div class="small" style="margin-bottom:6px;">Returning patient · last visit ${fmtDateTime(last.timestamp)} · ${exact.length} bill${exact.length===1?"":"s"}</div>
       <div class="flex gap2"><button type="button" class="btn btn-primary flex1" style="font-size:12px;padding:8px;" onclick="repeatBillFromTx('${last.id}')">🔁 Repeat last bill</button>
-      <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openTools('patient',{histName:'${esc(last.patientName).replace(/'/g,"&#39;")}'})">🕘 History</button></div>
-      <button type="button" class="btn btn-outline" style="width:100%;margin-top:6px;font-size:12px;padding:8px;" onclick="retStart('${esc(last.patientName).replace(/'/g,"&#39;")}')">↩ Return medicine</button></div>`;
+      <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="openTools('patient',{histName:${esc(JSON.stringify(String(last.patientName||"")))}})">🕘 History</button></div>
+      <button type="button" class="btn btn-outline" style="width:100%;margin-top:6px;font-size:12px;padding:8px;" onclick="retStart(${esc(JSON.stringify(String(last.patientName||"")))})">↩ Return medicine</button></div>`;
   }
   const seen = new Map();
   visibleTransactions().forEach(t=>{ const nm=String(t.patientName||"").trim(); if(nm && nm.toLowerCase().includes(q) && !seen.has(nm.toLowerCase())) seen.set(nm.toLowerCase(), nm); });
@@ -3089,7 +3351,7 @@ function quickPickTag(m){
   const cat=String(m.category||m.specialCategory||"").trim();
   let letter="";
   if(cat){
-    const col = m.specialCategory ? "color:var(--warning);opacity:1;" : "";   // special category = yellow letter
+    const col = m.specialCategory ? "color:var(--special);opacity:1;" : "";   // special category = yellow letter
     letter = (m.sTag?`<span style="color:var(--danger);opacity:1;">S.</span>`:"")+`<span style="${col}">${esc(cat.charAt(0).toUpperCase())}</span>`;
   }
   const st=shortStrength(m.mg);
@@ -4296,7 +4558,7 @@ function billSpecialQueryDropdownHtml(){
       <div class="flex" style="align-items:stretch;border-bottom:1px solid var(--border);">
       <button style="width:auto;flex:1;min-width:0;text-align:left;padding:10px 12px;border:none;background:none;cursor:pointer;display:block;" onclick="pickBillSpecialMed('${m.id}')">
         <div style="min-width:0;">
-          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
+          <span style="font-size:14px;font-weight:600;display:block;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.name)} <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:9px;padding:2px 6px;vertical-align:middle;">${esc(m.specialCategory)}</span></span>
           ${(m.formula||m.mg)?`<span style="font-size:11px;color:var(--primary);display:block;white-space:normal;word-break:break-word;margin-top:1px;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</span>`:""}
           <span style="font-size:11px;display:block;margin-top:2px;${m.stockPills<=(m.lowStockAt??0)?'color:var(--danger);font-weight:700;':'color:var(--faint);'}">${fmtInt(m.stockPills)} medicine left</span>
         </div>
@@ -4331,7 +4593,7 @@ function renderBill(){
     itemsHtml = `<div class="card"><h3 class="mb2" style="font-size:14px;font-weight:700;">This bill</h3>` +
       bill.items.map((it,idx)=>`
         <div class="item-row">
-          <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}${it.special?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:9px;vertical-align:middle;">${esc(it.specialCategory||"Special")}</span>`:""}</div>
+          <div><div style="font-size:14px;font-weight:600;">${esc(it.name)}${it.special?` <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:9px;vertical-align:middle;">${esc(it.specialCategory||"Special")}</span>`:""}</div>
           <div class="small faint">${fmtInt(it.pills)} medicine${it.note?` (${it.note})`:""} × ${CURRENCY}${money(it.pricePerPill)}</div></div>
           <div class="flex gap2" style="align-items:center;">
             <span style="font-weight:700;font-size:14px;">${CURRENCY}${money(it.subtotal)}</span>
@@ -6578,7 +6840,9 @@ function findExactDuplicateMedicine(f, excludeId){
 }
 function addMedicine(skipRender){
   const f = inv.form;
-  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)) return false;
+  if(!f.name.trim()){ showToast("Not saved — enter the medicine name"); return false; }
+  if(!(Number(f.mrp)>0)){ showToast("Not saved — enter the price per box (MRP)"); return false; }
+  if(!(Number(f.pillsPerBox)>0)){ showToast("Not saved — enter how many pills are in a box"); return false; }
   const dup = findExactDuplicateMedicine(f);
   if(dup){
     showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Use Restock on it, or change a box if it's a different medicine.`);
@@ -6590,17 +6854,26 @@ function addMedicine(skipRender){
     createdAt:Date.now(), updatedAt:Date.now(), deleted:false });
   logActivity("med_add", f.name.trim());
   saveInventory();
+  { const _nm = f.name.trim();   // tell the person only when the phone AND the safety net have confirmed it — no tick = check Inventory
+    whenStored(6000).then(ok=>showToast(ok ? `✓ "${_nm}" saved on this phone` : `⚠ "${_nm}" may NOT be saved yet — check Inventory and add it again if it is missing`)); }
   inv.showForm=false;
   if(skipRender!==true) render();
   return true;
 }
 function deleteMedicine(id){
-  askConfirm("Delete this medicine from inventory?", ()=>{
+  const _m0 = inventory.find(x=>x.id===id);
+  const _what = _m0 ? `"${_m0.name}${_m0.mg?" "+_m0.mg:""}" (${_m0.stockPills||0} pills in stock)` : "this medicine";
+  askConfirm(`Delete ${_what} from inventory? You can bring it back from Settings › Deleted medicines.`, ()=>{
     // Soft-delete (keep the record, flag it) rather than removing it outright: this lets the
     // deletion itself sync to other devices via updatedAt like any other edit. Removing it
     // outright would just cause it to reappear once another device's data came back in.
     const m = inventory.find(x=>x.id===id);
-    if(m){ m.deleted = true; m.updatedAt = Date.now(); }
+    if(m){
+      const _me = profiles.find(x=>x.id===currentProfileId);
+      m.deleted = true; m.updatedAt = Math.max(Date.now(), (m.updatedAt||0)+1);
+      m.deletedAt = Date.now(); m.deletedBy = _me ? _me.name : "";     // so Deleted medicines can show who and when
+      _dropExpected++;                                                  // this drop in the count is on purpose — no warning
+    }
     if(m) logActivity("med_del", m.name);
     saveInventory();
     removeInvCard(id);
@@ -6795,7 +7068,10 @@ function onEditCategoryPicked(v){
 }
 function saveEdit(id){
   const f = inv.editForm;
-  if(!f.name.trim()||!(Number(f.mrp)>0)||!(Number(f.pillsPerBox)>0)||f.stockPills==="") return false;
+  if(!f.name.trim()){ showToast("Not saved — enter the medicine name"); return false; }
+  if(!(Number(f.mrp)>0)){ showToast("Not saved — enter the price per box (MRP)"); return false; }
+  if(!(Number(f.pillsPerBox)>0)){ showToast("Not saved — enter how many pills are in a box"); return false; }
+  if(f.stockPills===""){ showToast("Not saved — enter the stock (0 if none)"); return false; }
   const dup = findExactDuplicateMedicine(f, id);
   if(dup){
     showToast(`Not saved — "${dup.name}" with exactly these details is already in inventory. Change a box if it's a different medicine.`);
@@ -7030,7 +7306,7 @@ function buildInvCard(m){
     <div class="card" id="invCard-${m.id}">
       <div class="flex" style="justify-content:space-between;align-items:flex-start;">
         <div>
-          <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
+          <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:10px;vertical-align:middle;">${m.sTag?'<span style="color:var(--danger);font-weight:700;">S.</span>':""}${esc(m.specialCategory)}</span>`:""}</p>
           ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
           <p class="small faint" style="margin:2px 0 0;">${CURRENCY}${mrpDisplay(m.mrpPerBox)} / box · ${fmtInt(m.pillsPerBox)} medicine · ${CURRENCY}${mrpDisplay(pricePerPill)}/medicine</p>
           <p class="small faint" style="margin:2px 0 0;">Warns at ${fmtInt(m.lowStockAt ?? 0)} medicine${m.noWarn?" (warnings off)":""}</p>
@@ -7042,7 +7318,7 @@ function buildInvCard(m){
         </div>
       </div>
       <div class="flex mt2" style="justify-content:space-between;align-items:center;">
-        <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--successSoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--success)')};">${fmtInt(m.stockPills)} medicine in stock${isExpired?" · expired":""}</span>
+        <span class="pill-badge" style="background:${isExpired?'var(--dangerSoft)':(low?'var(--dangerSoft)':'var(--primarySoft)')};color:${isExpired?'var(--danger)':(low?'var(--danger)':'var(--primary)')};">${fmtInt(m.stockPills)} medicine in stock${isExpired?" · expired":""}</span>
         <div class="flex gap2">
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;color:var(--primary);border-color:var(--primarySoft);" onclick="toggleRestock('${m.id}')">Restock</button>
           <button class="btn btn-outline" style="padding:6px 12px;font-size:12px;border-radius:999px;" onclick="openEdit('${m.id}')">Edit</button>
@@ -7061,7 +7337,7 @@ function buildInvCard(m){
               <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(USE_BATCH_PRICES && b.mrpPerBox==null)?" (base)":""}</span>
               ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
               <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
-              ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--successSoft)'};color:${soon?'var(--danger)':'var(--success)'};">${batchExpiryLabel(d)}</span>` : ""}
+              ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--primarySoft)'};color:${soon?'var(--danger)':'var(--primary)'};">${batchExpiryLabel(d)}</span>` : ""}
               <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
             </div>`;
           }).join("")}
@@ -7321,7 +7597,7 @@ function invHeaderRowHtml(){
     `<button type="button" class="pill-badge" style="border:none;-webkit-appearance:none;appearance:none;margin:0;font-family:inherit;cursor:pointer;background:${active?`var(${solidVar})`:`var(${softVar})`};color:${active?'#fff':`var(${solidVar})`};" onclick="toggleInvStatFilter('${kind}')">${fmtInt(count)}</button>`;
   return `
       <div class="flex gap2">
-        ${pillBtn(inv.statFilter==='special', '--warningSoft', '--warning', specialMedicines, 'special')}
+        ${pillBtn(inv.statFilter==='special', '--specialSoft', '--special', specialMedicines, 'special')}
         ${pillBtn(inv.statFilter==='sTag', '--dangerSoft', '--danger', sTaggedMedicines, 'sTag')}
       </div>
       ${invArrangeBtnHtml()}
@@ -8330,7 +8606,7 @@ function buildLowStockRow(m){
       <div class="card" style="border-color:#F3C6BE;">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
             <span style="font-size:12px;font-weight:700;color:var(--danger);">${fmtInt(m.stockPills)} medicine left</span>
           </div>
@@ -8343,7 +8619,7 @@ function buildHiddenLowStockRow(m){
       <div class="card" style="border-color:#F0DCB0;">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
             <p class="small faint" style="margin:2px 0 0;">${fmtInt(m.stockPills)} medicine left</p>
           </div>
@@ -8356,7 +8632,7 @@ function buildExpiringRow({med:m,batch:b,daysLeft}){
       <div class="card" style="border-color:${daysLeft>10?'#EAD9A8':'#F3C6BE'};">
         <div class="row">
           <div>
-            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--warningSoft);color:var(--warning);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
+            <p class="item-title">${esc(m.name)}${m.category?` <span class="pill-badge" style="background:var(--primarySoft);color:var(--primary);font-size:10px;vertical-align:middle;">${esc(m.category)}</span>`:""}${m.specialCategory?` <span class="pill-badge" style="background:var(--specialSoft);color:var(--special);font-size:10px;vertical-align:middle;">${esc(m.specialCategory)}</span>`:""}</p>
             ${(m.formula||m.mg)?`<p class="small" style="color:var(--primary);margin:2px 0 0;">${esc(m.formula)}${m.formula&&m.mg?' · ':''}${esc(fmtBig(m.mg))}</p>`:""}
             <p class="small" style="margin:2px 0 0;color:${daysLeft>10?'var(--warning)':'var(--danger)'};font-weight:700;">${b.pillsRemaining} medicine · ${batchExpiryLabel(daysLeft)}</p>
           </div>
@@ -9069,10 +9345,36 @@ function finishSetupAdmin(){
 /* ---- Login/lock screen, shown whenever sessionAuthed is false ---- */
 function pickLoginProfile(id){ loginUi.pickedId=id; loginUi.pin=""; loginUi.error=""; render(); }
 function onLoginPin(v){ loginUi.pin=v.replace(/[^0-9]/g,"").slice(0,6); loginUi.error=""; }
+/*PINGUARD-BEGIN*/
+// Wrong-PIN lockout. 5 wrong PINs on one account lock PIN checks for that account for 30 s; every further wrong PIN doubles
+// the wait (60 s, 2 min ... up to 15 min). It is remembered on the phone (so closing the app does not reset it) and a correct
+// PIN clears it. While locked even the right PIN is refused. This stops someone sitting with the phone from trying
+// PINs one after another; it cannot protect data that is read straight from the cloud database (see Firestore rules, #5).
+function _pinFails(){ try{ return JSON.parse(localStorage.getItem("clinic_pin_fails")||"{}"); }catch(e){ return {}; } }
+function _pinFailsSave(o){ try{ localStorage.setItem("clinic_pin_fails", JSON.stringify(o)); }catch(e){} }
+function pinLockLeft(id){ const r=_pinFails()[id]; return (r && r.until>Date.now()) ? Math.ceil((r.until-Date.now())/1000) : 0; }
+function pinWaitText(sec){ return sec>=90 ? Math.ceil(sec/60)+" minutes" : sec+" seconds"; }
+// returns { ok:true } or { ok:false, locked:seconds (0 = just a wrong PIN) }
+function pinCheck(id, entered, actual){
+  const left = pinLockLeft(id); if(left) return { ok:false, locked:left };
+  if(String(actual||"") === String(entered||"")){
+    const all=_pinFails(); if(all[id]){ delete all[id]; _pinFailsSave(all); }
+    return { ok:true };
+  }
+  const all=_pinFails(), r=all[id]||{ n:0, until:0 }; r.n++;
+  if(r.n>=5) r.until = Date.now() + Math.min(900, 30*Math.pow(2, r.n-5))*1000;
+  all[id]=r; _pinFailsSave(all);
+  return { ok:false, locked:pinLockLeft(id) };
+}
+/*PINGUARD-END*/
 function submitLogin(){
   const p = profiles.find(x=>x.id===loginUi.pickedId);
   if(!p){ loginUi.error="Pick your name first"; render(); return; }
-  if((p.pin||"")!==loginUi.pin){ loginUi.error="Wrong PIN — try again"; loginUi.pin=""; render(); return; }
+  const _chk = pinCheck(p.id, loginUi.pin, p.pin);
+  if(!_chk.ok){
+    loginUi.error = _chk.locked ? `Too many wrong PINs. Try again in ${pinWaitText(_chk.locked)}.` : "Wrong PIN — try again";
+    loginUi.pin=""; render(); return;
+  }
   activateProfile(p.id);
   loginUi = { pickedId:"", pin:"", error:"" };
   render();
@@ -9450,8 +9752,9 @@ function closePrivilegeConfirm(){ privilegeConfirmUi.open=false; render(); }
 function onPrivilegeConfirmPin(v){ privilegeConfirmUi.actorPin = v.replace(/[^0-9]/g,"").slice(0,6); privilegeConfirmUi.error=""; }
 function confirmPrivilegeSave(){
   const actor = profiles.find(x=>x.id===currentProfileId);
-  if(!actor || (actor.pin||"")!==privilegeConfirmUi.actorPin){
-    privilegeConfirmUi.error = "Incorrect PIN";
+  const _chk = actor ? pinCheck(actor.id, privilegeConfirmUi.actorPin, actor.pin) : { ok:false, locked:0 };
+  if(!_chk.ok){
+    privilegeConfirmUi.error = _chk.locked ? `Too many wrong PINs. Try again in ${pinWaitText(_chk.locked)}.` : "Incorrect PIN";
     render();
     return;
   }
@@ -9523,8 +9826,9 @@ function confirmAdminTransfer(){
   const actor = profiles.find(x=>x.id===currentProfileId);
   const target = profiles.find(x=>x.id===adminTransferUi.targetId);
   if(!actor || !target){ closeAdminTransferConfirm(); return; }
-  if((actor.pin||"") !== adminTransferUi.actorPin){
-    adminTransferUi.error = "Incorrect PIN";
+  const _chk = pinCheck(actor.id, adminTransferUi.actorPin, actor.pin);
+  if(!_chk.ok){
+    adminTransferUi.error = _chk.locked ? `Too many wrong PINs. Try again in ${pinWaitText(_chk.locked)}.` : "Incorrect PIN";
     render();
     return;
   }
@@ -9882,7 +10186,7 @@ function buildNoteCard(n){
           <p style="font-size:11px;color:var(--faint);margin:6px 0 0;">${fmtDateTime(n.updatedAt)}</p>
         </button>
         <div class="flex gap2 mt2">
-          <button class="btn btn-success flex1" style="padding:6px;font-size:12px;" onclick="shareNote('${n.id}')">📤 Share</button>
+          <button class="btn btn-primary flex1" style="padding:6px;font-size:12px;box-shadow:none;" onclick="shareNote('${n.id}')">📤 Share</button>
           <button class="btn btn-outline" style="padding:6px 12px;" onclick="deleteNote('${n.id}')">🗑</button>
         </div>
       </div>`;
@@ -9942,7 +10246,7 @@ function renderNotes(){
       <textarea ${NOAC} id="noteBodyInput" oninput="onNoteBody(this.value)" placeholder="Write here — supplier calls, reminders, things to order, notes for the next shift…" style="min-height:40vh;">${esc(notesUi.draftBody)}</textarea>
       <div class="flex gap2 mt3">
         <button class="btn btn-primary flex1" onclick="saveDraftNote()">Save note</button>
-        ${!isNew?`<button class="btn btn-success" onclick="shareNote('${notesUi.openId}')">📤 Share</button>`:""}
+        ${!isNew?`<button class="btn btn-primary" onclick="shareNote('${notesUi.openId}')">📤 Share</button>`:""}
       </div>
       ${!isNew?`<button class="btn" style="width:100%;background:none;color:var(--danger);margin-top:8px;" onclick="deleteNote('${notesUi.openId}')">🗑 Delete note</button>`:""}
     `;
@@ -10044,6 +10348,7 @@ function pickNewerMedicine(a,b){
     id: a.id, name: base.name, category: base.category||"", specialCategory: base.specialCategory||"", formula: base.formula||"", mg: base.mg||"",
     mrpPerBox: base.mrpPerBox, pillsPerBox: base.pillsPerBox, gtin: base.gtin||"",
     lowStockAt: base.lowStockAt, noWarn: !!base.noWarn, sTag: !!base.sTag, deleted: !!base.deleted,
+    deletedBy: base.deleted ? (base.deletedBy||"") : undefined, deletedAt: base.deleted ? (base.deletedAt||0) : undefined,
     createdAt: a.createdAt || b.createdAt || undefined,     // was dropped by every sync merge, so "when added" was lost
     updatedAt: Math.max(aT,bT),
     batches: reconcileBatchesForSync(a.batches, b.batches)
@@ -10337,6 +10642,7 @@ function settingsSections(){
   add("Stock & data", [
     it("📋","Stock count","openTools('count')"),
     canTransferStock() ? it("📤","Send medicine cards to another branch","openCardsCopy()", "Cards only, no stock or prices") : null,
+    it("♻","Deleted medicines","openDelMeds()", deletedMedicines().length ? deletedMedicines().length+" can be restored" : "Restore anything removed"),
     it("💾","Backup","toggleBackupModal()"),
     it("⬆️","Upload offline data","manualPushToCloud()")
   ]);
@@ -10776,12 +11082,12 @@ function trySyncNow(){
   if(pushInFlight) return;
   if(hasPendingSync() || (syncStatus!=="synced" && syncStatus!=="syncing")) pushToCloud();
 }
-function schedulePushToCloud(){
+function schedulePushToCloud(urgent){
   if(suppressPush) return;
   markPendingSync();
   if(!fbDb){ ensureFirebase(); return; }
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(pushToCloud, 1200);
+  syncDebounceTimer = setTimeout(pushToCloud, urgent ? 250 : 1200);
 }
 // Wraps a Firestore promise so a genuinely dead connection resolves to "Offline" within 10s
 // instead of hanging forever — Firestore's own promises don't reject when offline, they just
@@ -11601,17 +11907,38 @@ setTimeout(aiProcessQueue,6000);
   let base=usableH();
   let shrunk=false;
   const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
-  // fullH = the page height with no keyboard. While the keyboard is (or was just) up, the tab bar is pushed down by
-  // fullH - current height, i.e. back to where it normally is, so the keyboard covers it and it never rides on top of
-  // the keyboard — also not for a moment while the keyboard is closing (the shift shrinks as the page grows back).
-  // fullH is only ever measured while NO keyboard is around: a phone's browser bar sliding in and out also changes the
-  // page height a little, and that must never be mistaken for the keyboard (it used to push the tab bar under the browser bar).
-  let fullH=window.innerHeight, graceUntil=0;
+  // The tab bar always stays where it normally is and the keyboard simply covers it. While the keyboard is (or was just) up,
+  // the tab bar is pushed back down by exactly how much the page shrank, so it never rides on top of the keyboard — also not
+  // for a moment while the keyboard is opening or closing (the push follows the page every frame).
+  // HOW MUCH THE PAGE SHRANK is read two ways, because some phones / the App Inventor web viewer report a STALE page height
+  // (window.innerHeight never changes) while the page itself really is shorter: (1) innerHeight, and (2) a zero-height probe
+  // pinned to the bottom edge of the page, which always sits where the page really ends. The larger of the two is used.
+  // The "no keyboard" size is only measured while no keyboard is around, and a keyboard is only assumed when the shrink is
+  // keyboard-sized (15%+) or a typing box was focused in the last 0.9 s — a phone browser's address/tool bar sliding in and
+  // out is a few percent and must never be mistaken for the keyboard.
+  const probe = document.createElement("div");
+  probe.setAttribute("aria-hidden","true");
+  probe.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:0;visibility:hidden;pointer-events:none;";
+  (document.body||document.documentElement).appendChild(probe);
+  const probeBottom = ()=>{ try{ return probe.getBoundingClientRect().top; }catch(e){ return 0; } };
+  let fullH=window.innerHeight, fullB=probeBottom(), graceUntil=0, focusAt=0, lastEvt=0, poll=0;
   function chk(){
+    const now=Date.now();
+    // Pinched in (zoomed): the visible area is smaller because of the zoom, NOT because of a keyboard — do nothing.
+    if(window.visualViewport && window.visualViewport.scale>1.02){
+      document.body.classList.remove("kb-open","kb-resized");
+      document.documentElement.style.setProperty("--kb-shift","0px");
+      return false;
+    }
     const h=usableH(); if(h>base) base=h;
-    const open=h < base*0.8;
+    const ih=window.innerHeight, pb=probeBottom();
+    const shrinkP = (fullB>0 && pb>0) ? Math.max(0, fullB-pb) : 0;
+    const shrink = Math.max(shrinkP, Math.max(0, fullH-ih));
+    const typingNow = typing(document.activeElement);
+    const open = (h < base*0.8) || shrink > 0.15*Math.max(fullB, fullH);
+    const opening = typingNow && now-focusAt<900 && shrink>8;
     document.body.classList.toggle("kb-open", open);
-    if(open){ shrunk=true; graceUntil=Date.now()+700; }
+    if(open){ shrunk=true; graceUntil=now+700; }
     else if(shrunk){
       // The keyboard was just closed (hide key / back button). Android keeps the typing box focused when that happens,
       // so release the box.
@@ -11619,17 +11946,29 @@ setTimeout(aiProcessQueue,6000);
       document.body.classList.remove("kb-typing");
       const a=document.activeElement; if(a && a!==document.body && typing(a)) a.blur();
     }
-    const ih=window.innerHeight;
-    const kbLikely = open || Date.now()<graceUntil;     // not tied to the box staying focused: Android keeps it focused after the keyboard closes
-    if(!kbLikely) fullH=ih;                            // no keyboard around: this IS the full height (browser bar, split screen, rotation…)
-    const shift = kbLikely ? Math.max(0, Math.round(fullH-ih)) : 0;
+    const kbLikely = open || opening || now<graceUntil;
+    if(!kbLikely && !typing(document.activeElement)){ fullH=ih; if(pb>0) fullB=pb; }   // no keyboard around: this IS the full size
+    const shift = kbLikely ? Math.round(shrink) : 0;
     document.documentElement.style.setProperty("--kb-shift", shift+"px");
     document.body.classList.toggle("kb-resized", shift>1);
+    return kbLikely;
   }
-  window.addEventListener("resize",chk);
-  if(window.visualViewport) window.visualViewport.addEventListener("resize",chk);
-  document.addEventListener("focusin",chk);
-  window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=usableH(); fullH=window.innerHeight; shrunk=false; chk(); },500));
+  // While a typing box is focused (and for 1.5 s after anything changes) look at the page every frame: that catches the
+  // keyboard sliding in and out even on phones that send no resize event at all. Stops by itself when nothing is happening.
+  function pollStart(){
+    lastEvt=Date.now();
+    if(poll || typeof requestAnimationFrame!=="function") return;
+    const step=()=>{
+      const active=chk();
+      if(active || typing(document.activeElement) || Date.now()-lastEvt<1500) poll=requestAnimationFrame(step); else poll=0;
+    };
+    poll=requestAnimationFrame(step);
+  }
+  window.addEventListener("resize",()=>{ chk(); pollStart(); });
+  if(window.visualViewport) window.visualViewport.addEventListener("resize",()=>{ chk(); pollStart(); });
+  document.addEventListener("focusin",e=>{ if(typing(e.target)) focusAt=Date.now(); chk(); pollStart(); });
+  document.addEventListener("focusout",()=>{ pollStart(); });
+  window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=usableH(); fullH=window.innerHeight; fullB=probeBottom(); shrunk=false; chk(); },500));
   // Fallback for a phone that gives no sign of the keyboard (page never shrinks): hide the tab bar as soon as a typing
   // box gets focus, show it again when it loses focus. Ignored by the CSS whenever the page did shrink (kb-resized).
   // Many phones / the App Inventor web viewer give NO signal at all when the keyboard is closed with the hide key or the back
@@ -12153,7 +12492,7 @@ function renderAiModal(){
       <details ${aiUi.setupOpen?"open":""} ontoggle="aiUi.setupOpen=this.open">
         <summary class="small" style="cursor:pointer;color:var(--primary);">⚙ Handwriting setup (free Gemini key)</summary>
         <p class="small faint" style="margin:8px 0 6px;">Get a free key at aistudio.google.com → “Get API key”, then paste it here. It is saved on this phone only. Photos you read are sent to Google, and the free plan may use them to improve Google's models.</p>
-        <input ${NOAC_RAW} type="text" value="${esc(aiGeminiKey())}" oninput="localStorage.setItem(AI_GEMINI_KEY,this.value.trim())" placeholder="Gemini API key" style="margin-bottom:6px;">
+        <input ${NOAC_RAW} type="password" value="${esc(aiGeminiKey())}" oninput="localStorage.setItem(AI_GEMINI_KEY,this.value.trim())" placeholder="Gemini API key" style="margin-bottom:6px;">
         <input ${NOAC_RAW} type="text" value="${esc(localStorage.getItem(AI_MODEL_KEY)||"")}" oninput="localStorage.setItem(AI_MODEL_KEY,this.value.trim())" placeholder="Model (leave empty for ${AI_DEFAULT_MODEL})">
       </details>`;
   } else {
@@ -12284,6 +12623,7 @@ async function diagSnapshot(){
   s["Cloud sync"]=syncStatus+(lastSyncError?" · "+lastSyncError:"");
   s["Firebase"]=fbDb?"started":"NOT started";
   s["Cloud document"]=est!=null?formatBytes(est)+" = "+(est/1048576*100).toFixed(0)+"% of the 1 MB Firestore limit":"unknown";
+  s["Medicine safety net"]=(_vaultInfo.ok?"working":"NOT working on this phone")+" · "+(_vaultInfo.snaps||0)+" safety copies"+(_vaultInfo.lastT?" (newest "+fmtDateTime(_vaultInfo.lastT)+")":"")+" · "+inventory.filter(m=>m&&m.deleted).length+" deleted (restorable) · "+(_vaultInfo.recovered||0)+" put back automatically this session"+(window.__lsHydrationFailed?" · PHONE STORAGE UNREADABLE":"")+(window.__lsPersistFailed?" · a storage write failed earlier":"");
   s["Data"]=inventory.filter(m=>!m.deleted).length+" medicines · "+transactions.filter(t=>!t.deleted).length+" bills · "+profiles.filter(p=>!p.deleted).length+" users";
   try{ const e=await navigator.storage.estimate(); s["Phone storage"]=formatBytes(e.usage)+" used of "+formatBytes(e.quota); }catch(x){ s["Phone storage"]="n/a"; }
   s["Offline mode"]=navigator.serviceWorker?(navigator.serviceWorker.controller?"service worker active":"not controlling this page yet"):"not supported";
@@ -12542,6 +12882,12 @@ function returnsCardHtml(){
 // always sees the real saved data. On a normal browser where the shim never installed itself
 // (real localStorage worked fine), __localStorageReady still resolves immediately either way.
 Promise.resolve(window.__localStorageReady).then(function(){
+  if(window.__lsHydrationFailed){
+    // The phone's saved copy could not be read. Running on an empty copy could hide medicines and let new work be lost,
+    // so the app stops here instead (nothing is written to the saved copy). Everything already in the cloud is safe.
+    document.body.insertAdjacentHTML("beforeend",'<div style="position:fixed;inset:0;z-index:99999;background:#fff;color:#12303a;display:flex;align-items:center;justify-content:center;padding:28px;text-align:center;font-family:system-ui,sans-serif;"><div><p style="font-size:44px;margin:0 0 8px">⚠️</p><p style="font-weight:700;font-size:18px;margin:0 0 8px">Phone storage could not be opened</p><p style="font-size:14px;line-height:1.5;margin:0 0 18px;color:#5b7078">To protect your medicines and bills, the app has stopped. Your data in the cloud is safe. Close the app completely and open it again. If this keeps happening, tell the Admin.</p><button onclick="location.reload()" style="background:#0f766e;color:#fff;border:0;border-radius:12px;padding:14px 24px;font-size:16px;font-weight:700">Try again</button></div></div>');
+    return;
+  }
   applyTheme(getThemeId());
   loadAll();
   bill = newBillState();
@@ -12549,6 +12895,14 @@ Promise.resolve(window.__localStorageReady).then(function(){
   startCloudSync();
   enforceBranchForCurrentUser();
   setTimeout(trySyncNow, 2500); // upload anything left unsynced from a previous session
+  setTimeout(function(){ vaultNote(); vaultAudit(); }, 4000);                       // medicine safety net: put back anything that went missing
+  setInterval(function(){ if(document.visibilityState!=="hidden") vaultAudit(); }, 600000);
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState==="hidden"){
+      // leaving the app: make sure every save is already on its way to the phone storage, the safety net and the cloud
+      try{ if(window.__lsFlush) window.__lsFlush(); vaultFlush(1500); if(typeof hasPendingSync==="function" && hasPendingSync() && fbDb){ clearTimeout(syncDebounceTimer); pushToCloud(); } }catch(e){}
+    } else if(Date.now()-_lastAudit>120000){ vaultAudit(); }
+  });
   checkForAppUpdate();
   setTimeout(tellAppThemeColour, 6000);
 });
