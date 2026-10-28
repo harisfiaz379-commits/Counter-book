@@ -280,6 +280,10 @@
   /* Typing inside a pop-up menu: lift the menu above the on-screen keyboard (see "keep typing boxes visible" in the script) */
   body.kb-lift .modal-overlay{padding-bottom:var(--kb,0px);box-sizing:border-box;}
   body.kb-lift .modal-overlay .modal{max-height:calc(100vh - var(--kb,0px) - 14px) !important;}
+  /* The phone reports where the keyboard is: the pop-up is pinned to exactly the visible area above it (--vvTop / --vvH follow the
+     visible area even while the browser pans it), so it always sits right on top of the keyboard and never moves between boxes. */
+  body.kb-vv .modal-overlay{top:var(--vvTop,0px);bottom:auto;height:var(--vvH,100%);padding-bottom:0;box-sizing:border-box;}
+  body.kb-vv .modal-overlay .modal{max-height:calc(var(--vvH,100vh) - 10px) !important;}
   .modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);}
   .modal-body{margin:12px 16px;padding:12px;background:var(--page);border:1px solid var(--border);border-radius:8px;
     font-size:12px;font-family:ui-monospace,monospace;white-space:pre-wrap;overflow-y:auto;color:var(--text);}
@@ -326,8 +330,128 @@
   }
   /* the three buttons in the top-right of the header: Refresh, Settings, AI reading */
   @keyframes settingsIn{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
+  .dm-scroll{max-height:62vh;overflow-y:auto;}
+  body.settings-open #delMedModalRoot .dm-scroll{max-height:none;overflow:visible;}   /* as a full-screen Settings page the whole page scrolls */
+  body.settings-open #delMedModalRoot .dm-search{position:sticky;top:0;z-index:2;background:var(--page);padding-bottom:6px;}
+  /* ===== Storage & health page ===== */
+  .hbanner{display:flex;gap:12px;align-items:center;border-radius:16px;padding:14px 16px;margin:6px 0 4px;}
+  .hbanner .hico{font-size:28px;line-height:1;}
+  .hbanner b{display:block;font-size:16px;}
+  .hbanner span.hsub{display:block;font-size:12.5px;margin-top:2px;opacity:.9;}
+  .hsec{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:18px 4px 6px;}
+  .hrow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+  .hrow .hl{font-weight:600;font-size:14px;}
+  .hbar{height:10px;border-radius:999px;background:var(--border);overflow:hidden;margin:7px 0 5px;}
+  .hbar>i{display:block;height:100%;border-radius:999px;}
+  .hchip{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+  .htiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+  .htile{background:var(--page);border-radius:12px;padding:10px 6px;text-align:center;}
+  .htile b{display:block;font-size:17px;color:var(--text);}
+  .htile span{font-size:11px;color:var(--muted);}
+  .hnote{font-size:12px;color:var(--muted);margin:2px 0 0;}
+  .hdiv{border:none;border-top:1px solid var(--border);margin:12px 0;}
+  .hissue{font-size:13px;padding:7px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
+  .hissue:last-child{border-bottom:none;}
+  details.hmore summary{cursor:pointer;font-weight:600;font-size:14px;list-style:none;}
+  details.hmore summary::-webkit-details-marker{display:none;}
+  details.hmore summary::after{content:" ›";color:var(--muted);}
+  details.hmore[open] summary::after{content:" ⌄";}
+  /* ===== Settings sub-pages =====
+     While the Settings page is open (body.settings-open), each menu opened from it (Manage Users, Branches, Printer, Backup...)
+     is shown as its own FULL-SCREEN page layered above Settings, with a back arrow - like Instagram. Closing it returns to Settings.
+     Small dialogs opened from inside those pages (confirm, share, date picker...) are lifted above them and stay small. */
+  body.settings-open #manageUsersModalRoot .modal-overlay,
+  body.settings-open #branchesModalRoot .modal-overlay,
+  body.settings-open #backupModalRoot .modal-overlay,
+  body.settings-open #delMedModalRoot .modal-overlay,
+  body.settings-open #healthModalRoot .modal-overlay,
+  body.settings-open #diagModalRoot .modal-overlay,
+  body.settings-open #printerModalRoot .modal-overlay,
+  body.settings-open #scanMethodModalRoot .modal-overlay,
+  body.settings-open #themeModalRoot .modal-overlay,
+  body.settings-open #kbTestRoot .modal-overlay,
+  body.settings-open #receiptDesignRoot .modal-overlay,
+  body.settings-open #toolsModalRoot .modal-overlay{z-index:120;align-items:stretch;justify-content:stretch;background:var(--page);animation:none;}
+  body.settings-open #manageUsersModalRoot .modal-overlay > .modal,
+  body.settings-open #branchesModalRoot .modal-overlay > .modal,
+  body.settings-open #backupModalRoot .modal-overlay > .modal,
+  body.settings-open #delMedModalRoot .modal-overlay > .modal,
+  body.settings-open #healthModalRoot .modal-overlay > .modal,
+  body.settings-open #diagModalRoot .modal-overlay > .modal,
+  body.settings-open #printerModalRoot .modal-overlay > .modal,
+  body.settings-open #scanMethodModalRoot .modal-overlay > .modal,
+  body.settings-open #themeModalRoot .modal-overlay > .modal,
+  body.settings-open #kbTestRoot .modal-overlay > .modal,
+  body.settings-open #receiptDesignRoot .modal-overlay > .modal,
+  body.settings-open #toolsModalRoot .modal-overlay > .modal{max-width:none;width:100%;height:100%;max-height:none !important;border-radius:0;box-shadow:none;overflow-y:auto;animation:settingsIn .18s ease-out;padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box;}
+  body.settings-open #manageUsersModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #branchesModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #backupModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #delMedModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #healthModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #diagModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #printerModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #scanMethodModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #themeModalRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #kbTestRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #receiptDesignRoot .modal-overlay > .modal > .modal-head,
+  body.settings-open #toolsModalRoot .modal-overlay > .modal > .modal-head{flex-direction:row-reverse;justify-content:flex-end;gap:6px;border-bottom:none;padding:calc(env(safe-area-inset-top,0px) + 8px) 8px 8px;flex:none;}
+  body.settings-open #manageUsersModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #branchesModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #backupModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #delMedModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #healthModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #diagModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #printerModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #scanMethodModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #themeModalRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #kbTestRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #receiptDesignRoot .modal-overlay > .modal > .modal-head strong,
+  body.settings-open #toolsModalRoot .modal-overlay > .modal > .modal-head strong{font-size:20px;}
+  body.settings-open #manageUsersModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #branchesModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #backupModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #delMedModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #healthModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #diagModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #printerModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #scanMethodModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #themeModalRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #kbTestRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #receiptDesignRoot .modal-overlay > .modal > .modal-head .modal-x,
+  body.settings-open #toolsModalRoot .modal-overlay > .modal > .modal-head .modal-x{width:42px;height:42px;padding:0;font-size:0;background:none;color:var(--text);cursor:pointer;}
+  body.settings-open #manageUsersModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #branchesModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #backupModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #delMedModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #healthModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #diagModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #printerModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #scanMethodModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #themeModalRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #kbTestRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #receiptDesignRoot .modal-overlay > .modal > .modal-head .modal-x::before,
+  body.settings-open #toolsModalRoot .modal-overlay > .modal > .modal-head .modal-x::before{content:"\2039";font-size:30px;line-height:42px;color:var(--text);}
+  body.settings-open #shareModalRoot .modal-overlay,
+  body.settings-open #moveStaffModalRoot .modal-overlay,
+  body.settings-open #adminTransferModalRoot .modal-overlay,
+  body.settings-open #postTransferChoiceModalRoot .modal-overlay,
+  body.settings-open #privilegeConfirmModalRoot .modal-overlay,
+  body.settings-open #scanModalRoot .modal-overlay,
+  body.settings-open #receiptModalRoot .modal-overlay,
+  body.settings-open #historyModalRoot .modal-overlay,
+  body.settings-open #categoryModalRoot .modal-overlay{z-index:130;}
+  body.settings-open #confirmModalRoot .modal-overlay,
+  body.settings-open #numberPromptModalRoot .modal-overlay{z-index:135;}
+  body.settings-open #datePickerModalRoot .modal-overlay{z-index:140;}
+  body.settings-open #toast{z-index:150;}
   .hdr-btn{background:rgba(255,255,255,.18);color:#fff;border:none;border-radius:7px;padding:0 6px;height:22px;font-size:10px;font-weight:600;line-height:1;white-space:nowrap;cursor:pointer;}
   .expiry-tag{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;display:inline-block;}
+  .item-title,.small{overflow-wrap:anywhere;}
+  .pill-badge{max-width:100%;overflow-wrap:anywhere;}
+  /* dark mode: the Per-box box and its typing area must follow the dark colours (they were forced light) */
+  html[data-mode="dark"] .ppb-box,html[data-mode="dark"] .ppb-box > input{background-color:#232D34 !important;color:var(--text);}
+  html[data-mode="dark"] .ppb-box:focus-within,html[data-mode="dark"] .ppb-box:focus-within > input{background-color:#1B242A !important;}
   .icon-del-btn{background:none;border:none;color:var(--faint);cursor:pointer;font-size:16px;}
   .modal-x{border:none;font-size:18px;padding:4px 8px;}
   .item-title{font-weight:700;font-size:14px;margin:0;}
@@ -363,15 +487,11 @@
   .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
-  /* The tab bar always stays where it is and the on-screen keyboard simply covers it. Phones that shrink the page when the
-     keyboard opens would otherwise lift the tab bar up on top of the keyboard (and flash it there while the keyboard is
-     closing), so in portrait the bar is pushed back down by exactly how much the page shrank (--kb-shift, set by the script
-     below). Only a phone that gives no sign at all of the keyboard (no shrink) keeps the old behaviour of hiding the bar
-     while a typing box is focused. */
+  /* While the on-screen keyboard has made the page shorter (portrait), the tab bar is hidden so it never sits on top of the
+     keyboard. body.kb-nav-hide is set / removed by the script below purely from the measured page height. */
   @media (orientation:portrait){
-    nav, #navSafeBar{transform:translate3d(0,var(--kb-shift,0px),0);-webkit-transform:translate3d(0,var(--kb-shift,0px),0);}
+    body.kb-nav-hide nav, body.kb-nav-hide #navSafeBar{visibility:hidden;pointer-events:none;}
   }
-  body.kb-typing:not(.kb-resized) nav, body.kb-typing:not(.kb-resized) #navSafeBar{display:none !important;}
   #datePickerModalRoot .modal-overlay{z-index:70;}
   #invFab{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
   #invStickyBar{box-shadow:0 6px 8px -6px rgba(15,23,30,.22);}
@@ -403,6 +523,10 @@
   .seg{display:flex;flex:none;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#fff;}
   .seg button{border:none;background:none;padding:11px 18px;font-size:14px;font-weight:600;color:var(--muted);font-family:inherit;cursor:pointer;}
   .seg button.on{background:var(--primary);color:#fff;box-shadow:0 4px 12px rgba(15,92,87,.25);}
+  /* Bill page: the "+ Add" button (Other charges) and the Rs / % switch (Discount) are exactly the same size. */
+  .endctl{flex:none;width:72px;height:37px;box-sizing:border-box;}
+  .btn.endctl{padding:0;display:flex;align-items:center;justify-content:center;white-space:nowrap;}
+  .seg.endctl button{flex:1;min-width:0;padding:0;display:flex;align-items:center;justify-content:center;}
   #invCardsList > div{content-visibility:auto;contain-intrinsic-size:auto 300px;}
   #invStickyBar{position:sticky;top:0;z-index:25;background:var(--page);margin:0 -12px 4px;padding:8px 12px 2px;transition:transform .22s ease;will-change:transform;}
   #invStickyBar.hide{transform:translateY(-115%);}
@@ -473,6 +597,14 @@
   html[data-mode="dark"] [style*="color:#111"],html[data-mode="dark"] [style*="color:#333"],html[data-mode="dark"] [style*="color:#000"]{color:var(--text)!important;}
   html[data-mode="dark"] .keep-light{background:#fff!important;}
   html[data-mode="dark"] .keep-light *{color:#111!important;}
+  /* Dark mode: the "number of medicine" (pills per box) box and the Inventory search box had light backgrounds fixed in the
+     stylesheet (white while typing), so the light dark-mode text on them was almost invisible. Use the dark input colours. */
+  html[data-mode="dark"] .ppb-box{background-color:#232D34;}
+  html[data-mode="dark"] .ppb-box:focus-within{background-color:#1B242A;}
+  html[data-mode="dark"] .ppb-box > input{background-color:#232D34 !important;color:var(--text) !important;}
+  html[data-mode="dark"] .ppb-box:focus-within > input{background:#1B242A !important;}
+  html[data-mode="dark"] #invStickyBar .search-wrap input{background:#232D34 !important;border-color:var(--border) !important;color:var(--text) !important;box-shadow:0 2px 6px rgba(0,0,0,.35);}
+  html[data-mode="dark"] #invStickyBar .search-wrap input:focus{background:#1B242A !important;}
   #datePickerModalRoot,#datePickerModalRoot *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
   #datePickerModalRoot button{touch-action:manipulation;}
   body.dp-open,body.dp-open *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
@@ -531,6 +663,7 @@
 <div id="backupModalRoot"></div>
 <div id="delMedModalRoot"></div>
 <div id="diagModalRoot"></div>
+<div id="healthModalRoot"></div>
 <div id="retModalRoot"></div>
 <div id="printerModalRoot"></div>
 <div id="aiModalRoot"></div>
@@ -562,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v155";
+const APP_VERSION = "v168";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -1046,9 +1179,9 @@ async function vaultAudit(){
   finally{ _auditRunning = false; }
 }
 /*VAULT-END*/
-let delMedUi = { open:false };
+let delMedUi = { open:false, q:"" };
 function deletedMedicines(){ return inventory.filter(m=>m && m.deleted).sort((a,b)=>(b.deletedAt||b.updatedAt||0)-(a.deletedAt||a.updatedAt||0)); }
-function openDelMeds(){ delMedUi.open = true; renderDelMedModal(); try{ syncMenuHistory(); }catch(e){} }
+function openDelMeds(){ delMedUi.open = true; delMedUi.q = ""; renderDelMedModal(); try{ syncMenuHistory(); }catch(e){} }
 function closeDelMeds(){ delMedUi.open = false; renderDelMedModal(); try{ syncMenuHistory(); }catch(e){} }
 function restoreMedicine(id){
   const m = inventory.find(x=>x.id===id); if(!m || !m.deleted) return;
@@ -1058,23 +1191,48 @@ function restoreMedicine(id){
   saveInventory(); showToast("♻ "+m.name+" restored");
   renderDelMedModal(); try{ render(); }catch(e){}
 }
-function renderDelMedModal(){
-  const root = document.getElementById("delMedModalRoot"); if(!root) return;
-  if(!delMedUi.open){ root.innerHTML = ""; return; }
-  const list = deletedMedicines(), rpt = vaultReportGet().slice(0,3);
-  root.innerHTML = `
-    <div class="modal-overlay" onclick="if(event.target===this) closeDelMeds()">
-      <div class="modal">
-        <div class="modal-head"><strong>Deleted medicines</strong><button class="modal-x" onclick="closeDelMeds()">✕</button></div>
-        <div style="padding:14px 16px;max-height:70vh;overflow-y:auto;">
-          <p class="small faint" style="margin:0 0 10px;">Medicines in your list: ${inventory.filter(m=>m&&!m.deleted).length}. Safety copies kept on this phone: ${_vaultInfo.snaps||0}${_vaultInfo.ok?"":" (safety copy is not working on this phone)"}.</p>
-          ${rpt.length?`<div class="card" style="padding:10px 14px;">${rpt.map(r=>`<p class="small" style="margin:0 0 4px;">${fmtDateTime(r.t)} — ${r.recovered&&r.recovered.length?"♻ put back: "+esc(r.recovered.join(", ")):""}${r.lost&&r.lost.length?" ⚠ could not recover: "+esc(r.lost.join(", ")):""}</p>`).join("")}</div>`:""}
-          ${list.length?list.map(m=>`
+// Search box of the Deleted medicines page: every word typed must appear in the name, strength, category, special category or formula.
+function delMedFiltered(){
+  const words = String(delMedUi.q||"").toLowerCase().split(/\s+/).filter(Boolean);
+  const all = deletedMedicines();
+  if(!words.length) return all;
+  return all.filter(m=>{ const hay = [m.name,m.mg,m.category,m.specialCategory,m.formula].filter(Boolean).join(" ").toLowerCase(); return words.every(w=>hay.includes(w)); });
+}
+function delMedRowsHtml(){
+  const list = delMedFiltered();
+  if(!list.length) return `<p class="small faint" style="text-align:center;padding:24px 0;">${deletedMedicines().length ? "No deleted medicine matches your search." : "No deleted medicines."}</p>`;
+  return list.map(m=>`
             <div class="card" style="padding:10px 14px;">
               <p style="font-weight:700;margin:0;">${esc(m.name)} ${esc(m.mg||"")}</p>
               <p class="small faint" style="margin:2px 0 8px;">${m.stockPills||0} pills · deleted ${fmtDateTime(m.deletedAt||m.updatedAt||0)}${m.deletedBy?" by "+esc(m.deletedBy):""}</p>
               <button class="btn btn-primary" style="width:100%;" onclick="restoreMedicine('${m.id}')">Restore</button>
-            </div>`).join(""):`<p class="small faint" style="text-align:center;padding:24px 0;">No deleted medicines.</p>`}
+            </div>`).join("");
+}
+function delMedCountText(){
+  const total = deletedMedicines().length, shown = delMedFiltered().length;
+  return String(delMedUi.q||"").trim() ? `Showing ${shown} of ${total} deleted` : `${total} deleted`;
+}
+function onDelMedSearch(v){
+  delMedUi.q = v;
+  const l = document.getElementById("delMedList"); if(l) l.innerHTML = delMedRowsHtml();
+  const c = document.getElementById("delMedCount"); if(c) c.textContent = delMedCountText();
+}
+function renderDelMedModal(){
+  const root = document.getElementById("delMedModalRoot"); if(!root) return;
+  if(!delMedUi.open){ root.innerHTML = ""; return; }
+  const rpt = vaultReportGet().slice(0,3);
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeDelMeds()">
+      <div class="modal">
+        <div class="modal-head"><strong>Deleted medicines</strong><button class="modal-x" onclick="closeDelMeds()">✕</button></div>
+        <div class="dm-search" style="padding:12px 16px 0;">
+          <div class="search-wrap"><span class="search-icon">🔍</span><input ${NOAC} id="delMedSearchInput" type="text" value="${esc(delMedUi.q||"")}" oninput="onDelMedSearch(this.value)" placeholder="Search deleted medicines…"></div>
+          <p id="delMedCount" class="small faint" style="margin:6px 2px 0;">${delMedCountText()}</p>
+        </div>
+        <div class="dm-scroll" style="padding:10px 16px 14px;">
+          <p class="small faint" style="margin:0 0 10px;">Medicines in your list: ${inventory.filter(m=>m&&!m.deleted).length}. Safety copies kept on this phone: ${_vaultInfo.snaps||0}${_vaultInfo.ok?"":" (safety copy is not working on this phone)"}.</p>
+          ${rpt.length?`<div class="card" style="padding:10px 14px;">${rpt.map(r=>`<p class="small" style="margin:0 0 4px;">${fmtDateTime(r.t)} — ${r.recovered&&r.recovered.length?"♻ put back: "+esc(r.recovered.join(", ")):""}${r.lost&&r.lost.length?" ⚠ could not recover: "+esc(r.lost.join(", ")):""}</p>`).join("")}</div>`:""}
+          <div id="delMedList">${delMedRowsHtml()}</div>
         </div>
       </div>
     </div>`;
@@ -2180,6 +2338,7 @@ function pushNav(resolver){
   history.pushState({ appNav:true }, "", location.href);
 }
 window.addEventListener("popstate", function(){
+  if(window.__selSheetClose && window.__selSheetClose()){ history.pushState({ appNav:true }, "", location.href); return; }   // dark-mode drop-down list was open: Back closes just that
   if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ history.pushState({ appNav:true }, "", location.href); return; } // photo reading in progress — ignore back
   window.__boxBusy = false;                                                            // (a flag left on by an error must never lock the back button)
   if(navStack.length){
@@ -2205,10 +2364,13 @@ window.addEventListener("popstate", function(){
     showToast("Press back again to exit");
   }
 });
+// These menus' state variables are declared further down the file; reading them through here can never fail if this runs early.
+function _uiOpen(f){ try{ return !!f(); }catch(e){ return false; } }
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
-  return !!(delMedUi.open || (!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
+  return !!(delMedUi.open || healthUi.open || (!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
     printerUi.open || themeUi.open || (retUi && retUi.open) || kbTestUi.open || rdUi.open || toolsUi.open || aiUi.open || backupUi.open || diagUi.open || scanUi.open || historyUi.open || pinRevealUi.open ||
+    _uiOpen(()=>branchUi.open) || _uiOpen(()=>scanMethodUi.open) || _uiOpen(()=>moveUi.open) || _uiOpen(()=>adminTransferUi.open) || _uiOpen(()=>privilegeConfirmUi.open) ||
     rec.editingMonthBreakdown || rec.expandedBreakdownSection || rec.breakdownMonthKey ||
     rec.editingId || rec.expandedTxSection || rec.expandedId || rec.expandedMonth || rec.expandedYear || rec.expandedDayBreakdown ||
     bill.medsDiscountEditing || bill.feeDiscountEditing || bill.feeEditing || testPriceEditorOpen || bill.testsMenuOpen ||
@@ -2219,13 +2381,13 @@ function closeTopMenu(){
   // first — a single back press should only ever close one layer. Safe to call with nothing
   // open at all (e.g. a leftover history entry from a menu closed via its own button) — every
   // check below just falls through and nothing happens.
+  if(healthUi.open){ if(shareText!==null){ closeShare(); return; } closeHealth(); return; }   // the share sheet (opened from this page) closes first
   if(delMedUi.open){ closeDelMeds(); return; }
   if(!sessionAuthed){
     if(addUserLoginUi.open){ closeAddUserFromLogin(); return; }
     if(forgotUi.open){ closeForgotPin(); return; }
     if(loginUi.pickedId){ loginUi = { pickedId:"", pin:"", error:"" }; render(); return; }
   }
-  if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
   if(scanUi.open){ stopCameraScan(); return; }
   if(shareText!==null){ closeShare(); return; }
   if(datePickerUi.open){ closeDatePicker(); return; }
@@ -2243,6 +2405,13 @@ function closeTopMenu(){
   if(retUi && retUi.open){ retUi.open=false; renderOverlays(); return; }
   if(diagUi.open){ diagUi.open=false; renderOverlays(); return; }
   if(backupUi.open){ backupUi.open=false; render(); return; }
+  // Pages and pop-ups opened from Settings sit on top of it, so they close first; Settings itself closes last.
+  if(_uiOpen(()=>privilegeConfirmUi.open)){ closePrivilegeConfirm(); return; }
+  if(_uiOpen(()=>adminTransferUi.open)){ closeAdminTransferConfirm(); return; }
+  if(_uiOpen(()=>moveUi.open)){ closeMoveStaff(); return; }
+  if(_uiOpen(()=>scanMethodUi.open)){ closeScanMethodModal(); return; }
+  if(_uiOpen(()=>branchUi.open)){ branchUi.open=false; branchUi.renamingId=null; branchUi.newName=""; renderOverlays(); return; }
+  if(headerMenuOpen){ closeHeaderMenu(); render(); return; }
   if(rec.editingMonthBreakdown){ cancelMonthBreakdownEdit(); return; }
   if(rec.expandedBreakdownSection){ rec.expandedBreakdownSection=null; render(); return; }
   if(rec.breakdownMonthKey){ closeMonthBreakdown(); return; }
@@ -2282,7 +2451,7 @@ function syncMenuHistory(){
 // current tab (e.g. all 300+ medicines on Inventory), which made every menu take about a second to open.
 function renderOverlays(){
   renderShareModal(); renderConfirmModal(); renderNumberPromptModal(); renderPinRevealGate(); renderInvFormModal(); renderBackupModal(); renderDiagModal(); renderRetModal(); renderPrinterModal();
-  renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderDelMedModal(); renderBranchesModal(); renderMoveStaffModal(); renderHistoryModal();
+  renderAiModal(); renderMonthBreakdownModal(); renderCategoryModal(); renderManageUsersModal(); renderDelMedModal(); renderHealthModal(); renderBranchesModal(); renderMoveStaffModal(); renderHistoryModal();
   renderAdminTransferModal(); renderPostTransferChoiceModal(); renderPrivilegeConfirmModal(); renderReceiptModal();
   renderScanMethodModal(); renderThemeModal(); renderKbTestModal(); renderReceiptDesignModal(); renderToolsModal(); renderRecoveryModal(); renderDatePickerModal(); renderScanModal();
   syncMenuHistory(); syncHeaderOffset();
@@ -2369,7 +2538,7 @@ function render(){
   renderAiModal();
   renderMonthBreakdownModal();
   renderCategoryModal();
-  renderManageUsersModal(); renderDelMedModal();
+  renderManageUsersModal(); renderDelMedModal(); renderHealthModal();
   renderHistoryModal();
   renderAdminTransferModal();
   renderPostTransferChoiceModal();
@@ -3217,9 +3386,13 @@ const DARK_VARS = {"--page":"#0E1417","--card":"#192127","--text":"#E8EEF2","--m
 // The default violet used for special-category pills (see --special/--specialSoft in :root) sits right next to
 // the Purple theme's own header/primary violet, so a special-category pill and a plain category pill became
 // almost the same colour once Purple was picked — the one theme where the two are supposed to look different
-// stopped showing a difference. Purple alone swaps --special/--specialSoft for a teal instead; every other
-// theme keeps the normal violet, which was already picked to stay clear of their colours.
-const SPECIAL_OVERRIDE = { purple: { light:{"--special":"#0E7490","--specialSoft":"#E0F2FE"}, dark:{"--special":"#67E8F9","--specialSoft":"#143442"} } };
+// stopped showing a difference. Purple swaps --special/--specialSoft for a teal instead, and Green (the default
+// theme) swaps them for orange; every other theme keeps the normal violet, which was already picked to stay clear
+// of their colours.
+const SPECIAL_OVERRIDE = {
+  purple: { light:{"--special":"#0E7490","--specialSoft":"#E0F2FE"}, dark:{"--special":"#67E8F9","--specialSoft":"#143442"} },
+  green:  { light:{"--special":"#B45309","--specialSoft":"#FFEDD5"}, dark:{"--special":"#FDBA74","--specialSoft":"#3B2410"} }
+};
 function applyTheme(id){
   const t = THEMES.find(x=>x.id===id) || THEMES[0], root = document.documentElement, st = root.style, dark = isDarkMode();
   root.setAttribute("data-mode", dark ? "dark" : "light");
@@ -3238,7 +3411,7 @@ function applyTheme(id){
   try{
     const vars = {};
     // Reads back whatever is actually sitting on the root right now — the chosen theme's colours, the dark-mode
-    // overrides, and (when Purple) the teal special-category override above — rather than re-deriving each one,
+    // overrides, and (when Purple or Green) the special-category override above — rather than re-deriving each one,
     // so the saved snapshot can never drift from what was really applied.
     ["--header","--primary","--headerSub","--primarySoft","--page", ...Object.keys(DARK_VARS)].forEach(k=>{ const v=st.getPropertyValue(k); if(v) vars[k]=v.trim(); });
     document.cookie = "cb_theme="+encodeURIComponent(JSON.stringify({ m:dark?"dark":"light", v:vars }))+"; max-age=31536000; path="+location.pathname.replace(/[^\/]*$/,"")+"; SameSite=Lax";
@@ -3575,7 +3748,7 @@ function undoReverseReturn(rt){
   (rt.items||[]).forEach(it=>{
     const med = inventory.find(m=>m.id===it.medId); if(!med) return;
     const amt = Math.abs(Number(it.pills)||0); if(amt<=0) return;
-    deductStock(med, amt);
+    takeBackFromBatches(med, it.retBatches, amt);   // same as deleteReturnTx(): the exact batches, FEFO only for what can't be matched
     med.updatedAt = Date.now();
   });
 }
@@ -3879,6 +4052,27 @@ async function flushTransferOutbox(){
           else tx.set(ref, { syncCode:SYNC_CODE, branchId:d.to, inventory:clean, transactions:[], monthAdjustments:[], updatedAt:Date.now() });
         }), 25000);
         xferOutboxRemove(d.id);
+        // A "copy medicine cards" send that skipped any card as a duplicate (see xferCardsApply)
+        // used to go completely silent about it — the sender would just see a final total in the
+        // other branch that was lower than the number of cards they picked, with nothing in the
+        // app explaining why. This runs once the merge has actually reached the destination
+        // branch's cloud copy — the only point at which "already there" is known for certain,
+        // since it checks against the real, current state of that branch, not a possibly-stale
+        // local copy. A toast is shown (logActivity() is skipped for Admin accounts by design, so
+        // a toast is the only way an Admin — who is also the only role allowed to send a transfer
+        // in the first place — would ever see this); it's also written to the activity log for a
+        // Branch Manager, since their activity log is the first place they'd look for it.
+        if(d.kind==="cards" && Array.isArray(d._cardsSkipped) && d._cardsSkipped.length){
+          const n = d._cardsSkipped.length, already = d._cardsSkipped.filter(s=>s.reason==="dup").length, dupe = n-already;
+          const bits = [];
+          if(already) bits.push(`${already} already existed in ${d.toName}`);
+          if(dupe) bits.push(`${dupe} duplicated another card already picked from ${d.fromName}`);
+          const allNames = d._cardsSkipped.map(s=>`${s.name}${s.mg?" "+s.mg:""} — ${s.reason==="dup"?`already existed in ${d.toName}`:`duplicated another picked card from ${d.fromName}`}`).join("\n");
+          const shortNames = d._cardsSkipped.slice(0,5).map(s=>s.name+(s.mg?" "+s.mg:"")).join(", ") + (n>5 ? `, +${n-5} more` : "");
+          logActivity("cards_copy_skip", `${fmtInt(n)} of ${fmtInt(d.cards.length)} card(s) to ${d.toName} skipped (${bits.join("; ")}): ${shortNames}`);
+          showToast(`ℹ ${fmtInt(n)} of ${fmtInt(d.cards.length)} card(s) sent to ${d.toName} were skipped (tap for details) — ${bits.join("; ")}`,
+            ()=>openShare(`Skipped cards — ${d.toName}\n${fmtInt(n)} of ${fmtInt(d.cards.length)} card(s) were not sent because this exact medicine (name + strength + category + formula + pack size) already existed:\n\n${allNames}`));
+        }
       }catch(e){ break; }                                           // no internet / busy: it stays in the outbox and is retried
     }
   } finally { _xferFlushing = false; }
@@ -3892,19 +4086,35 @@ document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState 
 // ======================= Copy ALL medicine cards to another branch (Settings → Stock & data) =======================
 // Sends only the cards (name, strength, category, pack size, low-stock level…), with stock 0 and NO price (MRP 0), to the other branch.
 // A medicine the other branch already has (same name + strength + category) is skipped. Nothing is removed here.
+// The other branch starts with NO stock, so every card arrives with its low-stock warning ON - the "we'll buy it later"
+// (warnings off) choice belongs to the branch it was made in and is deliberately NOT carried over.
 // It travels the same safe way as a stock transfer (outbox -> cloud copy of the other branch, applied exactly once by fixed ids).
-const XFER_CARD_FIELDS = ["name","category","specialCategory","formula","mg","pillsPerBox","lowStockAt","gtin","sTag","noWarn"];
+const XFER_CARD_FIELDS = ["name","category","specialCategory","formula","mg","pillsPerBox","lowStockAt","gtin","sTag"];
 function xferCardsApply(inv, d){
-  const have = new Set(inv.filter(x=>!x.deleted).map(xferKey)); let changed = false;
+  const preexisting = new Set(inv.filter(x=>!x.deleted).map(xferKey));   // snapshot BEFORE this transfer touches anything
+  const have = new Set(preexisting); let changed = false;
+  // Which cards were silently dropped, and why — so a sender who expected N cards to land but
+  // later sees N-1 (or fewer) in the other branch's ovals can find out exactly what happened
+  // instead of just a mismatched total with no explanation. Two different reasons look the same
+  // from outside (both are "this exact medicine already exists over there") but have different
+  // causes: "dup" = the destination branch already had this exact medicine (same name + strength
+  // + category + formula + pack size) before this transfer even started; "dupInBatch" = two of the
+  // cards picked for THIS send already had that same identity as each other, so only the first one
+  // landed — meaning that duplicate already existed side-by-side in the SENDING branch's own
+  // inventory, before anything was sent.
+  const skipped = [];
   (d.cards||[]).forEach((c,i)=>{
-    const k = xferKey(c); if(have.has(k)) return;
+    const k = xferKey(c);
+    if(have.has(k)){ skipped.push({ name:c.name||"Medicine", mg:c.mg||"", reason: preexisting.has(k) ? "dup" : "dupInBatch" }); return; }
     const id = "xm_"+d.id+"_"+i; if(inv.some(x=>x.id===id)) return;           // already added by this transfer (even if deleted since)
     have.add(k);
     inv.push({ id, name:c.name||"Medicine", category:c.category||"", specialCategory:c.specialCategory||"", formula:c.formula||"", mg:c.mg||"",
-      mrpPerBox:0, pillsPerBox:c.pillsPerBox, stockPills:0, lowStockAt:(c.lowStockAt??0), batches:[], sTag:!!c.sTag, noWarn:!!c.noWarn,
+      mrpPerBox:0, pillsPerBox:c.pillsPerBox, stockPills:0, lowStockAt:(c.lowStockAt??0), batches:[], sTag:!!c.sTag, noWarn:false,   // always warn: new branch has 0 stock (ignores noWarn even from older queued transfers)
+
       gtin:c.gtin||"", createdAt:d.createdAt||Date.now(), updatedAt:Date.now(), deleted:false });
     changed = true;
   });
+  d._cardsSkipped = skipped;   // read back by flushTransferOutbox() once this has actually reached the cloud copy of the other branch
   return changed;
 }
 let cardsUi = { toId:"", busy:false, q:"", sel:{} };
@@ -4840,7 +5050,7 @@ function renderBill(){
       <div class="flex gap2" style="align-items:center;">
         <span style="width:62px;flex:none;"></span>
         <div class="flex1"><input ${NOAC} id="billExtraAmountInput" type="text" inputmode="decimal" value="${esc(bill.extraAmount)}" oninput="onExtraAmount(this.value)" placeholder="Amount"></div>
-        <button class="btn btn-primary" style="padding:10px 16px;" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
+        <button class="btn btn-primary endctl" ${!(Number(bill.extraAmount)>0)?"disabled":""} onclick="addExtraItem()">+ Add</button>
       </div>
       ${bill.extras.length ? bill.extras.map((ex,idx)=>`
         <div class="item-row">
@@ -4853,7 +5063,7 @@ function renderBill(){
       <div class="flex gap2" style="align-items:center;margin-top:10px;">
         <span class="small" style="font-weight:700;width:62px;flex:none;color:var(--text);">Discount</span>
         <div class="flex1"><input ${NOAC} id="billTotDiscInput" type="text" inputmode="decimal" value="${esc(bill.totDisc)}" oninput="onBillTotDisc(this.value)" placeholder="total discount"></div>
-        <div class="seg"><button type="button" class="${(bill.totDiscMode||'rs')==='rs'?'on':''}" onclick="setBillTotDiscMode('rs')">Rs</button><button type="button" class="${bill.totDiscMode==='pct'?'on':''}" onclick="setBillTotDiscMode('pct')">%</button></div>
+        <div class="seg endctl"><button type="button" class="${(bill.totDiscMode||'rs')==='rs'?'on':''}" onclick="setBillTotDiscMode('rs')">Rs</button><button type="button" class="${bill.totDiscMode==='pct'?'on':''}" onclick="setBillTotDiscMode('pct')">%</button></div>
       </div>
       ${billTotDiscShares().total>0 ? `<p class="small" style="margin:6px 0 0;">Takes off ${CURRENCY}${money(billTotDiscShares().total)} from medicines, tests and doctor fee${bill.totDiscMode==='pct'&&billExtrasTotal()>0?" (other charges aren't discounted)":""}</p>` : ""}
     </div>
@@ -6808,10 +7018,15 @@ function ppbFocus(kind,id){ const el=ppbInputEl(kind,id); if(el){ el.focus(); tr
 // The merged picker is one <select> covering both lists (see mergedCategoryOptionsHtml), so
 // picking a value has to decide which of the two underlying fields it belongs to — a medicine
 // can only be in ONE of the two right now, so the other is always cleared alongside it.
+// Keeps the S button's "Mark as S.<Category>" tooltip in step with the picked category without redrawing the form.
+function setSBtnTitle(scope, label){
+  document.querySelectorAll('[data-sbtn="'+scope+'"]').forEach(b=>{ b.title = "Mark as S." + (label || "Category"); });
+}
 function onInvCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.form.category=""; inv.form.specialCategory=v; }
   else { inv.form.category=v; inv.form.specialCategory=""; }
-  refreshInvFormOnly(); // keep the "S.<Category>" toggle label in sync with whatever category is picked
+  setSBtnTitle("new", inv.form.category || inv.form.specialCategory);   // was: refreshInvFormOnly() (rebuilt the whole form)
+  renderCopyMenu();
 }
 function toggleInvForm(){ inv.showForm=!inv.showForm; inv.copyMenuOpen=false; if(inv.showForm){ inv.form={name:"",category:"",specialCategory:"",formula:"",mg:"",mrp:"",pillsPerBox:"",lowStockAt:"10",sTag:false,gtin:""}; inv.scanText=""; } refreshInvFormOnly(); }
 // The S button only changes its own colours, so it is repainted in place instead of redrawing the whole form (which made it flash).
@@ -6877,6 +7092,12 @@ function deleteMedicine(id){
     if(m) logActivity("med_del", m.name);
     saveInventory();
     removeInvCard(id);
+    // removeInvCard() only takes the one card out of the list below — it doesn't touch the oval
+    // row above (Total / Special / S-tagged / Non-special), which is built once from inventory
+    // and otherwise only rebuilt by a full renderInventory() (tab switch, branch switch, search).
+    // Without this, a deleted medicine kept counting in every oval until something else happened
+    // to trigger a full re-render — refresh it here too so the ovals drop right away.
+    refreshInvHeader();
     renderNav();
   });
 }
@@ -7064,7 +7285,8 @@ function toggleEditSTag(){ inv.editForm.sTag = !inv.editForm.sTag; paintSBtn("ed
 function onEditCategoryPicked(v){
   if(SPECIAL_CATEGORIES.includes(v)){ inv.editForm.category=""; inv.editForm.specialCategory=v; }
   else { inv.editForm.category=v; inv.editForm.specialCategory=""; }
-  refreshInvCard(inv.editId); // keep the "S.<Category>" toggle label in sync with whatever category is picked
+  setSBtnTitle("edit", inv.editForm.category || inv.editForm.specialCategory);   // was: refreshInvCard() (rebuilt the whole card)
+  renderCopyMenu();
 }
 function saveEdit(id){
   const f = inv.editForm;
@@ -7332,14 +7554,9 @@ function buildInvCard(m){
             const d = b.expiryDate ? daysUntil(b.expiryDate) : null;
             const soon = d!==null && d<=10;
             return `
-            <div class="flex gap2 mt2" style="align-items:center;">
-              <span class="small" style="flex-shrink:0;">${fmtInt(b.pillsRemaining)} medicine</span>
-              <span class="small faint" style="flex-shrink:0;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(USE_BATCH_PRICES && b.mrpPerBox==null)?" (base)":""}</span>
-              ${b.lotNo?`<span class="small faint" style="flex-shrink:0;">#${esc(b.lotNo)}</span>`:""}
-              <button type="button" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
+            <div class="flex gap2 mt2" style="align-items:center;flex-wrap:wrap;row-gap:6px;"><div style="flex:1 1 150px;min-width:0;display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;"><span class="small" style="overflow-wrap:anywhere;">${fmtInt(b.pillsRemaining)} medicine</span><span class="small faint" style="overflow-wrap:anywhere;word-break:break-all;">${CURRENCY}${mrpDisplay(batchPricePerPill(m,b))}/pc${(USE_BATCH_PRICES && b.mrpPerBox==null)?" (base)":""}</span>${b.lotNo?`<span class="small faint" style="overflow-wrap:anywhere;">#${esc(b.lotNo)}</span>`:""}</div><div style="flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;margin-left:auto;"><button type="button" style="flex:1 1 104px;min-width:104px;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer;" onclick="openDatePicker('${b.expiryDate||""}','batch',{medId:'${m.id}',batchId:'${b.id}'})"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${b.expiryDate ? esc(fmtExpiryShort(b.expiryDate)) : ""}</span><span class="chev"></span></button>
               ${d!==null ? `<span class="expiry-tag" style="flex-shrink:0;background:${soon?'var(--dangerSoft)':'var(--primarySoft)'};color:${soon?'var(--danger)':'var(--primary)'};">${batchExpiryLabel(d)}</span>` : ""}
-              <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button>
-            </div>`;
+              <button onclick="disposeBatch('${m.id}','${b.id}')" style="flex-shrink:0;background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;" title="Mark disposed">🗑</button></div></div>`;
           }).join("")}
         </div>` : ""}
     </div>`;
@@ -7646,8 +7863,8 @@ function refreshInvFormOnly(){
 function renderInvFormModal(){
   const root = document.getElementById("invFormModalRoot");
   if(!root) return;
-  if(!inv.showForm){ root.innerHTML=""; return; }
-  root.innerHTML = `
+  if(!inv.showForm){ root.innerHTML=""; root._lastHtml=""; return; }
+  const html = `
     <div class="modal-overlay" style="align-items:flex-start;padding-top:6vh;" onclick="if(event.target===this) toggleInvForm()">
       <div class="modal" style="border-radius:16px;max-height:88vh;">
         <div class="modal-head">
@@ -7685,6 +7902,15 @@ function renderInvFormModal(){
         </div>
       </div>
     </div>`;
+  // render() runs for many reasons (background sync, other menus opening/closing...). If the form would come out exactly as it
+  // already is, leave the live form alone: replacing it mid-tap threw away the tap (Category / Edit "sometimes don't open"),
+  // closed an open Category list, and made the whole form flash and jump back to the top.
+  if(root._lastHtml === html && root.firstElementChild) return;
+  const scroller = root.querySelector(".modal > div[style*='overflow-y:auto']");
+  const keepTop = scroller ? scroller.scrollTop : 0;
+  root.innerHTML = html;
+  root._lastHtml = html;
+  if(keepTop){ const sc2 = root.querySelector(".modal > div[style*='overflow-y:auto']"); if(sc2) sc2.scrollTop = keepTop; }
 }
 
 /* ===================== RECORDS TAB ===================== */
@@ -10623,44 +10849,45 @@ function closeHeaderMenu(){
 function renderHeaderMenu(){
   const el = document.getElementById("headerMenuDropdown"); if(el) el.innerHTML = "";   // the old drop-down is no longer used
   if(headerMenuOpen) renderSettingsPage();                                              // keep the open page in step with role/branch changes
+  else if(document.body.classList.contains("settings-open") && !document.getElementById("settingsPage")) document.body.classList.remove("settings-open");
 }
 function settingsSections(){
   const sec = [];
   const add = (title, items)=>{ items = items.filter(Boolean); if(items.length) sec.push({ title, items }); };
-  const it = (icon, label, action, sub)=>({ icon, label, action, sub:sub||"" });
+  const it = (icon, label, action, sub, stay)=>({ icon, label, action, sub:sub||"", stay:!!stay });   // stay = opens a full-screen sub-page above Settings (Settings stays open underneath)
   const me = profiles.find(x=>x.id===currentProfileId);
   add("Your account", [
-    can("manageStaff") ? it("👥","Manage Users","toggleManageUsersModal()", pendingRequests().length ? "🔔 "+pendingRequests().length+" waiting for approval" : "Staff, roles and PINs") : null,
-    can("manageBranches") ? it("🏢","Branches","toggleBranchesModal()", branchName(activeBranchId)) : null,
+    can("manageStaff") ? it("👥","Manage Users","toggleManageUsersModal()", pendingRequests().length ? "🔔 "+pendingRequests().length+" waiting for approval" : "Staff, roles and PINs", true) : null,
+    can("manageBranches") ? it("🏢","Branches","toggleBranchesModal()", branchName(activeBranchId), true) : null,
     (GMAIL_LOGIN_ENABLED && window.AppInventor) ? it("🔗", me && me.email ? "Gmail: "+me.email+" (change)" : "Link my Gmail","startLinkGmail()") : null
   ]);
   add("Billing & printing", [
-    can("printer") ? it("🖨","Printer","selectPrinter()") : null,
-    can("receiptSetup") ? it("🖌","Receipt design","openReceiptDesign()") : null,
-    it("📷","Scan method","editScanMethodSettings()")
+    can("printer") ? it("🖨","Printer","selectPrinter()", "", true) : null,
+    can("receiptSetup") ? it("🖌","Receipt design","openReceiptDesign()", "", true) : null,
+    it("📷","Scan method","editScanMethodSettings()", "", true)
   ]);
   add("Stock & data", [
-    it("📋","Stock count","openTools('count')"),
-    canTransferStock() ? it("📤","Send medicine cards to another branch","openCardsCopy()", "Cards only, no stock or prices") : null,
-    it("♻","Deleted medicines","openDelMeds()", deletedMedicines().length ? deletedMedicines().length+" can be restored" : "Restore anything removed"),
-    it("💾","Backup","toggleBackupModal()"),
+    it("📋","Stock count","openTools('count')", "", true),
+    canTransferStock() ? it("📤","Send medicine cards to another branch","openCardsCopy()", "Cards only, no stock or prices", true) : null,
+    it("♻","Deleted medicines","openDelMeds()", deletedMedicines().length ? deletedMedicines().length+" can be restored" : "Restore anything removed", true),
+    it("💾","Backup","toggleBackupModal()", "", true),
     it("⬆️","Upload offline data","manualPushToCloud()")
   ]);
   add("App & display", [
-    it("🎨","Theme","openThemeModal()"),
+    it("🎨","Theme","openThemeModal()", "", true),
     it("📍", (window.isFabLocked && window.isFabLocked()) ? "+ button position: locked" : "Lock + button position","toggleFabLock()", (window.isFabLocked && window.isFabLocked()) ? "Tap to unlock" : "")
   ]);
   add("Tools & health", [
-    can("diagnostics") ? it("📈","Storage & health","showStorageHealth()") : null,
-    can("diagnostics") ? it("🩺","Diagnostics","openDiag()") : null,
-    can("manageUsers") ? it("⌨","Keyboard test","openKbTest()") : null
+    can("diagnostics") ? it("📈","Storage & health","openHealth()", "Cloud space, phone storage, data check", true) : null,
+    can("diagnostics") ? it("🩺","Diagnostics","openDiag()", "", true) : null,
+    can("manageUsers") ? it("⌨","Keyboard test","openKbTest()", "", true) : null
   ]);
   return sec;
 }
 function settingsBodyHtml(){
   const q = String(settingsUi.q||"").trim().toLowerCase();
   const me = profiles.find(x=>x.id===currentProfileId);
-  const row = x => `<button type="button" onclick="closeHeaderMenu();syncMenuHistory();${x.action};" style="display:flex;align-items:center;gap:14px;width:100%;padding:11px 14px;background:none;border:none;text-align:left;cursor:pointer;color:var(--text);font-family:inherit;border-radius:12px;">
+  const row = x => `<button type="button" onclick="${x.stay?"":"closeHeaderMenu();syncMenuHistory();"}${x.action};" style="display:flex;align-items:center;gap:14px;width:100%;padding:11px 14px;background:none;border:none;text-align:left;cursor:pointer;color:var(--text);font-family:inherit;border-radius:12px;">
       <span style="width:36px;height:36px;flex:none;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:18px;">${x.icon}</span>
       <span style="flex:1;min-width:0;"><span style="display:block;font-size:15px;font-weight:500;">${esc(x.label)}</span>${x.sub?`<span style="display:block;font-size:12px;color:var(--muted);margin-top:1px;">${esc(x.sub)}</span>`:""}</span>
       <span style="color:var(--faint);font-size:22px;line-height:1;flex:none;">›</span></button>`;
@@ -10691,7 +10918,8 @@ function settingsBodyHtml(){
 }
 function renderSettingsPage(){
   let pg = document.getElementById("settingsPage");
-  if(!headerMenuOpen || !currentProfileId || !sessionAuthed){ if(pg) pg.remove(); headerMenuOpen = false; return; }
+  if(!headerMenuOpen || !currentProfileId || !sessionAuthed){ if(pg) pg.remove(); headerMenuOpen = false; document.body.classList.remove("settings-open"); return; }
+  document.body.classList.add("settings-open");   // lets Settings sub-pages go full-screen above it (see "Settings sub-pages" CSS)
   if(!pg){
     pg = document.createElement("div");
     pg.id = "settingsPage";
@@ -10795,6 +11023,11 @@ function saveTransactionsQuiet(){
   try{ localStorage.setItem(bk("clinic_transactions"), JSON.stringify(transactions)); }catch(e){}
   _visibleTxCache = null;
 }
+// If the cloud's security rules do not allow documents named like "state__x1", starting an extra document makes the WHOLE save
+// fail. So when that happens (permission-denied while creating a new extra document) the phone remembers it for 6 hours and
+// saves the old way instead — every bill in the main document, which works until that document is really full — rather than
+// stopping all syncing. (Fix: allow documents of the "sync" collection in the Firestore rules.)
+function spillBlocked(){ try{ return Date.now() < Number(localStorage.getItem("clinic_spill_blocked")||0); }catch(e){ return false; } }
 function cloudTxFor(n){ return (transactions||[]).filter(t=>(t._d||0)===n); }   // bills that live in document n (0 = main)
 
 // Decides which cloud document every bill belongs in. remoteTx = {documentNumber: bills as read from that document}, existing = the
@@ -10809,12 +11042,13 @@ function planBillDocs(remoteTx, existing, sizeBase, sizeExtra){
     else unwritten.push(t);
   });
   const newest = Math.max(0, ...existing);
+  const spillLimit = spillBlocked() ? Number.MAX_SAFE_INTEGER : CLOUD_SPILL_AT;   // see spillBlocked()
   let w = newest;
   let size = w===0 ? sizeBase(parts[0]||[]) : sizeExtra(w, parts[w]||[]);
   const newDocs = new Set();
   unwritten.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0)).forEach(t=>{
     const b = utf8Len(JSON.stringify(t)) + 2;
-    if(size + b > CLOUD_SPILL_AT){ w++; size = sizeExtra(w, []); }
+    if(size + b > spillLimit){ w++; size = sizeExtra(w, []); }
     if(w>0) t._d = w; else delete t._d;
     (parts[w] = parts[w]||[]).push(t); size += b;
     if(w>newest) newDocs.add(w);
@@ -11151,18 +11385,20 @@ async function manualPushToCloud(){
   clearTimeout(syncDebounceTimer);
   showToast("⬆ Uploading…");
   showUploadProgress();
+  let allSynced = false;   // true exactly when the toast below says "synced" / "already synced" (used by the update button)
   try{
     await pushToCloud();
     // If a push was already running when this was tapped, pushToCloud() above just queued a
     // follow-up and returned immediately rather than actually finishing — wait for that queued
     // one too, so the toast reflects the real end result instead of firing too early.
     while(pushQueuedAgain || pushInFlight){ await new Promise(r=>setTimeout(r,200)); }
-    if(syncStatus==="synced") showToast("✓ Uploaded — everything is synced");
-    else if(!hasPendingSync() && navigator.onLine!==false) showToast("✓ Nothing left to upload — everything is already synced");   // the check timed out but no unsent changes exist
+    if(syncStatus==="synced"){ allSynced = true; showToast("✓ Uploaded — everything is synced"); }
+    else if(!hasPendingSync() && navigator.onLine!==false){ allSynced = true; showToast("✓ Nothing left to upload — everything is already synced"); }   // the check timed out but no unsent changes exist
     else showToast("⚠ Couldn't reach the server" + (lastSyncError ? " ("+String(lastSyncError).slice(0,80)+")" : "") + " — try again");
   } finally {
     hideUploadProgress();
   }
+  return allSynced;
 }
 async function pushToCloud(){
   if(!fbDb) return;
@@ -11179,11 +11415,11 @@ async function pushToCloud(){
   const seqAtStart = pendingSeq;
   const wasSynced = (syncStatus === "synced");
   if(!wasSynced){ syncStatus = "syncing"; renderSyncBadge(); }
+  let ctx = null, listOut = null;
   try{
     // Each save is ONE all-or-nothing step (read the cloud copy, combine it with this phone's, write it back). If another
     // phone saves in between, Firestore re-runs this step with the fresh copy — so two phones saving at the same moment can
     // no longer overwrite each other's bills.
-    let ctx = null, listOut = null;
     if(br==="main"){
       await runGuardedTx((guard)=>fbDb.runTransaction(async t=>{
         guard.check();
@@ -11225,6 +11461,14 @@ async function pushToCloud(){
     clearSyncError();
   }catch(e){
     if(e && e.__branchSwitch){ suppressPush=false; pushInFlight=false; return; }
+    if(ctx && ctx.plan && ctx.plan.newDocs.length && !spillBlocked() && e && (e.code==="permission-denied" || /insufficient permissions/i.test(String(e.message||"")))){
+      // The save needed a NEW extra document and the cloud rules refuse it: don't stop syncing — try again right away the old way.
+      try{ localStorage.setItem("clinic_spill_blocked", String(Date.now()+6*3600*1000)); }catch(_){}
+      showToast("☁ Cloud rules don't allow extra documents — saving the old way. Allow the 'sync' collection in Firestore rules.");
+      try{ diagLog("cloud","extra documents refused by the rules (permission-denied); using the main document only for now"); }catch(_){}
+      pushInFlight = false; suppressPush = false;
+      return pushToCloud();
+    }
     syncStatus = "offline"; setSyncError(e);
   }
   pushInFlight = false;
@@ -11900,91 +12144,111 @@ window.addEventListener("online",()=>{ aiProcessQueue(); });
 setTimeout(aiProcessQueue,6000);
 // ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
 (function(){
-  // Keyboard open = the page got much shorter. Then the "+" sits just above the keyboard; otherwise normal spot above the tab bar.
-  // The usable height is the SMALLER of the page height and the visual-viewport height: Chrome and many WebViews keep the
-  // page height unchanged when the keyboard opens and only shrink the visual viewport, which a plain innerHeight never sees.
-  const usableH=()=>Math.min(window.innerHeight, window.visualViewport ? window.visualViewport.height : window.innerHeight);
-  let base=usableH();
-  let shrunk=false;
+  // ===== Tab bar vs. on-screen keyboard =====
+  // Rule: the tab bar is hidden ONLY while the page is really shorter because of the keyboard (portrait), and is shown at all
+  // other times. Whether it is shown depends purely on measured page height - never on which box has focus or on timers - so it
+  // can no longer get stuck hidden after the keyboard closes, and no longer rides on top of the keyboard.
+  // How: remember the normal (no-keyboard) page height of this orientation. The page counts as "keyboard open" when it is at
+  // least ~110px / 14% shorter than that. The normal height is only re-learned when the page has stayed the same size for a
+  // while (a system bar came back, split-screen, ...), never during the keyboard's slide-in, so a briefly lost focus box
+  // can't make the phone "forget" that the keyboard is up.
+  const vv = window.visualViewport || null;
   const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
-  // The tab bar always stays where it normally is and the keyboard simply covers it. While the keyboard is (or was just) up,
-  // the tab bar is pushed back down by exactly how much the page shrank, so it never rides on top of the keyboard — also not
-  // for a moment while the keyboard is opening or closing (the push follows the page every frame).
-  // HOW MUCH THE PAGE SHRANK is read two ways, because some phones / the App Inventor web viewer report a STALE page height
-  // (window.innerHeight never changes) while the page itself really is shorter: (1) innerHeight, and (2) a zero-height probe
-  // pinned to the bottom edge of the page, which always sits where the page really ends. The larger of the two is used.
-  // The "no keyboard" size is only measured while no keyboard is around, and a keyboard is only assumed when the shrink is
-  // keyboard-sized (15%+) or a typing box was focused in the last 0.9 s — a phone browser's address/tool bar sliding in and
-  // out is a few percent and must never be mistaken for the keyboard.
+  // A zero-height marker pinned to the bottom edge of the page: it always sits where the page really ends, even on phones /
+  // the App Inventor web viewer whose window.innerHeight is stale.
   const probe = document.createElement("div");
   probe.setAttribute("aria-hidden","true");
   probe.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:0;visibility:hidden;pointer-events:none;";
   (document.body||document.documentElement).appendChild(probe);
-  const probeBottom = ()=>{ try{ return probe.getBoundingClientRect().top; }catch(e){ return 0; } };
-  let fullH=window.innerHeight, fullB=probeBottom(), graceUntil=0, focusAt=0, lastEvt=0, poll=0;
-  function chk(){
-    const now=Date.now();
-    // Pinched in (zoomed): the visible area is smaller because of the zoom, NOT because of a keyboard — do nothing.
-    if(window.visualViewport && window.visualViewport.scale>1.02){
-      document.body.classList.remove("kb-open","kb-resized");
-      document.documentElement.style.setProperty("--kb-shift","0px");
-      return false;
-    }
-    const h=usableH(); if(h>base) base=h;
-    const ih=window.innerHeight, pb=probeBottom();
-    const shrinkP = (fullB>0 && pb>0) ? Math.max(0, fullB-pb) : 0;
-    const shrink = Math.max(shrinkP, Math.max(0, fullH-ih));
-    const typingNow = typing(document.activeElement);
-    const open = (h < base*0.8) || shrink > 0.15*Math.max(fullB, fullH);
-    const opening = typingNow && now-focusAt<900 && shrink>8;
-    document.body.classList.toggle("kb-open", open);
-    if(open){ shrunk=true; graceUntil=now+700; }
-    else if(shrunk){
-      // The keyboard was just closed (hide key / back button). Android keeps the typing box focused when that happens,
-      // so release the box.
-      shrunk=false;
-      document.body.classList.remove("kb-typing");
-      const a=document.activeElement; if(a && a!==document.body && typing(a)) a.blur();
-    }
-    const kbLikely = open || opening || now<graceUntil;
-    if(!kbLikely && !typing(document.activeElement)){ fullH=ih; if(pb>0) fullB=pb; }   // no keyboard around: this IS the full size
-    const shift = kbLikely ? Math.round(shrink) : 0;
-    document.documentElement.style.setProperty("--kb-shift", shift+"px");
-    document.body.classList.toggle("kb-resized", shift>1);
-    return kbLikely;
-  }
-  // While a typing box is focused (and for 1.5 s after anything changes) look at the page every frame: that catches the
-  // keyboard sliding in and out even on phones that send no resize event at all. Stops by itself when nothing is happening.
-  function pollStart(){
-    lastEvt=Date.now();
-    if(poll || typeof requestAnimationFrame!=="function") return;
-    const step=()=>{
-      const active=chk();
-      if(active || typing(document.activeElement) || Date.now()-lastEvt<1500) poll=requestAnimationFrame(step); else poll=0;
+  const probeTop = ()=>{ try{ return probe.getBoundingClientRect().top; }catch(e){ return 0; } };
+  const layoutH = ()=>{ const ih=window.innerHeight||0, pb=probeTop(); return (pb>0 && ih>0) ? Math.min(ih,pb) : (ih||pb); };   // what a bottom-fixed bar is anchored to
+  const usableH = ()=>Math.min(window.innerHeight, vv ? vv.height : window.innerHeight);                                    // also counts a keyboard that only shrinks the visual viewport
+  const orient = ()=>{ try{ if(screen.orientation && screen.orientation.type) return /^portrait/.test(screen.orientation.type)?"p":"l"; }catch(e){} return (window.innerHeight>=window.innerWidth)?"p":"l"; };
+  const isPortrait = ()=>orient()==="p";
+
+  // One tracker per way of measuring. measure() -> current height. Keeps a separate "normal height" for each orientation.
+  function makeTracker(measure){
+    const refs = {p:0,l:0};
+    let prev = 0, changedAt = 0, open = false;
+    return {
+      isOpen:()=>open,
+      reset(){ refs[orient()] = 0; prev = 0; open = false; },
+      // typingFocus: a text box has focus right now.  quietFor: ms since a text box last had focus (0 = has it now).
+      update(now, typingFocus, quietFor){
+        const cur = measure(); if(!(cur>0)) return open;
+        const k = orient();
+        if(!refs[k]) refs[k] = cur;
+        if(cur !== prev){ prev = cur; changedAt = now; }
+        if(cur > refs[k]) refs[k] = cur;                 // page got taller: keyboard closed / bars hid -> that is the new normal
+        const shrink = refs[k] - cur;
+        const thr = Math.max(110, refs[k]*0.14);
+        const still = now - changedAt;
+        if(shrink >= thr){
+          open = true;
+          // Shrunk for good with no text box in sight (split-screen, window resized): that is simply the new normal size.
+          if(!typingFocus && quietFor > 3000 && still > 3000){ refs[k] = cur; open = false; }
+        } else {
+          open = false;
+          // A small lasting change (a system bar came back): adopt it, but never while a box is focused (keyboard may be sliding in).
+          if(shrink > 0 && !typingFocus && still > 700) refs[k] = cur;
+        }
+        return open;
+      }
     };
-    poll=requestAnimationFrame(step);
   }
-  window.addEventListener("resize",()=>{ chk(); pollStart(); });
-  if(window.visualViewport) window.visualViewport.addEventListener("resize",()=>{ chk(); pollStart(); });
-  document.addEventListener("focusin",e=>{ if(typing(e.target)) focusAt=Date.now(); chk(); pollStart(); });
-  document.addEventListener("focusout",()=>{ pollStart(); });
-  window.addEventListener("orientationchange",()=>setTimeout(()=>{ base=usableH(); fullH=window.innerHeight; fullB=probeBottom(); shrunk=false; chk(); },500));
-  // Fallback for a phone that gives no sign of the keyboard (page never shrinks): hide the tab bar as soon as a typing
-  // box gets focus, show it again when it loses focus. Ignored by the CSS whenever the page did shrink (kb-resized).
-  // Many phones / the App Inventor web viewer give NO signal at all when the keyboard is closed with the hide key or the back
-  // button (the page never resizes and the box stays focused), so the tab bar used to stay hidden until you tapped somewhere.
-  // So the tab bar is also brought back (a) as soon as the screen is touched anywhere that is not a typing box, and
-  // (b) after a short pause in typing. Typing again hides it again.
-  let idleT = null;
-  const showNav = ()=>{ clearTimeout(idleT); if(!document.body.classList.contains("kb-open")) document.body.classList.remove("kb-typing"); };
-  const armIdle = ()=>{ clearTimeout(idleT); idleT = setTimeout(showNav, 3500); };
-  const hideNav = ()=>{ document.body.classList.add("kb-typing"); armIdle(); };
-  document.addEventListener("focusin",e=>{ if(typing(e.target)) hideNav(); });
-  document.addEventListener("input",e=>{ if(typing(e.target)) hideNav(); }, true);
-  document.addEventListener("keydown",e=>{ if(typing(e.target)) hideNav(); }, true);
-  document.addEventListener("pointerdown",e=>{ if(!typing(e.target)) showNav(); }, true);
-  document.addEventListener("touchstart",e=>{ if(!typing(e.target)) showNav(); }, {capture:true, passive:true});
-  document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typing(document.activeElement)) showNav(); },150));
+  const navT = makeTracker(layoutH);     // drives the tab bar
+  const fabT = makeTracker(usableH);     // drives the "+" button position (body.kb-open)
+
+  let lastTyping = Date.now(), closedAt = 0, wasOpen = false, lastEvt = 0, timer = 0;
+  function chk(){
+    const now = Date.now();
+    if(vv && vv.scale>1.02){                         // pinched in: the smaller view is the zoom, not a keyboard
+      document.body.classList.remove("kb-open","kb-nav-hide"); wasOpen=false; closedAt=0; return false;
+    }
+    const a = document.activeElement, t = typing(a);
+    if(t) lastTyping = now;
+    const quiet = t ? 0 : now - lastTyping;
+    let nOpen = navT.update(now, t, quiet);
+    const fOpen = fabT.update(now, t, quiet);
+    // Second opinion that does not depend on any remembered height: a text box has focus and the page is far shorter than the
+    // whole screen (a phone's page is never below ~78% of the screen unless the keyboard is up).
+    if(!nOpen && t){
+      const sh = (screen && screen.height) || 0, cur = layoutH();
+      if(sh > 300 && cur > 0 && cur < sh*0.78) nOpen = true;
+    }
+    const open = nOpen || fOpen;
+    document.body.classList.toggle("kb-open", open);
+    document.body.classList.toggle("kb-nav-hide", nOpen && isPortrait());
+    // The keyboard was just closed with the hide key / back button: Android keeps the box focused, and tapping a box that is
+    // already focused does not bring the keyboard back. So once the page has been tall again for a moment, release the box.
+    if(open){ wasOpen = true; closedAt = 0; }
+    else if(wasOpen){ wasOpen = false; closedAt = now; }
+    if(!open && closedAt && now-closedAt > 300){
+      closedAt = 0;
+      if(a && a!==document.body && typing(a)) a.blur();
+    }
+    return open || t;
+  }
+  // Looks at the page a few times a second while a box is focused, while the keyboard is up, and for 1.5 s after anything
+  // changes - so it also catches phones that send no resize event when the keyboard moves. Stops by itself when idle.
+  function pollStart(){
+    lastEvt = Date.now();
+    if(timer) return;
+    timer = setInterval(()=>{
+      const active = chk();
+      if(!active && !closedAt && Date.now()-lastEvt > 1500){ clearInterval(timer); timer = 0; }
+    }, 120);
+  }
+  const go = ()=>{ chk(); pollStart(); };
+  window.addEventListener("resize", go);
+  if(vv) vv.addEventListener("resize", go);
+  document.addEventListener("focusin", go);
+  document.addEventListener("focusout", ()=>setTimeout(go,60));
+  document.addEventListener("pointerdown", go, true);
+  document.addEventListener("visibilitychange", go);
+  window.addEventListener("pageshow", go);
+  window.addEventListener("orientationchange", ()=>setTimeout(()=>{ navT.reset(); fabT.reset(); go(); }, 500));
+  chk();
 })();
 
 // ===== Keep the typing box inside a pop-up menu visible ABOVE the on-screen keyboard =====
@@ -11992,30 +12256,43 @@ setTimeout(aiProcessQueue,6000);
 // the bottom of the screen ends up behind the keyboard. While a typing box inside a menu is focused we lift the menu by the
 // keyboard's height (measured when the phone reports it, otherwise ~42% of the screen) and scroll the box into view.
 (function(){
-  const root = document.documentElement;
+  const root = document.documentElement, body = document.body, vv = window.visualViewport;
   const isTyping = el => !!el && (el.tagName==="TEXTAREA" || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
   const inMenu = el => !!(el && el.closest && el.closest(".modal-overlay"));
-  let base = window.innerHeight;
+  let base = window.innerHeight, raf = 0;
+  function release(){ body.classList.remove("kb-lift","kb-vv"); root.style.setProperty("--kb","0px"); }
+  // Glue the pop-up to the visible area above the keyboard. The browser may PAN that area when a box is tapped (it does so differently
+  // for every box), so this is re-run on every pan ("scroll") and every resize of the visible area, not only on resize.
+  function syncVV(){
+    if(!vv || !body.classList.contains("kb-vv")) return;
+    root.style.setProperty("--vvTop", vv.offsetTop+"px");
+    root.style.setProperty("--vvH", vv.height+"px");
+  }
+  function syncSoon(){ if(raf) return; raf = requestAnimationFrame(()=>{ raf = 0; syncVV(); }); }
   function apply(){
     base = Math.max(base, window.innerHeight);
     const a = document.activeElement;
-    if(!(isTyping(a) && inMenu(a))){ document.body.classList.remove("kb-lift"); root.style.setProperty("--kb","0px"); return; }
-    let kb;
-    if(window.innerHeight < base*0.85) kb = 0;      // the page itself already shrank: the menu already sits above the keyboard
-    else {
-      const vv = window.visualViewport;
-      const real = vv ? window.innerHeight - vv.height - vv.offsetTop : 0;
-      kb = real>120 ? real : Math.round(window.innerHeight*0.42);
+    if(!(isTyping(a) && inMenu(a))){ release(); return; }
+    if(window.innerHeight < base*0.85){ release(); return; }          // the page itself already shrank: the menu already sits above the keyboard
+    const covered = vv ? window.innerHeight - vv.height : 0;
+    if(vv && covered>120){
+      body.classList.remove("kb-lift"); body.classList.add("kb-vv"); root.style.setProperty("--kb","0px"); syncVV();
+    } else {
+      // the phone does not report the keyboard: assume it covers about a third of the screen (typical phone keyboard ≈ 33–36%)
+      body.classList.remove("kb-vv");
+      root.style.setProperty("--kb", Math.round(window.innerHeight*0.35)+"px"); body.classList.add("kb-lift");
     }
-    root.style.setProperty("--kb", kb+"px");
-    document.body.classList.toggle("kb-lift", kb>0);
-    const show = ()=>{ try{ a.scrollIntoView({block:"center"}); }catch(_){} };
+    // only bring the box into view if it is actually hidden ("nearest"), so moving between boxes does not keep re-scrolling the form
+    const show = ()=>{ try{ a.scrollIntoView({block:"nearest"}); }catch(_){} };
     setTimeout(show, 90); setTimeout(show, 340);     // again once the keyboard's slide-in has finished
   }
   document.addEventListener("focusin", ()=>setTimeout(apply,30));
   document.addEventListener("focusout", ()=>setTimeout(apply,180));
   window.addEventListener("resize", ()=>setTimeout(apply,60));
-  if(window.visualViewport) window.visualViewport.addEventListener("resize", ()=>setTimeout(apply,60));
+  if(vv){
+    vv.addEventListener("resize", ()=>{ syncSoon(); setTimeout(apply,60); });
+    vv.addEventListener("scroll", syncSoon);     // the browser panned the visible area: follow it
+  }
 })();
 
 // ===== Draggable "+" button, recent searches, hide-on-scroll search bar =====
@@ -12213,9 +12490,143 @@ function dataIntegrityIssues(){
   if(future) out.push(`${future} bill(s) dated in the future (check the phone's clock)`);
   return out;
 }
-function showStorageHealth(){
-  const L=[]; const st=cloudPayloadStats();
-  L.push(`📈 Storage & health — ${fmtDateTime(Date.now())}`, `Saad Clinic ${APP_VERSION}`, ``);
+// ---- The Storage & health page (Settings › Tools & health). Read-only: it only measures, nothing is changed. ----
+let healthUi = { open:false, data:null };
+function _hMs(fn){ const t0=performance.now(); try{ fn(); }catch(e){} return Math.max(0.1, performance.now()-t0); }
+function _hMsText(v){ return (v>=100 ? Math.round(v) : v.toFixed(1))+" ms"; }
+function healthCollect(){
+  const st = cloudPayloadStats();
+  let tot=0; const keys=[];
+  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(!k) continue; const b=(k.length+String(localStorage.getItem(k)||"").length)*2; tot+=b; keys.push([k,b]); } }catch(e){}
+  keys.sort((a,b)=>b[1]-a[1]);
+  const meds=(inventory||[]).filter(m=>!m.deleted), nb=meds.reduce((s,m)=>s+(m.batches||[]).length,0);
+  const yearAgo=Date.now()-365*86400000, old=(transactions||[]).filter(t=>(t.timestamp||0)<yearAgo).length;
+  const speeds={ meds:_hMs(()=>JSON.stringify(inventory)), bills:_hMs(()=>JSON.stringify(transactions)), cloud:_hMs(()=>sanitizeForFirestore(buildCloudPayload())) };
+  let lastBackup=0; try{ lastBackup=Number(localStorage.getItem("clinic_last_backup")||0); }catch(e){}
+  return { st, tot, keys, nMeds:meds.length, nb, old, speeds, issues:dataIntegrityIssues(), bootMs:window.__bootMs||0, lastBackup, at:Date.now() };
+}
+function healthAgo(ts){
+  if(!ts) return "never";
+  const d=Math.floor((Date.now()-ts)/86400000);
+  return d<=0 ? "today" : d===1 ? "yesterday" : d+" days ago";
+}
+function healthYears(days){ return days>=365 ? "about "+(days/365).toFixed(1)+" years" : days>=60 ? "about "+Math.round(days/30)+" months" : "about "+days+" days"; }
+// The overall verdict + each part's level ("ok" | "warn" | "bad")
+function healthLevels(h){
+  const st=h.st, phonePct=h.tot/5242880*100, worstMs=Math.max(h.speeds.meds,h.speeds.bills,h.speeds.cloud);
+  const sync = (typeof syncStatus!=="undefined") ? syncStatus : "offline";
+  const L = {
+    cloudMain: st.extraDocs ? "ok" : (st.pct>=70 ? "warn" : "ok"),
+    nonSpill: st.nonSpillPct>=80 ? "bad" : st.nonSpillPct>=60 ? "warn" : "ok",
+    phone: phonePct>=85 ? "bad" : phonePct>=60 ? "warn" : "ok",
+    issues: h.issues.length>=10 ? "bad" : h.issues.length ? "warn" : "ok",
+    speed: worstMs>=1000 ? "bad" : worstMs>=300 ? "warn" : "ok",
+    backup: (h.lastBackup && Date.now()-h.lastBackup<=7*86400000) ? "ok" : "warn",
+    sync: (sync==="synced"||sync==="syncing") ? "ok" : "warn"
+  };
+  const reasons=[];
+  if(L.nonSpill!=="ok") reasons.push(`Stock, staff & settings use ${st.nonSpillPct.toFixed(0)}% of a cloud document`);
+  if(L.phone!=="ok") reasons.push(`Phone storage ${phonePct.toFixed(0)}% full`);
+  if(L.issues!=="ok") reasons.push(`${h.issues.length} data problem${h.issues.length===1?"":"s"} to look at`);
+  if(L.speed!=="ok") reasons.push("This phone is saving slowly");
+  if(L.backup!=="ok") reasons.push(h.lastBackup ? `Last backup ${healthAgo(h.lastBackup)}` : "No backup made yet");
+  if(L.sync!=="ok") reasons.push("Not synced to the cloud right now");
+  const vals=[L.nonSpill,L.phone,L.issues,L.speed,L.backup,L.sync];
+  const overall = vals.includes("bad") ? "bad" : vals.includes("warn") ? "warn" : "ok";
+  return { L, overall, reasons, phonePct, sync };
+}
+function _hCol(l){ return l==="bad" ? ["var(--danger)","var(--dangerSoft)"] : l==="warn" ? ["var(--warning)","var(--warningSoft)"] : ["var(--success)","var(--successSoft)"]; }
+function _hChip(text,l){ const c=_hCol(l); return `<span class="hchip" style="color:${c[0]};background:${c[1]};">${esc(text)}</span>`; }
+function _hBar(pct,l){ const c=_hCol(l); return `<div class="hbar"><i style="width:${Math.min(100,Math.max(Number(pct)||0,1))}%;background:${c[0]};"></i></div>`; }
+function healthBodyHtml(h){
+  if(h.error) return `<div class="card"><p style="margin:0 0 8px;font-weight:700;">Couldn't measure just now</p><p class="small">${esc(h.error)}</p><button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="healthRefresh()">Try again</button></div>`;
+  const st=h.st, V=healthLevels(h), L=V.L;
+  const bc=_hCol(V.overall), icon = V.overall==="ok" ? "✅" : V.overall==="warn" ? "⚠️" : "🚨";
+  const title = V.overall==="ok" ? "Everything looks healthy" : V.overall==="warn" ? "A few things to keep an eye on" : "Needs attention";
+  const syncText = V.sync==="synced" ? "Synced" : V.sync==="syncing" ? "Syncing…" : "Offline — saved on this phone";
+  const lastErr = (typeof lastSyncError!=="undefined" && lastSyncError) ? (()=>{ try{ return formatSyncError(lastSyncError); }catch(e){ return ""; } })() : "";
+  let H = `<div class="hbanner" style="background:${bc[1]};color:${bc[0]};"><span class="hico">${icon}</span><div><b>${title}</b><span class="hsub">${V.reasons.length ? esc(V.reasons.join(" · ")) : "Cloud space, phone storage, speed and your data all check out."}</span></div></div>`;
+
+  // ---- Cloud
+  H += `<div class="hsec">☁️ Cloud backup</div><div class="card">`;
+  H += `<div class="hrow"><span class="hl">Connection</span>${_hChip(syncText, L.sync)}</div>`;
+  if(lastErr && L.sync!=="ok") H += `<p class="hnote">Last problem: ${esc(lastErr)}</p>`;
+  H += `<hr class="hdiv">`;
+  H += `<div class="hrow"><span class="hl">Main document</span><span class="small">${_hKB(st.total)} of 1,024 KB · ${st.pct.toFixed(1)}%</span></div>${_hBar(st.pct,L.cloudMain)}`;
+  H += st.extraDocs
+    ? `<p class="hnote">Bills now continue in ${st.extraDocs} extra document${st.extraDocs===1?"":"s"} automatically${st.extraAdded?` (the first was added ${esc(fmtDateTime(st.extraAdded))})`:""}.</p>`
+    : (st.pct>=70 ? `<p class="hnote">Past 70% — the next bills start an extra document by themselves.</p>` : `<p class="hnote">A second document starts by itself at 70% full.</p>`);
+  H += `<hr class="hdiv">`;
+  H += `<div class="hrow"><span class="hl">Stock, staff &amp; settings</span><span class="small">${_hKB(st.nonSpill)} · ${st.nonSpillPct.toFixed(1)}%</span></div>${_hBar(st.nonSpillPct,L.nonSpill)}`;
+  H += `<p class="hnote">${L.nonSpill==="ok" ? "This part can't spill into extra documents, so it's the one to watch — plenty of room." : L.nonSpill==="warn" ? "This part can't spill into extra documents and is getting fuller — keep an eye on it." : "⚠ This part can't spill into extra documents and is nearly full. Tell your developer soon."}</p>`;
+  H += `<hr class="hdiv">`;
+  H += `<div class="hrow"><span class="hl">Bills</span><span class="small">${st.nTx.toLocaleString("en-US")} saved</span></div>`;
+  H += `<p class="hnote">About ${st.perDay.toFixed(1)} a day over the last 30 days, ~${(st.perBill/1024).toFixed(2)} KB each. ` + (st.extraDocs ? "" : (st.daysToExtra==null ? "Not enough recent bills to estimate when an extra document starts." : `At this pace an extra document starts in ${healthYears(st.daysToExtra)}.`)) + `</p>`;
+  H += `</div>`;
+
+  // ---- This phone
+  H += `<div class="hsec">📱 This phone</div><div class="card">`;
+  H += `<div class="hrow"><span class="hl">App storage</span><span class="small">${_hKB(h.tot)} of ~5,000 KB · ${V.phonePct.toFixed(1)}%</span></div>${_hBar(V.phonePct,L.phone)}`;
+  H += `<p class="hnote">${L.phone==="ok" ? "Plenty of room on this phone." : L.phone==="warn" ? "Getting fuller — still fine, but worth watching." : "Nearly full — new changes may fail to save on this phone."}</p>`;
+  H += `<div class="htiles"><div class="htile"><b>${h.nMeds.toLocaleString("en-US")}</b><span>medicines</span></div><div class="htile"><b>${h.nb.toLocaleString("en-US")}</b><span>batches</span></div><div class="htile"><b>${st.nTx.toLocaleString("en-US")}</b><span>bills${h.old?` (${h.old.toLocaleString("en-US")} over 1 yr)`:""}</span></div></div>`;
+  H += `<hr class="hdiv">`;
+  H += `<div class="hrow"><span class="hl">Speed</span>${_hChip(L.speed==="ok"?"Fast":L.speed==="warn"?"A bit slow":"Slow", L.speed)}</div>`;
+  H += `<div class="htiles"><div class="htile"><b>${_hMsText(h.speeds.meds)}</b><span>save medicines</span></div><div class="htile"><b>${_hMsText(h.speeds.bills)}</b><span>save bills</span></div><div class="htile"><b>${_hMsText(h.speeds.cloud)}</b><span>cloud copy</span></div></div>`;
+  if(h.bootMs) H += `<p class="hnote">The app took about ${Math.round(h.bootMs)} ms to start.</p>`;
+  H += `<hr class="hdiv">`;
+  H += `<div class="hrow"><span class="hl">Last backup</span>${_hChip(h.lastBackup ? healthAgo(h.lastBackup) : "Never", L.backup)}</div>`;
+  H += `</div>`;
+
+  // ---- Data check
+  H += `<div class="hsec">🩺 Data check</div><div class="card">`;
+  if(!h.issues.length) H += `<div class="hrow"><span class="hl">No problems found</span>${_hChip("✓ OK","ok")}</div><p class="hnote">Read-only — nothing was changed.</p>`;
+  else {
+    H += `<div class="hrow"><span class="hl">${h.issues.length} thing${h.issues.length===1?"":"s"} to look at</span>${_hChip(L.issues==="bad"?"Needs attention":"Check","" + L.issues)}</div><p class="hnote">Read-only — nothing was changed.</p>`;
+    const first=h.issues.slice(0,8), rest=h.issues.slice(8,60);
+    H += `<div style="margin-top:6px;">${first.map(x=>`<div class="hissue">• ${esc(x)}</div>`).join("")}</div>`;
+    if(rest.length) H += `<details class="hmore" style="margin-top:6px;"><summary>Show ${rest.length}${h.issues.length>60?" of "+(h.issues.length-8):""} more</summary>${rest.map(x=>`<div class="hissue">• ${esc(x)}</div>`).join("")}${h.issues.length>60?`<div class="hissue">…and ${h.issues.length-60} more</div>`:""}</details>`;
+  }
+  H += `</div>`;
+
+  // ---- More details
+  H += `<div class="hsec">More details</div><div class="card"><details class="hmore"><summary>Technical details</summary>`;
+  H += `<p class="hnote" style="margin-top:10px;"><b>This phone's ID:</b> ${esc(deviceId())}<br>Keeps this phone's stock movements apart from the other phones'.</p>`;
+  H += `<p class="hnote" style="margin-top:8px;"><b>Clean-up:</b> ${st.trimmedCount.toLocaleString("en-US")} used-up batches older than a year are left out of the cloud copy (saves ${_hKB(st.saved)}); your phones keep them.</p>`;
+  H += `<p class="hnote" style="margin-top:8px;"><b>Biggest cloud parts:</b><br>${st.parts.slice(0,5).map(p=>`${esc(p[0])} — ${_hKB(p[1])}`).join("<br>")}</p>`;
+  H += `<p class="hnote" style="margin-top:8px;"><b>Biggest phone storage:</b><br>${h.keys.slice(0,4).map(p=>`${esc(p[0].replace(/^clinic_/,""))} — ${_hKB(p[1])}`).join("<br>")}</p>`;
+  H += `</details></div>`;
+
+  H += `<p class="hnote" style="text-align:center;margin:14px 0 4px;">Checked ${esc(fmtDateTime(h.at))} · v${esc(String(APP_VERSION).replace(/^v/,""))}</p>`;
+  H += `<div style="display:flex;gap:10px;margin-top:8px;"><button class="btn btn-outline" style="flex:1;" onclick="healthRefresh()">↻ Check again</button><button class="btn btn-primary" style="flex:1;" onclick="healthShare()">📤 Copy / share report</button></div>`;
+  return H;
+}
+function renderHealthModal(){
+  const root=document.getElementById("healthModalRoot"); if(!root) return;
+  if(!healthUi.open){ root.innerHTML=""; return; }
+  const h=healthUi.data;
+  root.innerHTML=`
+    <div class="modal-overlay" onclick="if(event.target===this) closeHealth()">
+      <div class="modal">
+        <div class="modal-head"><strong>Storage &amp; health</strong><button class="modal-x" onclick="closeHealth()">✕</button></div>
+        <div style="padding:6px 14px 28px;max-height:78vh;overflow-y:auto;">${h ? healthBodyHtml(h) : `<p class="small faint" style="text-align:center;padding:40px 0;">Checking…</p>`}</div>
+      </div>
+    </div>`;
+}
+function _healthMeasure(){
+  setTimeout(()=>{
+    if(!healthUi.open) return;
+    try{ healthUi.data = healthCollect(); }catch(e){ healthUi.data = { error:String(e && e.message || e) }; }
+    renderHealthModal();
+  }, 30);
+}
+function openHealth(){ if(!can("diagnostics")) return; healthUi.open=true; healthUi.data=null; renderHealthModal(); try{ syncMenuHistory(); }catch(e){} _healthMeasure(); }
+function closeHealth(){ healthUi.open=false; healthUi.data=null; renderHealthModal(); try{ syncMenuHistory(); }catch(e){} }
+function healthRefresh(){ healthUi.data=null; renderHealthModal(); _healthMeasure(); }
+function showStorageHealth(){ openHealth(); }      // old name, still works
+// The same report as plain text, for "Copy / share report" (WhatsApp, e-mail, to send to your developer).
+function storageHealthText(h){
+  const st=h.st, L=[];
+  L.push(`📈 Storage & health — ${fmtDateTime(h.at)}`, `Saad Clinic ${APP_VERSION}`, ``);
   L.push(`☁️ CLOUD (each document can hold 1,024 KB)`);
   L.push(`Main document: ${_hKB(st.total)} — ${st.pct.toFixed(1)}% full`);
   L.push(st.extraDocs ? `Extra bill documents: ${st.extraDocs}${st.extraAdded?` (first one added ${fmtDateTime(st.extraAdded)})`:""} — new bills continue there automatically` : `Extra bill documents: none yet (a second one starts by itself at 70% full)`);
@@ -12227,23 +12638,19 @@ function showStorageHealth(){
   if(st.extraDocs) L.push(`Bills no longer fill the main document: they continue in extra documents automatically.`);
   else L.push(st.daysToExtra==null ? `Time until an extra document starts: not enough recent bills to estimate` : `At this pace an extra document starts in about ${st.daysToExtra.toLocaleString("en-US")} days (~${(st.daysToExtra/365).toFixed(1)} years)`);
   L.push(``, `📱 THIS PHONE'S APP STORAGE (limit about 5,000 KB)`);
-  let tot=0; const keys=[];
-  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(!k) continue; const b=(k.length+String(localStorage.getItem(k)||"").length)*2; tot+=b; keys.push([k,b]); } }catch(e){}
-  keys.sort((a,b)=>b[1]-a[1]);
-  L.push(`Used: ${_hKB(tot)} — ${(tot/5242880*100).toFixed(1)}%`);
-  L.push(`Biggest: `+keys.slice(0,4).map(p=>`${p[0].replace(/^clinic_/,"")} ${_hKB(p[1])}`).join(" · "));
-  const meds=(inventory||[]).filter(m=>!m.deleted); const nb=meds.reduce((s,m)=>s+(m.batches||[]).length,0);
-  const yearAgo=Date.now()-365*86400000, old=(transactions||[]).filter(t=>(t.timestamp||0)<yearAgo).length;
-  L.push(``, `📦 COUNTS`, `${meds.length.toLocaleString("en-US")} medicines · ${nb.toLocaleString("en-US")} batches · ${st.nTx.toLocaleString("en-US")} bills (${old.toLocaleString("en-US")} older than 1 year)`);
+  L.push(`Used: ${_hKB(h.tot)} — ${(h.tot/5242880*100).toFixed(1)}%`);
+  L.push(`Biggest: `+h.keys.slice(0,4).map(p=>`${p[0].replace(/^clinic_/,"")} ${_hKB(p[1])}`).join(" · "));
+  L.push(``, `📦 COUNTS`, `${h.nMeds.toLocaleString("en-US")} medicines · ${h.nb.toLocaleString("en-US")} batches · ${st.nTx.toLocaleString("en-US")} bills (${h.old.toLocaleString("en-US")} older than 1 year)`);
   L.push(``, `⚡ SPEED ON THIS PHONE (right now)`);
-  L.push(`Save medicines: ${_hTime(()=>JSON.stringify(inventory))} · save bills: ${_hTime(()=>JSON.stringify(transactions))} · build cloud copy: ${_hTime(()=>sanitizeForFirestore(buildCloudPayload()))}`);
-  if(window.__bootMs) L.push(`App start-up took about ${Math.round(window.__bootMs)} ms`);
-  const issues=dataIntegrityIssues();
+  L.push(`Save medicines: ${_hMsText(h.speeds.meds)} · save bills: ${_hMsText(h.speeds.bills)} · build cloud copy: ${_hMsText(h.speeds.cloud)}`);
+  if(h.bootMs) L.push(`App start-up took about ${Math.round(h.bootMs)} ms`);
+  L.push(`Last backup: ${h.lastBackup ? healthAgo(h.lastBackup) : "never"}`);
   L.push(``, `🩺 DATA CHECK (read-only — nothing was changed)`);
-  if(!issues.length) L.push(`✓ No problems found`);
-  else { L.push(`${issues.length} thing(s) to look at:`); issues.slice(0,40).forEach(x=>L.push("• "+x)); if(issues.length>40) L.push(`…and ${issues.length-40} more`); }
-  openShare(L.join("\n"));
+  if(!h.issues.length) L.push(`✓ No problems found`);
+  else { L.push(`${h.issues.length} thing(s) to look at:`); h.issues.slice(0,40).forEach(x=>L.push("• "+x)); if(h.issues.length>40) L.push(`…and ${h.issues.length-40} more`); }
+  return L.join("\n");
 }
+function healthShare(){ if(healthUi.data && !healthUi.data.error) openShare(storageHealthText(healthUi.data)); }
 // Once a day, quietly warn if the part of the cloud data that cannot spill over into extra documents (stock, staff, settings) is getting close to the limit.
 function checkCloudHeadroom(){
   try{
@@ -12988,14 +13395,29 @@ function showAppUpdateBanner(apkUrl){
 async function uploadThenDownloadAppUpdate(apkUrl, btn){
   const label = btn ? btn.textContent : null;
   if(btn){ btn.disabled = true; btn.textContent = "Uploading…"; }
+  let allSynced = false;
   try{
-    await manualPushToCloud();
+    allSynced = (await manualPushToCloud()) === true;
+  }catch(e){
+    showToast("⚠ Upload didn't finish — tap again");
+    return;
   } finally {
     if(btn){ btn.disabled = false; btn.textContent = label; }
   }
-  if(syncStatus === "synced" || (!hasPendingSync() && navigator.onLine!==false)) downloadAppUpdate(apkUrl);
+  // Same moment the "synced" / "already synced" message was shown, so that message can never be followed by nothing happening.
+  if(allSynced || syncStatus === "synced" || (!hasPendingSync() && navigator.onLine!==false)) downloadAppUpdate(apkUrl);
 }
 function downloadAppUpdate(apkUrl){
+  // If the phone's browser doesn't open within a few seconds (the page is still on screen), show the link so it can be
+  // copied / shared into Chrome by hand - the update can never get stuck on a button that does nothing.
+  let left = (document.visibilityState === "hidden");
+  const onVis = ()=>{ if(document.visibilityState === "hidden") left = true; };
+  document.addEventListener("visibilitychange", onVis);
+  setTimeout(()=>{
+    document.removeEventListener("visibilitychange", onVis);
+    if(!left && document.visibilityState === "visible"){ showToast("Couldn't open the browser by itself — copy the link and open it in Chrome"); openShare(apkUrl); }
+  }, 4000);
+  showToast("Opening the download page…");
   try{
     if(typeof AppInventor !== "undefined" && typeof AppInventor.setWebViewString === "function"){
       // Prefixed to match the app's existing command pattern (EXPORT:, SHARE_TEXT:, etc.) —
@@ -13003,12 +13425,85 @@ function downloadAppUpdate(apkUrl){
       // bare URL wouldn't match any of its existing branches. See the OPEN_URL: branch added
       // there, which hands this off to ActivityStarter to open in the real browser (Chrome),
       // since the WebViewer component itself can't download files.
-      AppInventor.setWebViewString("OPEN_URL:" + apkUrl);
+      // A "#" part is never sent to the server, so the download is unchanged, but it makes every command different:
+      // sending the exact same text twice (a second tap after coming back without installing) could be ignored.
+      AppInventor.setWebViewString("OPEN_URL:" + apkUrl + (apkUrl.indexOf("#")<0 ? "#" : "&") + "t=" + Date.now());
       return;
     }
   }catch(e){}
   window.open(apkUrl, "_blank"); // fallback when just testing this page in a normal browser
 }
+// ===== Dark-mode drop-down lists =====
+// The list that opens when you tap a <select> (Category, roles, security question...) is drawn by Android itself, not by this
+// page, so inside the App Inventor app it stays WHITE even in dark mode. In dark mode only, tapping a <select> now opens the
+// same choices in an in-page list that uses the app's dark colours. Choosing one just sets the select and fires its normal
+// "input"/"change" events, so every existing handler (e.g. onInvCategoryPicked) runs exactly as before. Light mode is untouched.
+(function(){
+  let sheet = null, sel = null;
+  const isDark = ()=>document.documentElement.getAttribute("data-mode")==="dark";
+  const usable = el=>!!el && el.tagName==="SELECT" && !el.disabled && !el.multiple && !(el.size>1);
+  const st = document.createElement("style");
+  st.textContent =
+    '#selSheet{position:fixed;inset:0;z-index:100000;background:rgba(15,23,30,.55);display:flex;align-items:flex-end;justify-content:center;}'+
+    '#selSheet .ss-panel{background:var(--card,#fff);color:var(--text);width:100%;max-width:480px;max-height:70vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;box-shadow:0 -8px 30px rgba(0,0,0,.35);padding-bottom:env(safe-area-inset-bottom,0px);}'+
+    '#selSheet .ss-list{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 0 12px;}'+
+    '#selSheet .ss-group{padding:12px 20px 4px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);}'+
+    '#selSheet .ss-row{display:flex;align-items:center;gap:14px;width:100%;text-align:left;background:none;border:none;border-radius:0;box-shadow:none;margin:0;padding:13px 20px;font-size:16px;font-family:inherit;color:var(--text);cursor:pointer;}'+
+    '#selSheet .ss-row:disabled{opacity:.4;cursor:default;}'+
+    '#selSheet .ss-dot{flex:none;width:20px;height:20px;border-radius:50%;border:2px solid var(--faint);box-sizing:border-box;}'+
+    '#selSheet .ss-row.on{font-weight:700;}'+
+    '#selSheet .ss-row.on .ss-dot{border:6px solid var(--primary);}';
+  document.head.appendChild(st);
+
+  function closeSheet(){ if(sheet){ sheet.remove(); sheet = null; } sel = null; }
+  function pick(i){
+    let s = sel; closeSheet();
+    if(!s) return;
+    if(!s.isConnected && s.id) s = document.getElementById(s.id);   // the page was redrawn while the list was open
+    if(!s) return;
+    const opt = s.options[i]; if(!opt || opt.disabled) return;
+    if(s.selectedIndex !== i){
+      s.selectedIndex = i;
+      s.dispatchEvent(new Event("input",{bubbles:true}));
+      s.dispatchEvent(new Event("change",{bubbles:true}));
+    }
+  }
+  function open(s){
+    closeSheet();
+    sel = s;
+    try{ const a = document.activeElement; if(a && a!==document.body && a.blur) a.blur(); }catch(e){}   // put the keyboard away
+    const row = o=>`<button type="button" class="ss-row${o.index===s.selectedIndex?" on":""}" data-i="${o.index}"${o.disabled?" disabled":""}><span class="ss-dot"></span><span>${esc(o.text)}</span></button>`;
+    let rows = "";
+    Array.prototype.forEach.call(s.children, ch=>{
+      if(ch.tagName==="OPTGROUP"){
+        rows += `<div class="ss-group">${esc(ch.label)}</div>`;
+        Array.prototype.forEach.call(ch.children, o=>{ if(o.tagName==="OPTION" && !o.hidden) rows += row(o); });
+      } else if(ch.tagName==="OPTION" && !ch.hidden){ rows += row(ch); }
+    });
+    sheet = document.createElement("div");
+    sheet.id = "selSheet";
+    sheet.innerHTML = `<div class="ss-panel"><div class="ss-list">${rows}</div></div>`;
+    sheet.addEventListener("click", e=>{
+      const b = e.target.closest ? e.target.closest(".ss-row") : null;
+      if(b){ if(!b.disabled) pick(Number(b.getAttribute("data-i"))); return; }
+      if(e.target === sheet) closeSheet();                      // tap outside the list
+    });
+    document.body.appendChild(sheet);
+    const on = sheet.querySelector(".ss-row.on");
+    if(on && on.scrollIntoView){ try{ on.scrollIntoView({block:"center"}); }catch(e){} }
+  }
+  // Stop Android's own (white) list from opening, then show ours when the tap completes.
+  document.addEventListener("mousedown", e=>{
+    const s = e.target && e.target.closest ? e.target.closest("select") : null;
+    if(isDark() && usable(s)) e.preventDefault();
+  }, true);
+  document.addEventListener("click", e=>{
+    const s = e.target && e.target.closest ? e.target.closest("select") : null;
+    if(isDark() && usable(s)){ e.preventDefault(); e.stopPropagation(); open(s); }
+  }, true);
+  // Back button while the list is open closes just the list (see the popstate handler near the top of this script).
+  window.__selSheetClose = function(){ if(!sheet) return false; closeSheet(); return true; };
+})();
 </script>
 <script>
 // Registers the service worker (sw.js, same folder) so the app is cached on first load and
