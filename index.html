@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v168";
+const APP_VERSION = "v169";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -1554,7 +1554,10 @@ function openCategoryEditor(){
 }
 function closeCategoryEditor(){ catUi.open=false; render(); }
 function onCategoryRenameDraft(origName, v){ catUi.renameDrafts[origName]=v; }
-function onNewCategoryDraft(v){ catUi.newCategoryDraft=v; scheduleRender(); }
+function onNewCategoryDraft(v){
+  catUi.newCategoryDraft=v;
+  const b=document.getElementById("addCategoryBtn"); if(b) b.disabled = !String(v).trim();   // no full redraw: it reset the page behind and the cursor
+}
 function addNewCategoryFromEditor(){
   if(!can("manageCategories")) return;
   const name = catUi.newCategoryDraft.trim();
@@ -1645,7 +1648,7 @@ function renderCategoryModal(){
             </div>`).join("")}
           <div class="flex gap2 mt2 mb3">
             <input ${NOAC} id="newCategoryInput" value="${esc(catUi.newCategoryDraft)}" oninput="onNewCategoryDraft(this.value)" placeholder="New category name" class="flex1">
-            <button class="btn btn-outline" ${!catUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewCategoryFromEditor()">+ Add</button>
+            <button id="addCategoryBtn" class="btn btn-outline" ${!catUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewCategoryFromEditor()">+ Add</button>
           </div>
 
           <p class="small faint divider-top" style="font-weight:700;padding-top:12px;margin:4px 0 8px;">Special medicine category</p>
@@ -1656,7 +1659,7 @@ function renderCategoryModal(){
             </div>`).join("")}
           <div class="flex gap2 mt2">
             <input ${NOAC} id="newSpecialCategoryInput" value="${esc(specialCatUi.newCategoryDraft)}" oninput="onNewSpecialCategoryDraft(this.value)" placeholder="New special category name" class="flex1">
-            <button class="btn btn-outline" ${!specialCatUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewSpecialCategoryFromEditor()">+ Add</button>
+            <button id="addSpecialCategoryBtn" class="btn btn-outline" ${!specialCatUi.newCategoryDraft.trim()?"disabled":""} onclick="addNewSpecialCategoryFromEditor()">+ Add</button>
           </div>
         </div>
         <div class="modal-actions">
@@ -1668,7 +1671,10 @@ function renderCategoryModal(){
 }
 
 function onSpecialCategoryRenameDraft(origName, v){ specialCatUi.renameDrafts[origName]=v; }
-function onNewSpecialCategoryDraft(v){ specialCatUi.newCategoryDraft=v; scheduleRender(); }
+function onNewSpecialCategoryDraft(v){
+  specialCatUi.newCategoryDraft=v;
+  const b=document.getElementById("addSpecialCategoryBtn"); if(b) b.disabled = !String(v).trim();
+}
 function addNewSpecialCategoryFromEditor(){
   if(!can("manageCategories")) return;
   const name = specialCatUi.newCategoryDraft.trim();
@@ -2341,10 +2347,18 @@ window.addEventListener("popstate", function(){
   if(window.__selSheetClose && window.__selSheetClose()){ history.pushState({ appNav:true }, "", location.href); return; }   // dark-mode drop-down list was open: Back closes just that
   if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ history.pushState({ appNav:true }, "", location.href); return; } // photo reading in progress — ignore back
   window.__boxBusy = false;                                                            // (a flag left on by an error must never lock the back button)
+  // Settings page open with nothing on screen above it: Back closes Settings. This looks at what is actually visible, so it works
+  // even if the history bookkeeping below got out of step (e.g. after opening and closing a menu inside Settings).
+  if(headerMenuOpen && document.getElementById("settingsPage") && !_layerAboveSettings()){
+    if(navStack.length) navStack.pop();
+    wasMenuOpen = false;
+    try{ closeHeaderMenu(); render(); }finally{ try{ syncMenuHistory(); }catch(e){} }
+    return;
+  }
   if(navStack.length){
     const resolver = navStack.pop();
     wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
-    resolver();
+    try{ resolver(); }finally{ try{ syncMenuHistory(); }catch(e){} }   // even if the resolver stumbled, an open menu underneath always gets its Back entry back
     return;
   }
   if(_floorLeft>0) _floorLeft--;
@@ -2366,6 +2380,18 @@ window.addEventListener("popstate", function(){
 });
 // These menus' state variables are declared further down the file; reading them through here can never fail if this runs early.
 function _uiOpen(f){ try{ return !!f(); }catch(e){ return false; } }
+// True when a sub-page / dialog is really on screen above the Settings page (they sit at z-index 120+ while Settings, at 110, is open).
+// Used so Back follows what the person can SEE: if nothing is above Settings, Back closes Settings - whatever the internal flags say.
+function _layerAboveSettings(){
+  try{
+    const els = document.querySelectorAll('[id$="Root"] .modal-overlay, #selSheet');
+    for(let i=0;i<els.length;i++){
+      const z = parseInt(getComputedStyle(els[i]).zIndex, 10);
+      if(!isNaN(z) && z > 110) return true;
+    }
+  }catch(e){}
+  return false;
+}
 let headerMenuOpen = false; // mirrors the header "☰ Settings" dropdown's hidden/shown class
 function anyMenuOpen(){
   return !!(delMedUi.open || healthUi.open || (!sessionAuthed && (addUserLoginUi.open || forgotUi.open || loginUi.pickedId)) || headerMenuOpen || shareText!==null || datePickerUi.open || catUi.open || manageUi.editingId || manageUi.open ||
@@ -5740,6 +5766,23 @@ function applyEditScan(medId){
   handleScanText(text);
 }
 function clearEditScanLink(){ inv.editForm.gtin=""; refreshInvCard(inv.editId); }
+// Tap on the green "Barcode linked" line: shows what the barcode actually contained. The full scanned text is only
+// kept in memory for the most recent scan, so if that is the code linked here it is shown in full (text + hex bytes);
+// otherwise (e.g. the app was closed since) the saved barcode number is shown, with a note on how to see the rest.
+function showLinkedBarcode(kind){
+  const f = kind==="edit" ? inv.editForm : inv.form;
+  const gtin = (f && f.gtin) || "";
+  if(!gtin) return;
+  const s = window.__lastScan;
+  let msg = "Barcode linked to this medicine\n\nSaved barcode number: " + gtin;
+  if(s && s.text && s.parsed && s.parsed.gtin === gtin){
+    const hex = Array.from(s.text.slice(0,24)).map(c=>c.charCodeAt(0).toString(16).padStart(2,"0")).join(" ");
+    msg += "\n\nScanned text (" + s.text.length + " characters):\n" + visibleScanText(s.text) + "\n\nFirst bytes (hex): " + hex;
+  } else {
+    msg += "\n\nThe full text of the original scan isn't kept once the app has been closed or another code was scanned. Scan the code again to see everything it contains.";
+  }
+  openShare(msg);
+}
 function applyScanToEditForm(medId, parsed){
   if(parsed.gtin){
     const existing = inventory.find(m=>!m.deleted && m.id!==medId && m.gtin && m.gtin===parsed.gtin);
@@ -5821,6 +5864,12 @@ function splitScannedProductName(raw){
     if(fi-1>=0 && isNum(rest[fi-1])){ measures.push({text:rest[fi-1]+" mg", vol:false}); rest.splice(fi-1,1); }
   }
   let name = rest.join(" ").trim();
+  if(!name && (measures.length || perBox)){
+    // Only a quantity was left ("15 gm", "10's" — a box code often carries just the pack size and price). That is not a name,
+    // so the Name box stays empty for the person to type, and the quantity goes where it belongs (Strength / pack count).
+    const ordered0 = measures.filter(m=>m.vol).concat(measures.filter(m=>!m.vol));
+    return { name:"", category:"", strength: ordered0.map(m=>m.text).join(" "), perBox };
+  }
   if(!name || (!category && !measures.length && !perBox)) return { name: original, category:"", strength:"", perBox:0 };
   if(name===name.toUpperCase() && /[A-Z]{3}/.test(name)) name = name.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase()); // DYNETIC -> Dynetic
   const ordered = measures.filter(m=>m.vol).concat(measures.filter(m=>!m.vol));
@@ -6909,7 +6958,7 @@ function applyScanToNewMedForm(parsed){
   const filled = [];
   if(parsed.productName && !String(inv.form.name||"").trim()){
     const split = splitScannedProductName(parsed.productName);
-    inv.form.name = split.name; filled.push("name");
+    if(split.name){ inv.form.name = split.name; filled.push("name"); }
     // Strength/category only ever go into boxes that are still empty, same as everything here.
     if(split.strength && !String(inv.form.mg||"").trim()){ inv.form.mg = split.strength; filled.push("strength"); }
     if(split.perBox && !String(inv.form.pillsPerBox||"").trim()){ inv.form.pillsPerBox = String(split.perBox); filled.push("per box"); }
@@ -7516,7 +7565,7 @@ function buildInvCard(m){
             <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick='startBarcodeScan({kind:"edit",medId:"${m.id}"})'>📷 Scan barcode</button>
           </div>
           <input ${NOAC_RAW} id="editScanInput-${m.id}" value="${esc(inv.editScanText||"")}" oninput="onEditScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyEditScan('${m.id}');}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-          ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
+          ${f.gtin?`<p class="small" style="color:var(--success);margin:8px 0 0;"><button type="button" onclick="showLinkedBarcode('edit')" style="background:none;border:none;color:inherit;font:inherit;padding:0;margin:0;cursor:pointer;text-align:left;text-decoration:underline dotted;">🔗 Barcode linked to this medicine</button> · <button type="button" onclick="clearEditScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
         </div>
         <div class="flex gap2 mt2">
           <button class="btn btn-outline flex1" onclick="openEdit('${m.id}')">Cancel</button>
@@ -7893,7 +7942,7 @@ function renderInvFormModal(){
               <button type="button" class="btn btn-outline flex1" style="font-size:12px;padding:8px;" onclick="startBarcodeScan('newmed')">📷 Scan barcode</button>
             </div>
             <input ${NOAC_RAW} id="invScanInput" value="${esc(inv.scanText)}" oninput="onInvScanInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applyInvScan();}" style="position:absolute;opacity:0;height:0;width:0;padding:0;border:0;pointer-events:none;" aria-hidden="true">
-            ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;">🔗 Barcode linked to this medicine · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
+            ${inv.form.gtin?`<p class="small" style="color:var(--success);margin:6px 0 0;"><button type="button" onclick="showLinkedBarcode('new')" style="background:none;border:none;color:inherit;font:inherit;padding:0;margin:0;cursor:pointer;text-align:left;text-decoration:underline dotted;">🔗 Barcode linked to this medicine</button> · <button type="button" onclick="clearInvScanLink()" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:11px;text-decoration:underline;padding:0;">remove</button></p>`:""}
           </div>
         </div>
         <div class="modal-actions">
