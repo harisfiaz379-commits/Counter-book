@@ -1,6 +1,6 @@
 // Counter Book offline cache. Bump CACHE_NAME (e.g. v42, v43...) any time index.html is updated
 // on GitHub, so returning devices pick up the new version.
-const CACHE_NAME = "counter-book-v173";
+const CACHE_NAME = "counter-book-v174";
 // Every cache this service worker ever creates is named with this prefix. The activate handler
 // below only ever deletes caches that start with it — if this origin ever hosts another app or
 // another service worker (e.g. a different project under the same GitHub Pages username), its

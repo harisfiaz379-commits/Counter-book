@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v173";
+const APP_VERSION = "v174";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -2360,6 +2360,25 @@ window.addEventListener("popstate", function(){
     wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
     try{ resolver(); }finally{ try{ syncMenuHistory(); }catch(e){} }   // even if the resolver stumbled, an open menu underneath always gets its Back entry back
     return;
+  }
+  // A focused text box (most commonly a search bar) almost certainly just had its own on-screen
+  // keyboard dismissed BY THIS VERY BACK PRESS — but this WebView doesn't actually drop DOM focus
+  // when that happens (no blur/focusout fires), so nothing on the page ever found out: the
+  // recent-searches dropdown stayed open and the tab bar never got its "keyboard closed" signal.
+  // Without this, that back press fell straight through to "nothing of ours was open" below and
+  // counted toward the double-back-to-exit prompt, even though it had visibly just done
+  // something (closed the keyboard) — so a second back press right after could trip "press back
+  // again to exit" when the person was just trying to get back to browsing. Treat it as one more
+  // layer closed: drop focus (closing the dropdown via its own focusout handler, same as it
+  // would for a normal tap-away) and stop there, exactly like closing any other menu above.
+  {
+    const fa = document.activeElement;
+    if(fa && fa!==document.body && /^(INPUT|TEXTAREA)$/.test(fa.tagName) && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(fa.type||"text")){
+      if(_floorLeft>0) _floorLeft--;
+      if(_floorLeft<25) addFloors(60);
+      fa.blur();
+      return;
+    }
   }
   if(_floorLeft>0) _floorLeft--;
   if(_floorLeft<25) addFloors(60);                                  // keep the buffer topped up (this runs inside a Back press, which counts as a real touch)
