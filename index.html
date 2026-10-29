@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v172";
+const APP_VERSION = "v173";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -12267,17 +12267,23 @@ setTimeout(aiProcessQueue,6000);
     }
     const open = nOpen || fOpen;
     document.body.classList.toggle("kb-open", open);
-    // This used to be driven by nOpen alone (the tab bar's own tracker, which measures the page's
-    // own layout height). In a browser that's enough, because the page really does shrink when the
-    // keyboard opens. But the App Inventor WebView this app also runs in is exactly the case the
-    // comment above already called out: it does NOT shrink the page's layout for the keyboard, so
-    // nOpen never turns true there and the tab bar never got the hide signal at all — it just sat
-    // on top of the keyboard the whole time. fOpen (the "+" button's tracker) measures through
-    // visualViewport instead, which DOES pick up the keyboard in that WebView — that's the same
-    // signal already keeping the "+" button correctly positioned above the keyboard there. Using
-    // "open" (either tracker) here gives the tab bar that same working signal, while changing
-    // nothing for a normal browser, where nOpen already covers it.
-    document.body.classList.toggle("kb-nav-hide", open && isPortrait());
+    // Both nOpen and fOpen are measured from some flavour of "the window/viewport got shorter" —
+    // one from the page's own layout height, the other from visualViewport. Both assume the
+    // WebView actually reports a size change when the keyboard opens. The App Inventor wrapper
+    // this app also runs in does neither (see the modal-lift code further down, which has its own
+    // "the phone does not report the keyboard at all" fallback for exactly this WebView) — so
+    // nOpen and fOpen, and therefore "open", can both stay false the entire time the keyboard is
+    // open there, no matter which of the two we check. There is no size-based signal to fall back
+    // on in that environment. The one signal that does NOT depend on the WebView reporting
+    // anything about its own size is focus itself: a text box only ever gets focus by the user
+    // tapping into it, which is also (for a touchscreen device, i.e. always, for this app) exactly
+    // when the on-screen keyboard opens, and it loses focus when they're done, which is exactly
+    // when the keyboard closes. So the tab bar hides and shows itself from "t" (a text box has
+    // focus right now) directly, instead of from the geometry trackers — "open" below is kept only
+    // as a belt-and-braces OR, for the rare case a box keeps focus after the keyboard was
+    // dismissed with the hardware back button (handled a few lines down) while geometry still
+    // disagrees.
+    document.body.classList.toggle("kb-nav-hide", (t || open) && isPortrait());
     // The keyboard was just closed with the hide key / back button: Android keeps the box focused, and tapping a box that is
     // already focused does not bring the keyboard back. So once the page has been tall again for a moment, release the box.
     if(open){ wasOpen = true; closedAt = 0; }
