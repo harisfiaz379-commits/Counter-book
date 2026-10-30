@@ -564,6 +564,12 @@
     main{padding-bottom:116px;}
     #invFab{bottom:calc(92px + env(safe-area-inset-bottom));}
   }
+  /* Tab bar pinned from the top (set by the script near the end of the page, App Inventor app only): it keeps its place when the
+     keyboard shrinks the page instead of riding up on top of the keyboard. */
+  @media (orientation:portrait){
+    html.nav-top-pin nav{bottom:auto;top:var(--nav-top);}
+    html.nav-top-pin #navSafeBar{bottom:auto;top:var(--safe-top);}
+  }
   nav button .icon svg{width:22px;height:22px;display:block;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
   @media (orientation:landscape){ header{border-radius:0;} }
 
@@ -13494,6 +13500,71 @@ function downloadAppUpdate(apkUrl){
   }, true);
   // Back button while the list is open closes just the list (see the popstate handler near the top of this script).
   window.__selSheetClose = function(){ if(!sheet) return false; closeSheet(); return true; };
+})();
+// ===== Tab bar pinned from the TOP (App Inventor app only) =====
+// Anchoring the bar to the bottom edge makes it ride up with the page when the on-screen keyboard shrinks the web view.
+// Pinned from the TOP at a fixed distance it simply stays where it was: the keyboard covers it / it falls below the
+// shrunken page, and when the keyboard closes it is exactly at the bottom again. Until a position has been measured the bar
+// stays pinned to the bottom as before.
+// The distance is MEASURED once (the bar's real position while it is bottom-pinned, with no keyboard up) and remembered on
+// this device. It is measured again only when the page genuinely changes size without a keyboard: a new device / rotation /
+// display size, a system bar appearing or disappearing, split-screen. Normal browsers are left completely alone.
+(function(){
+  if(typeof AppInventor === "undefined") return;
+  const root = document.documentElement, nav = document.getElementById("nav"), bar = document.getElementById("navSafeBar");
+  if(!nav) return;
+  const KEY = "cb_navpin_v1";
+  const typing = el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
+  const portrait = ()=>{ try{ return window.matchMedia("(orientation: portrait)").matches; }catch(e){ return window.innerHeight >= window.innerWidth; } };
+  let rec = null;
+  try{ const j = JSON.parse(localStorage.getItem(KEY) || "null"); if(j && j.top>0 && j.h>0 && j.w>0 && j.nh>0) rec = j; }catch(e){}
+
+  function apply(){
+    if(!rec) return;
+    root.style.setProperty("--nav-top", rec.top + "px");
+    root.style.setProperty("--safe-top", rec.safeTop + "px");
+    root.classList.add("nav-top-pin");
+  }
+  // Reads where the bar really is: briefly puts it back to bottom-pinned, measures, and restores - all before anything is painted.
+  function measure(){
+    if(!portrait() || !nav.querySelector("button")) return null;      // not the real bar yet (login screen / still drawing)
+    const had = root.classList.contains("nav-top-pin");
+    root.classList.remove("nav-top-pin");
+    void nav.offsetHeight;
+    const r = nav.getBoundingClientRect(), b = bar ? bar.getBoundingClientRect() : null;
+    const out = (r.height > 40 && r.top > 0 && r.bottom <= window.innerHeight + 1)
+      ? { top: Math.round(r.top*100)/100, safeTop: Math.round((b ? b.top : window.innerHeight)*100)/100, nh: Math.round(r.height*100)/100, h: window.innerHeight, w: window.innerWidth }
+      : null;
+    if(had) root.classList.add("nav-top-pin");
+    return out;
+  }
+  function remeasure(){
+    const m = measure(); if(!m) return;
+    rec = m; apply();
+    try{ localStorage.setItem(KEY, JSON.stringify(rec)); }catch(e){}
+  }
+
+  let lastH = window.innerHeight, lastW = window.innerWidth, changedAt = Date.now(), lastTypingAt = 0;
+  function tick(){
+    const now = Date.now(), h = window.innerHeight, w = window.innerWidth;
+    if(h !== lastH || w !== lastW){ lastH = h; lastW = w; changedAt = now; }
+    if(typing(document.activeElement)) lastTypingAt = now;
+    if(document.visibilityState === "hidden" || !portrait() || !nav.offsetHeight) return;
+    const stable = now - changedAt, quiet = now - lastTypingAt;
+    let need = false;
+    if(!rec){ need = stable >= 700 && quiet >= 1200; }                                   // first time on this device
+    else if(Math.abs(w - rec.w) > 2){ need = stable >= 700; }                            // different width: new device / display size
+    else if(h > rec.h + 2){ need = stable >= 350; }                                      // page got taller: keyboard closed, or a bar hid
+    else if(rec.h - h > 2){                                                              // page got shorter...
+      const big = Math.max(100, rec.h * 0.12);                                           // ...a keyboard is always at least this tall
+      need = (rec.h - h < big) ? stable >= 400 : (stable >= 2500 && quiet >= 2500);      // small = a system bar came back; big & staying = split-screen etc. (never while typing)
+    }
+    else if(Math.abs(nav.offsetHeight - rec.nh) > 2){ need = stable >= 700 && quiet >= 1200; }   // the bar itself changed size
+    if(need) remeasure();
+  }
+  apply();
+  window.addEventListener("resize", ()=>{ lastH = window.innerHeight; lastW = window.innerWidth; changedAt = Date.now(); });
+  setInterval(tick, 300);
 })();
 </script>
 <script>
