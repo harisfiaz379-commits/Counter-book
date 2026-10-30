@@ -487,17 +487,11 @@
   .ai-badge{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--primarySoft);color:var(--primary);}
   .ai-badge.zero{background:var(--dangerSoft);color:var(--danger);}
   .ai-sec{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:12px 0 2px;}
-  /* While the on-screen keyboard has made the page shorter (portrait), the tab bar is hidden so it never sits on top of the
-     keyboard. body.kb-nav-hide is set / removed by the script below purely from the measured page height. */
-  @media (orientation:portrait){
-    body.kb-nav-hide nav, body.kb-nav-hide #navSafeBar{visibility:hidden;pointer-events:none;}
-  }
   #datePickerModalRoot .modal-overlay{z-index:70;}
   #invFab{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
   #invStickyBar{box-shadow:0 6px 8px -6px rgba(15,23,30,.22);}
   #invStickyBar .search-wrap input{background:#fff !important;border:1px solid #CBD5E1 !important;box-shadow:0 2px 6px rgba(15,23,30,.10);}
   #invStickyBar .pill-badge{box-shadow:0 1px 3px rgba(15,23,30,.20);border:1px solid rgba(15,23,30,.07) !important;}
-  body.kb-open #invFab:not([data-moved]){bottom:16px !important;}
   .chip-row{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 2px 6px;margin:0 -2px;scrollbar-width:none;}
   .chip-row::-webkit-scrollbar{display:none;}
   .chip{flex:none;border:1px solid var(--border);background:#fff;color:var(--muted);border-radius:999px;padding:7px 15px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;}
@@ -695,7 +689,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v177";
+const APP_VERSION = "v178";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -2364,7 +2358,7 @@ window.addEventListener("popstate", function(){
   // A focused text box (most commonly a search bar) almost certainly just had its own on-screen
   // keyboard dismissed BY THIS VERY BACK PRESS — but this WebView doesn't actually drop DOM focus
   // when that happens (no blur/focusout fires), so nothing on the page ever found out: the
-  // recent-searches dropdown stayed open and the tab bar never got its "keyboard closed" signal.
+  // recent-searches dropdown stayed open.
   // Without this, that back press fell straight through to "nothing of ours was open" below and
   // counted toward the double-back-to-exit prompt, even though it had visibly just done
   // something (closed the keyboard) — so a second back press right after could trip "press back
@@ -12211,131 +12205,10 @@ function aiLoadReady(){
 window.addEventListener("online",()=>{ aiProcessQueue(); });
 setTimeout(aiProcessQueue,6000);
 // ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
-(function(){
-  // ===== Tab bar vs. on-screen keyboard =====
-  // The tab bar (bottom row) is hidden ONLY while the on-screen keyboard is really up (portrait), so it never rides on top of the
-  // keyboard - and it comes back as soon as the keyboard is gone. How the app knows, in this order:
-  //   A) THE PAGE GETS SHORTER (most phones/browsers): while a text box has focus the page is clearly shorter than its normal
-  //      height. The moment it grows back (keyboard closed, also with the hide key / Back) the tab bar is back, even if the box
-  //      still has focus. A size change with NO text box focused (browser toolbars, split-screen) is never taken for a keyboard.
-  //      The first time this is seen on a phone it is remembered, and this phone then always uses A.
-  //   B) THE PHONE REPORTS NOTHING (until A has ever been seen): nobody can tell when the keyboard goes away. Then the tab bar is
-  //      hidden only while you are ACTIVELY typing, and it is back as soon as you touch anything that is not a text box, about
-  //      half a second after Enter / Done, 2 seconds after you stop typing, or when you leave the box.
-  // The tab bar never depends on timers or on which box has focus in mode A.
-  const vv = window.visualViewport || null;
-  const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
-  const inTextBox=el=>!!(el && el.closest && el.closest("input,textarea,[contenteditable='true'],[contenteditable='']"));
-  // A zero-height marker pinned to the bottom edge of the page: it always sits where the page really ends, even on phones /
-  // the App Inventor web viewer whose window.innerHeight is stale.
-  const probe = document.createElement("div");
-  probe.setAttribute("aria-hidden","true");
-  probe.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:0;visibility:hidden;pointer-events:none;";
-  (document.body||document.documentElement).appendChild(probe);
-  const probeTop = ()=>{ try{ return probe.getBoundingClientRect().top; }catch(e){ return 0; } };
-  const layoutH = ()=>{ const ih=window.innerHeight||0, pb=probeTop(); return (pb>0 && ih>0) ? Math.min(ih,pb) : (ih||pb); };   // what a bottom-fixed bar is anchored to
-  const usableH = ()=>Math.min(window.innerHeight, vv ? vv.height : window.innerHeight);                                    // also counts a keyboard that only shrinks the visual viewport
-  const orient = ()=>{ try{ if(screen.orientation && screen.orientation.type) return /^portrait/.test(screen.orientation.type)?"p":"l"; }catch(e){} return (window.innerHeight>=window.innerWidth)?"p":"l"; };
-  const isPortrait = ()=>orient()==="p";
-
-  // One tracker per way of measuring. Keeps a separate "normal height" for each orientation: the biggest height seen.
-  function makeTracker(measure){
-    const refs = {p:0,l:0};
-    let prev = 0, changedAt = 0;
-    return {
-      reset(){ refs[orient()] = 0; prev = 0; },
-      // true when the page is at least ~110px / 14% shorter than normal. textRecent: a text box has / just had focus.
-      shrunk(now, textRecent){
-        const cur = measure(); if(!(cur>0)) return false;
-        const k = orient();
-        if(!refs[k]) refs[k] = cur;
-        if(cur !== prev){ prev = cur; changedAt = now; }
-        if(cur > refs[k]) refs[k] = cur;                       // page got taller: keyboard closed / bars hid -> the new normal
-        const shrink = refs[k] - cur, thr = Math.max(110, refs[k]*0.14), still = now - changedAt;
-        if(shrink >= thr){
-          if(!textRecent && still > 3000){ refs[k] = cur; return false; }   // shrunk for good with no text box (split-screen...): new normal
-          return true;
-        }
-        if(shrink > 0 && !textRecent && still > 700) refs[k] = cur;         // a small lasting change (a bar came back): new normal
-        return false;
-      }
-    };
-  }
-  const navT = makeTracker(layoutH);     // what the tab bar is anchored to
-  const fabT = makeTracker(usableH);     // drives the "+" button position (body.kb-open)
-
-  const GEO_KEY = "clinic_kb_geo", IDLE_MS = 2000;
-  let geoSeen = false, geoLoaded = false;
-  let lastTyping = 0, lastAct = 0, released = false;      // lastAct: last focus / key / input in a text box; released: touched something else since
-  let closedAt = 0, wasOpen = false, lastEvt = 0, timer = 0;
-  function loadGeo(){ if(geoLoaded) return; geoLoaded = true; try{ geoSeen = localStorage.getItem(GEO_KEY)==="1"; }catch(e){} }
-  function chk(){
-    const now = Date.now(), body = document.body;
-    if(vv && vv.scale>1.02){                         // pinched in: the smaller view is the zoom, not a keyboard
-      body.classList.remove("kb-open","kb-nav-hide"); wasOpen=false; closedAt=0; return false;
-    }
-    loadGeo();
-    const a = document.activeElement, t = typing(a);
-    if(t) lastTyping = now;
-    const quiet = t ? 0 : now - lastTyping;
-    const textRecent = t || quiet < 3000;
-    const nShr = navT.shrunk(now, textRecent), fShr = fabT.shrunk(now, textRecent);
-    const kbCtx = t || quiet < 500;                  // a keyboard can only be up while (or just after) a text box has focus
-    const open = kbCtx && (nShr || fShr);
-    if(open && !geoSeen){ geoSeen = true; try{ localStorage.setItem(GEO_KEY,"1"); }catch(e){} }
-    body.classList.toggle("kb-open", open);
-    let hide;
-    if(geoSeen) hide = kbCtx && nShr;                                              // A: exactly while the page is shortened by the keyboard
-    else        hide = t && !released && (now - lastAct) < IDLE_MS;                // B: only while actively typing
-    body.classList.toggle("kb-nav-hide", hide && isPortrait());
-    // The keyboard was just closed with the hide key / back button: Android keeps the box focused, and tapping a box that is
-    // already focused does not bring the keyboard back. So once the page has been tall again for a moment, release the box.
-    if(open){ wasOpen = true; closedAt = 0; }
-    else if(wasOpen){ wasOpen = false; closedAt = now; }
-    if(!open && closedAt && now-closedAt > 300){
-      closedAt = 0;
-      if(a && a!==body && typing(a)) a.blur();
-    }
-    return open || t || closedAt>0;
-  }
-  // Looks at the page a few times a second while a box is focused, while the keyboard is up, and for 1.5 s after anything
-  // changes - so it also catches phones that send no resize event when the keyboard moves. Stops by itself when idle.
-  function pollStart(){
-    lastEvt = Date.now();
-    if(timer) return;
-    timer = setInterval(()=>{
-      const active = chk();
-      if(!active && Date.now()-lastEvt > 1500){ clearInterval(timer); timer = 0; }
-    }, 120);
-  }
-  const go = ()=>{ chk(); pollStart(); };
-  const typed = e=>{
-    if(!typing(e.target)) return;
-    lastAct = Date.now(); released = false;
-    // Enter / Go / Done on a one-line box usually closes the keyboard: bring the tab bar back after just half a second
-    // (typing again hides it again at once).
-    if((e.key==="Enter" || e.keyCode===13) && e.target.tagName==="INPUT") lastAct -= (IDLE_MS-500);
-    go();
-  };
-  window.addEventListener("resize", go);
-  if(vv) vv.addEventListener("resize", go);
-  document.addEventListener("focusin", typed);
-  document.addEventListener("focusout", ()=>setTimeout(go,60));
-  ["input","keydown","keyup","beforeinput","compositionupdate"].forEach(ev=>document.addEventListener(ev, typed, true));
-  // Touching anything that is not a text box (a tab, a button, empty space) = done typing for now: mode B shows the tab bar at once.
-  const touched = e=>{ if(inTextBox(e.target)){ lastAct = Date.now(); released = false; } else released = true; go(); };
-  document.addEventListener("pointerdown", touched, true);
-  document.addEventListener("touchstart", touched, {capture:true, passive:true});
-  document.addEventListener("visibilitychange", ()=>{ released = true; go(); });
-  window.addEventListener("pageshow", go);
-  window.addEventListener("orientationchange", ()=>setTimeout(()=>{ navT.reset(); fabT.reset(); go(); }, 500));
-  chk();
-})();
-
 // ===== Keyboard closed with the Back / hide key while the typing box keeps its focus =====
 // Android closes the keyboard on Back but leaves the box "focused", and tells the page nothing (no blur, and the Back press itself is
 // swallowed by the keyboard, so the popstate handler never sees it). Everything that follows focus then stays stuck in "typing" mode:
-// the tab bar never comes back and the recent-searches list stays open. The one thing that DOES change is the visible height — it
+// the recent-searches list stays open. The one thing that DOES change is the visible height — it
 // shrinks when the keyboard comes up and grows back when it goes — so: once the height has been seen shrinking while a box is focused,
 // and it later returns to (about) its normal size with that box still focused, the keyboard is gone and the box is released.
 // A plain tap on empty page space also releases it (that is also what people expect from tapping away from a text box).
@@ -12623,11 +12496,6 @@ function healthCollect(){
   let lastBackup=0; try{ lastBackup=Number(localStorage.getItem("clinic_last_backup")||0); }catch(e){}
   return { st, tot, keys, nMeds:meds.length, nb, old, speeds, issues:dataIntegrityIssues(), bootMs:window.__bootMs||0, lastBackup, at:Date.now() };
 }
-function healthKbModeText(){
-  let geo=false; try{ geo = localStorage.getItem("clinic_kb_geo")==="1"; }catch(e){}
-  return geo ? "this phone reports the keyboard — the tab bar follows the page size and returns the moment the keyboard closes."
-             : "this phone has not reported the keyboard (yet) — the tab bar hides only while you type and returns about 2 seconds after you stop.";
-}
 function healthAgo(ts){
   if(!ts) return "never";
   const d=Math.floor((Date.now()-ts)/86400000);
@@ -12714,7 +12582,6 @@ function healthBodyHtml(h){
   // ---- More details
   H += `<div class="hsec">More details</div><div class="card"><details class="hmore"><summary>Technical details</summary>`;
   H += `<p class="hnote" style="margin-top:10px;"><b>This phone's ID:</b> ${esc(deviceId())}<br>Keeps this phone's stock movements apart from the other phones'.</p>`;
-  H += `<p class="hnote" style="margin-top:8px;"><b>Keyboard detection:</b> ${healthKbModeText()}</p>`;
   H += `<p class="hnote" style="margin-top:8px;"><b>Clean-up:</b> ${st.trimmedCount.toLocaleString("en-US")} used-up batches older than a year are left out of the cloud copy (saves ${_hKB(st.saved)}); your phones keep them.</p>`;
   H += `<p class="hnote" style="margin-top:8px;"><b>Biggest cloud parts:</b><br>${st.parts.slice(0,5).map(p=>`${esc(p[0])} — ${_hKB(p[1])}`).join("<br>")}</p>`;
   H += `<p class="hnote" style="margin-top:8px;"><b>Biggest phone storage:</b><br>${h.keys.slice(0,4).map(p=>`${esc(p[0].replace(/^clinic_/,""))} — ${_hKB(p[1])}`).join("<br>")}</p>`;
@@ -12769,7 +12636,6 @@ function storageHealthText(h){
   L.push(`Save medicines: ${_hMsText(h.speeds.meds)} · save bills: ${_hMsText(h.speeds.bills)} · build cloud copy: ${_hMsText(h.speeds.cloud)}`);
   if(h.bootMs) L.push(`App start-up took about ${Math.round(h.bootMs)} ms`);
   L.push(`Last backup: ${h.lastBackup ? healthAgo(h.lastBackup) : "never"}`);
-  L.push(`Keyboard detection: ${healthKbModeText()}`);
   L.push(``, `🩺 DATA CHECK (read-only — nothing was changed)`);
   if(!h.issues.length) L.push(`✓ No problems found`);
   else { L.push(`${h.issues.length} thing(s) to look at:`); h.issues.slice(0,40).forEach(x=>L.push("• "+x)); if(h.issues.length>40) L.push(`…and ${h.issues.length-40} more`); }
