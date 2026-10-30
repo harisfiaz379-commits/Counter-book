@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v174";
+const APP_VERSION = "v175";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -12333,6 +12333,43 @@ setTimeout(aiProcessQueue,6000);
   window.addEventListener("pageshow", go);
   window.addEventListener("orientationchange", ()=>setTimeout(()=>{ navT.reset(); fabT.reset(); go(); }, 500));
   chk();
+})();
+
+// ===== Keyboard closed with the Back / hide key while the typing box keeps its focus =====
+// Android closes the keyboard on Back but leaves the box "focused", and tells the page nothing (no blur, and the Back press itself is
+// swallowed by the keyboard, so the popstate handler never sees it). Everything that follows focus then stays stuck in "typing" mode:
+// the tab bar never comes back and the recent-searches list stays open. The one thing that DOES change is the visible height — it
+// shrinks when the keyboard comes up and grows back when it goes — so: once the height has been seen shrinking while a box is focused,
+// and it later returns to (about) its normal size with that box still focused, the keyboard is gone and the box is released.
+// A plain tap on empty page space also releases it (that is also what people expect from tapping away from a text box).
+(function(){
+  const vv = window.visualViewport || null;
+  const typing = el => !!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
+  const visH = ()=>Math.min(window.innerHeight||0, vv ? (vv.height||0) : (window.innerHeight||0));
+  const base = {p:0,l:0};                       // biggest visible height seen per orientation = "no keyboard"
+  const orientKey = ()=>(window.innerHeight>=window.innerWidth)?"p":"l";
+  let sawKb = false, timer = 0;
+  function release(a){ sawKb = false; try{ a.blur(); }catch(e){} }
+  function tick(){
+    const a = document.activeElement;
+    if(!typing(a)){ sawKb = false; if(timer){ clearInterval(timer); timer = 0; } return; }
+    const k = orientKey(), cur = visH(); if(!(cur>0)) return;
+    if(cur > base[k]) base[k] = cur;
+    const gap = base[k] - cur;
+    if(gap > Math.max(120, base[k]*0.14)) sawKb = true;          // the keyboard has come up
+    else if(sawKb && gap < 60) release(a);                        // ...and it has gone again, but the box still has focus
+  }
+  function watch(){ tick(); if(!timer) timer = setInterval(tick, 150); }
+  document.addEventListener("focusin", ()=>{ const k = orientKey(), cur = visH(); if(cur > base[k]) base[k] = cur; watch(); });
+  window.addEventListener("resize", ()=>{ if(typing(document.activeElement)) watch(); });
+  if(vv) vv.addEventListener("resize", ()=>{ if(typing(document.activeElement)) watch(); });
+  window.addEventListener("orientationchange", ()=>{ base.p = base.l = 0; sawKb = false; });
+  document.addEventListener("click", e=>{
+    const a = document.activeElement; if(!typing(a)) return;
+    const t = e.target; if(!t || !t.closest) return;
+    if(t.closest("input,textarea,select,button,a,label,summary,[onclick],[role='button'],[contenteditable],.recent-box,.modal-overlay")) return;
+    release(a);
+  }, true);
 })();
 
 // ===== Keep the typing box inside a pop-up menu visible ABOVE the on-screen keyboard =====
