@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v175";
+const APP_VERSION = "v176";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -12213,15 +12213,19 @@ setTimeout(aiProcessQueue,6000);
 // ---- printed text: Tesseract OCR runs on the phone (first use downloads ~15 MB, then works offline) ----
 (function(){
   // ===== Tab bar vs. on-screen keyboard =====
-  // Rule: the tab bar is hidden ONLY while the page is really shorter because of the keyboard (portrait), and is shown at all
-  // other times. Whether it is shown depends purely on measured page height - never on which box has focus or on timers - so it
-  // can no longer get stuck hidden after the keyboard closes, and no longer rides on top of the keyboard.
-  // How: remember the normal (no-keyboard) page height of this orientation. The page counts as "keyboard open" when it is at
-  // least ~110px / 14% shorter than that. The normal height is only re-learned when the page has stayed the same size for a
-  // while (a system bar came back, split-screen, ...), never during the keyboard's slide-in, so a briefly lost focus box
-  // can't make the phone "forget" that the keyboard is up.
+  // The tab bar (bottom row) is hidden ONLY while the on-screen keyboard is really up (portrait), so it never rides on top of the
+  // keyboard - and it comes back as soon as the keyboard is gone. How the app knows, in this order:
+  //   A) THE PAGE GETS SHORTER (most phones/browsers): while a text box has focus the page is clearly shorter than its normal
+  //      height. The moment it grows back (keyboard closed, also with the hide key / Back) the tab bar is back, even if the box
+  //      still has focus. A size change with NO text box focused (browser toolbars, split-screen) is never taken for a keyboard.
+  //      The first time this is seen on a phone it is remembered, and this phone then always uses A.
+  //   B) THE PHONE REPORTS NOTHING (until A has ever been seen): nobody can tell when the keyboard goes away. Then the tab bar is
+  //      hidden only while you are ACTIVELY typing, and it is back as soon as you touch anything that is not a text box, when you
+  //      stop typing for a few seconds, or when you leave the box.
+  // The tab bar never depends on timers or on which box has focus in mode A.
   const vv = window.visualViewport || null;
   const typing=el=>!!el && (el.tagName==="TEXTAREA" || el.isContentEditable || (el.tagName==="INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(el.type||"text")));
+  const inTextBox=el=>!!(el && el.closest && el.closest("input,textarea,[contenteditable='true'],[contenteditable='']"));
   // A zero-height marker pinned to the bottom edge of the page: it always sits where the page really ends, even on phones /
   // the App Inventor web viewer whose window.innerHeight is stale.
   const probe = document.createElement("div");
@@ -12234,84 +12238,65 @@ setTimeout(aiProcessQueue,6000);
   const orient = ()=>{ try{ if(screen.orientation && screen.orientation.type) return /^portrait/.test(screen.orientation.type)?"p":"l"; }catch(e){} return (window.innerHeight>=window.innerWidth)?"p":"l"; };
   const isPortrait = ()=>orient()==="p";
 
-  // One tracker per way of measuring. measure() -> current height. Keeps a separate "normal height" for each orientation.
+  // One tracker per way of measuring. Keeps a separate "normal height" for each orientation: the biggest height seen.
   function makeTracker(measure){
     const refs = {p:0,l:0};
-    let prev = 0, changedAt = 0, open = false;
+    let prev = 0, changedAt = 0;
     return {
-      isOpen:()=>open,
-      reset(){ refs[orient()] = 0; prev = 0; open = false; },
-      // typingFocus: a text box has focus right now.  quietFor: ms since a text box last had focus (0 = has it now).
-      update(now, typingFocus, quietFor){
-        const cur = measure(); if(!(cur>0)) return open;
+      reset(){ refs[orient()] = 0; prev = 0; },
+      // true when the page is at least ~110px / 14% shorter than normal. textRecent: a text box has / just had focus.
+      shrunk(now, textRecent){
+        const cur = measure(); if(!(cur>0)) return false;
         const k = orient();
         if(!refs[k]) refs[k] = cur;
         if(cur !== prev){ prev = cur; changedAt = now; }
-        if(cur > refs[k]) refs[k] = cur;                 // page got taller: keyboard closed / bars hid -> that is the new normal
-        const shrink = refs[k] - cur;
-        const thr = Math.max(110, refs[k]*0.14);
-        const still = now - changedAt;
+        if(cur > refs[k]) refs[k] = cur;                       // page got taller: keyboard closed / bars hid -> the new normal
+        const shrink = refs[k] - cur, thr = Math.max(110, refs[k]*0.14), still = now - changedAt;
         if(shrink >= thr){
-          open = true;
-          // Shrunk for good with no text box in sight (split-screen, window resized): that is simply the new normal size.
-          if(!typingFocus && quietFor > 3000 && still > 3000){ refs[k] = cur; open = false; }
-        } else {
-          open = false;
-          // A small lasting change (a system bar came back): adopt it, but never while a box is focused (keyboard may be sliding in).
-          if(shrink > 0 && !typingFocus && still > 700) refs[k] = cur;
+          if(!textRecent && still > 3000){ refs[k] = cur; return false; }   // shrunk for good with no text box (split-screen...): new normal
+          return true;
         }
-        return open;
+        if(shrink > 0 && !textRecent && still > 700) refs[k] = cur;         // a small lasting change (a bar came back): new normal
+        return false;
       }
     };
   }
-  const navT = makeTracker(layoutH);     // drives the tab bar
+  const navT = makeTracker(layoutH);     // what the tab bar is anchored to
   const fabT = makeTracker(usableH);     // drives the "+" button position (body.kb-open)
 
-  let lastTyping = Date.now(), closedAt = 0, wasOpen = false, lastEvt = 0, timer = 0;
+  const GEO_KEY = "clinic_kb_geo", IDLE_MS = 4000;
+  let geoSeen = false, geoLoaded = false;
+  let lastTyping = 0, lastAct = 0, released = false;      // lastAct: last focus / key / input in a text box; released: touched something else since
+  let closedAt = 0, wasOpen = false, lastEvt = 0, timer = 0;
+  function loadGeo(){ if(geoLoaded) return; geoLoaded = true; try{ geoSeen = localStorage.getItem(GEO_KEY)==="1"; }catch(e){} }
   function chk(){
-    const now = Date.now();
+    const now = Date.now(), body = document.body;
     if(vv && vv.scale>1.02){                         // pinched in: the smaller view is the zoom, not a keyboard
-      document.body.classList.remove("kb-open","kb-nav-hide"); wasOpen=false; closedAt=0; return false;
+      body.classList.remove("kb-open","kb-nav-hide"); wasOpen=false; closedAt=0; return false;
     }
+    loadGeo();
     const a = document.activeElement, t = typing(a);
     if(t) lastTyping = now;
     const quiet = t ? 0 : now - lastTyping;
-    let nOpen = navT.update(now, t, quiet);
-    const fOpen = fabT.update(now, t, quiet);
-    // Second opinion that does not depend on any remembered height: a text box has focus and the page is far shorter than the
-    // whole screen (a phone's page is never below ~78% of the screen unless the keyboard is up).
-    if(!nOpen && t){
-      const sh = (screen && screen.height) || 0, cur = layoutH();
-      if(sh > 300 && cur > 0 && cur < sh*0.78) nOpen = true;
-    }
-    const open = nOpen || fOpen;
-    document.body.classList.toggle("kb-open", open);
-    // Both nOpen and fOpen are measured from some flavour of "the window/viewport got shorter" —
-    // one from the page's own layout height, the other from visualViewport. Both assume the
-    // WebView actually reports a size change when the keyboard opens. The App Inventor wrapper
-    // this app also runs in does neither (see the modal-lift code further down, which has its own
-    // "the phone does not report the keyboard at all" fallback for exactly this WebView) — so
-    // nOpen and fOpen, and therefore "open", can both stay false the entire time the keyboard is
-    // open there, no matter which of the two we check. There is no size-based signal to fall back
-    // on in that environment. The one signal that does NOT depend on the WebView reporting
-    // anything about its own size is focus itself: a text box only ever gets focus by the user
-    // tapping into it, which is also (for a touchscreen device, i.e. always, for this app) exactly
-    // when the on-screen keyboard opens, and it loses focus when they're done, which is exactly
-    // when the keyboard closes. So the tab bar hides and shows itself from "t" (a text box has
-    // focus right now) directly, instead of from the geometry trackers — "open" below is kept only
-    // as a belt-and-braces OR, for the rare case a box keeps focus after the keyboard was
-    // dismissed with the hardware back button (handled a few lines down) while geometry still
-    // disagrees.
-    document.body.classList.toggle("kb-nav-hide", (t || open) && isPortrait());
+    const textRecent = t || quiet < 3000;
+    const nShr = navT.shrunk(now, textRecent), fShr = fabT.shrunk(now, textRecent);
+    const kbCtx = t || quiet < 500;                  // a keyboard can only be up while (or just after) a text box has focus
+    const open = kbCtx && (nShr || fShr);
+    if(open && !geoSeen){ geoSeen = true; try{ localStorage.setItem(GEO_KEY,"1"); }catch(e){} }
+    body.classList.toggle("kb-open", open);
+    let hide;
+    if(geoSeen) hide = kbCtx && nShr;                                              // A: exactly while the page is shortened by the keyboard
+    else        hide = t && !released && (now - lastAct) < IDLE_MS;                // B: only while actively typing
+    body.classList.toggle("kb-nav-hide", hide && isPortrait());
     // The keyboard was just closed with the hide key / back button: Android keeps the box focused, and tapping a box that is
     // already focused does not bring the keyboard back. So once the page has been tall again for a moment, release the box.
     if(open){ wasOpen = true; closedAt = 0; }
     else if(wasOpen){ wasOpen = false; closedAt = now; }
     if(!open && closedAt && now-closedAt > 300){
       closedAt = 0;
-      if(a && a!==document.body && typing(a)) a.blur();
+      if(a && a!==body && typing(a)) a.blur();
     }
-    return open || t;
+    return open || t || closedAt>0;
   }
   // Looks at the page a few times a second while a box is focused, while the keyboard is up, and for 1.5 s after anything
   // changes - so it also catches phones that send no resize event when the keyboard moves. Stops by itself when idle.
@@ -12320,16 +12305,21 @@ setTimeout(aiProcessQueue,6000);
     if(timer) return;
     timer = setInterval(()=>{
       const active = chk();
-      if(!active && !closedAt && Date.now()-lastEvt > 1500){ clearInterval(timer); timer = 0; }
+      if(!active && Date.now()-lastEvt > 1500){ clearInterval(timer); timer = 0; }
     }, 120);
   }
   const go = ()=>{ chk(); pollStart(); };
+  const typed = e=>{ if(typing(e.target)){ lastAct = Date.now(); released = false; go(); } };
   window.addEventListener("resize", go);
   if(vv) vv.addEventListener("resize", go);
-  document.addEventListener("focusin", go);
+  document.addEventListener("focusin", typed);
   document.addEventListener("focusout", ()=>setTimeout(go,60));
-  document.addEventListener("pointerdown", go, true);
-  document.addEventListener("visibilitychange", go);
+  ["input","keydown","keyup","beforeinput","compositionupdate"].forEach(ev=>document.addEventListener(ev, typed, true));
+  // Touching anything that is not a text box (a tab, a button, empty space) = done typing for now: mode B shows the tab bar at once.
+  const touched = e=>{ if(inTextBox(e.target)){ lastAct = Date.now(); released = false; } else released = true; go(); };
+  document.addEventListener("pointerdown", touched, true);
+  document.addEventListener("touchstart", touched, {capture:true, passive:true});
+  document.addEventListener("visibilitychange", ()=>{ released = true; go(); });
   window.addEventListener("pageshow", go);
   window.addEventListener("orientationchange", ()=>setTimeout(()=>{ navT.reset(); fabT.reset(); go(); }, 500));
   chk();
