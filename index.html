@@ -2327,25 +2327,45 @@ let wasMenuOpen = false; // menu-open state as of the last render(), for edge-de
 // never started — it only worked after some menu had been opened (that push happens inside a tap, so it counted). Adding the
 // floor entries from inside the first real touch / key press makes them count. The buffer is topped up again whenever it runs low.
 let _floorLeft = 0;
-function addFloors(n){ for(let i=0;i<n;i++) history.pushState({ floor:true }, "", location.href); _floorLeft += n; }
+// The browser keeps at most ~50 history entries in total, and every tab tap / menu open pushes one on top, which slowly pushes the spare
+// "floor" entries off the bottom. Once none are left a Back press finds nothing to step back to, fires no event at all, and the
+// double-Back-to-exit can never run. So the number of entries behind the current one is tracked (_depth) and quietly topped up on taps.
+let _depth = 0;
+function histPush(state){ history.pushState(state, "", location.href); _depth = Math.min(49, _depth + 1); }
+function addFloors(n){ for(let i=0;i<n;i++) histPush({ floor:true }); _floorLeft += n; }
+(function(){
+  const topUp = function(){ if(_depth < 25){ for(let i=0;i<24;i++) histPush({ floor:true }); backLog("topped up spare Back entries (depth now "+_depth+")"); } };
+  ["pointerup","touchend","click","keydown"].forEach(t=>window.addEventListener(t, topUp, true));
+})();
+// Small in-memory log of what each Back press did, viewable in Settings > Back button log (for troubleshooting).
+window.__backLog = [];
+function backLog(m){ try{ const d=new Date(), p=n=>String(n).padStart(2,"0"); window.__backLog.push(p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds())+"  "+m); if(window.__backLog.length>80) window.__backLog.shift(); }catch(e){} }
+function backLogText(){ return "Back button log (newest last)\n\n" + (window.__backLog.length ? window.__backLog.join("\n") : "Nothing yet - press Back a few times, then open this again."); }
 (function(){
   let done = false;
   const evs = ["pointerup","touchend","click","keydown"];
   const first = function(){
     if(done) return; done = true;
     evs.forEach(t=>window.removeEventListener(t, first, true));
-    addFloors(100);
+    addFloors(45);
   };
   evs.forEach(t=>window.addEventListener(t, first, true));
 })();
 let lastEmptyBackAt = 0;
 function pushNav(resolver){
   navStack.push(resolver);
-  history.pushState({ appNav:true }, "", location.href);
+  histPush({ appNav:true });
+  // Tab history is capped (the last 6 tab switches): walking back through dozens of old tabs before ever reaching "press back again to exit"
+  // is what made the double-Back exit feel broken. Menus are never dropped.
+  let tabs = 0; for(let i=0;i<navStack.length;i++) if(navStack[i].isTab) tabs++;
+  while(tabs > 6){ const k = navStack.findIndex(f=>f.isTab); if(k < 0) break; navStack.splice(k,1); tabs--; }
+  if(navStack.length > 40) navStack.shift();
 }
 window.addEventListener("popstate", function(){
-  if(window.__selSheetClose && window.__selSheetClose()){ history.pushState({ appNav:true }, "", location.href); return; }   // dark-mode drop-down list was open: Back closes just that
-  if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ history.pushState({ appNav:true }, "", location.href); return; } // photo reading in progress — ignore back
+  _depth = Math.max(0, _depth - 1);
+  backLog("Back  [pending="+navStack.length+" depth="+_depth+" history="+history.length+" settings="+(headerMenuOpen?"open":"closed")+" layerAboveSettings="+_layerAboveSettings()+"]");
+  if(window.__selSheetClose && window.__selSheetClose()){ histPush({ appNav:true }); backLog("  -> closed drop-down list"); return; }   // dark-mode drop-down list was open: Back closes just that
+  if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ histPush({ appNav:true }); backLog("  -> ignored (photo reading)"); return; } // photo reading in progress — ignore back
   window.__boxBusy = false;                                                            // (a flag left on by an error must never lock the back button)
   // Settings page open with nothing on screen above it: Back closes Settings. This looks at what is actually visible, so it works
   // even if the history bookkeeping below got out of step (e.g. after opening and closing a menu inside Settings).
@@ -2353,13 +2373,20 @@ window.addEventListener("popstate", function(){
     if(navStack.length) navStack.pop();
     wasMenuOpen = false;
     try{ closeHeaderMenu(); render(); }finally{ try{ syncMenuHistory(); }catch(e){} }
+    backLog("  -> closed Settings");
     return;
   }
   if(navStack.length){
     const resolver = navStack.pop();
-    wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
-    try{ resolver(); }finally{ try{ syncMenuHistory(); }catch(e){} }   // even if the resolver stumbled, an open menu underneath always gets its Back entry back
-    return;
+    // A leftover entry from a menu that was closed with its own button: nothing is open, so there is nothing to do - and this press
+    // must not be swallowed. Carry on to the "nothing open" handling below (tab step-back / press back again to exit).
+    if(resolver.isTab || anyMenuOpen()){
+      backLog("  -> ran a pending Back step ("+(resolver.isTab?"tab":"menu")+")");
+      wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
+      try{ resolver(); }finally{ try{ syncMenuHistory(); }catch(e){} }   // even if the resolver stumbled, an open menu underneath always gets its Back entry back
+      return;
+    }
+    backLog("  -> skipped a leftover Back entry (nothing open)");
   }
   // A focused text box (most commonly a search bar) almost certainly just had its own on-screen
   // keyboard dismissed BY THIS VERY BACK PRESS — but this WebView doesn't actually drop DOM focus
@@ -2375,14 +2402,16 @@ window.addEventListener("popstate", function(){
     const fa = document.activeElement;
     if(fa && fa!==document.body && /^(INPUT|TEXTAREA)$/.test(fa.tagName) && !/^(checkbox|radio|button|submit|range|file|color|reset|image)$/i.test(fa.type||"text")){
       if(_floorLeft>0) _floorLeft--;
-      if(_floorLeft<25) addFloors(60);
+      if(_floorLeft<25) addFloors(30);
       fa.blur();
+      backLog("  -> closed keyboard");
       return;
     }
   }
   if(_floorLeft>0) _floorLeft--;
-  if(_floorLeft<25) addFloors(60);                                  // keep the buffer topped up (this runs inside a Back press, which counts as a real touch)
+  if(_floorLeft<25) addFloors(30);                                  // keep the buffer topped up (this runs inside a Back press, which counts as a real touch)
   const now = Date.now();
+  backLog("  -> nothing open: " + (now - lastEmptyBackAt < 2000 ? "EXIT signal sent" : "asked to press Back again"));
   if(now - lastEmptyBackAt < 2000){
     // TEMPORARY diagnostic — remove once the exit-app bridge is confirmed working. If this
     // toast shows up on the second back press, the JS side is 100% working correctly and the
@@ -2405,7 +2434,9 @@ function _layerAboveSettings(){
   try{
     const els = document.querySelectorAll('[id$="Root"] .modal-overlay, #selSheet');
     for(let i=0;i<els.length;i++){
-      const z = parseInt(getComputedStyle(els[i]).zIndex, 10);
+      const cs = getComputedStyle(els[i]);
+      if(cs.display === "none" || cs.visibility === "hidden" || !els[i].firstElementChild) continue;   // empty / hidden leftovers don't count
+      const z = parseInt(cs.zIndex, 10);
       if(!isNaN(z) && z > 110) return true;
     }
   }catch(e){}
@@ -2677,7 +2708,8 @@ function renderNav(){
 function setTab(t){
   if(t===tab){ render(); return; }
   const prevTab = tab;
-  pushNav(()=>{ tab=prevTab; render(); });
+  const backToPrev = ()=>{ tab=prevTab; render(); }; backToPrev.isTab = true;
+  pushNav(backToPrev);
   // A tap-a-pill filter is meant as a quick, temporary lens on the tab you're currently
   // looking at — clearing it on the way out means coming back to Inventory/Warnings later
   // (including via the back button) always starts fresh instead of silently still narrowed
@@ -10948,7 +10980,8 @@ function settingsSections(){
   add("Tools & health", [
     can("diagnostics") ? it("📈","Storage & health","openHealth()", "Cloud space, phone storage, data check", true) : null,
     can("diagnostics") ? it("🩺","Diagnostics","openDiag()", "", true) : null,
-    can("manageUsers") ? it("⌨","Keyboard test","openKbTest()", "", true) : null
+    can("manageUsers") ? it("⌨","Keyboard test","openKbTest()", "", true) : null,
+    can("diagnostics") ? it("🧭","Back button log","openShare(backLogText())", "What each Back press did - for troubleshooting", true) : null
   ]);
   return sec;
 }
