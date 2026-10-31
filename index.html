@@ -695,7 +695,7 @@
 <script>
 /* ===================== STATE ===================== */
 // Shown at the top of the Settings menu. Keep this number the same as CACHE_NAME ("counter-book-vNN") in sw.js whenever index.html is updated.
-const APP_VERSION = "v178";
+const APP_VERSION = "v182";
 const CURRENCY = "Rs ";
 // Repeated on nearly every text input below to stop mobile keyboards/password managers
 // from auto-capitalizing, autocorrecting, or offering to save clinic/patient data.
@@ -2284,7 +2284,7 @@ window.addEventListener("resize", syncHeaderOffset);
    to "the previous tab" one extra time is harmless — so at worst one extra back press is needed
    here and there, never a stuck or broken back button. */
 let navStack = []; // one resolver per outstanding pushed history entry, oldest first
-let wasMenuOpen = false; // menu-open state as of the last render(), for edge-detecting new opens
+let wasMenuOpen = false; let wasSubOpen = false;  // a page/pop-up opened from Settings has its OWN Back entry (so closing it never has to add history in the middle of a Back press) // menu-open state as of the last render(), for edge-detecting new opens
 // "Press back again to exit" — standard Android double-back pattern, for once there's truly
 // nothing of ours left to close (no menu open, no tab to step back to). This only reads
 // navStack.length and doesn't touch pushState/popState itself, deliberately, given the fragile
@@ -2363,7 +2363,7 @@ function pushNav(resolver){
 }
 window.addEventListener("popstate", function(){
   _depth = Math.max(0, _depth - 1);
-  backLog("Back  [pending="+navStack.length+" depth="+_depth+" history="+history.length+" settings="+(headerMenuOpen?"open":"closed")+" layerAboveSettings="+_layerAboveSettings()+"]");
+  backLog("Back  [pending="+navStack.length+" depth="+_depth+" history="+history.length+" settings="+(headerMenuOpen?"open":"closed")+" layerAboveSettings="+_layerAboveSettings()+(window.__layerBy&&_layerAboveSettings()?"("+window.__layerBy+")":"")+"]");
   if(window.__selSheetClose && window.__selSheetClose()){ histPush({ appNav:true }); backLog("  -> closed drop-down list"); return; }   // dark-mode drop-down list was open: Back closes just that
   if(window.__boxBusy && document.getElementById("boxBusyOverlay")){ histPush({ appNav:true }); backLog("  -> ignored (photo reading)"); return; } // photo reading in progress — ignore back
   window.__boxBusy = false;                                                            // (a flag left on by an error must never lock the back button)
@@ -2371,7 +2371,7 @@ window.addEventListener("popstate", function(){
   // even if the history bookkeeping below got out of step (e.g. after opening and closing a menu inside Settings).
   if(headerMenuOpen && document.getElementById("settingsPage") && !_layerAboveSettings()){
     if(navStack.length) navStack.pop();
-    wasMenuOpen = false;
+    wasMenuOpen = false; wasSubOpen = false;
     try{ closeHeaderMenu(); render(); }finally{ try{ syncMenuHistory(); }catch(e){} }
     backLog("  -> closed Settings");
     return;
@@ -2382,8 +2382,18 @@ window.addEventListener("popstate", function(){
     // must not be swallowed. Carry on to the "nothing open" handling below (tab step-back / press back again to exit).
     if(resolver.isTab || anyMenuOpen()){
       backLog("  -> ran a pending Back step ("+(resolver.isTab?"tab":"menu")+")");
-      wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
+      const wasSettings = headerMenuOpen && !resolver.isTab, sigBefore = _backSig();
+      const subEntry = wasSettings && wasSubOpen;
+      if(subEntry) wasSubOpen = false;      // Settings itself stays open, so it keeps its own entry; only a still-open nested page adds one back
+      else wasMenuOpen = false; // let the resolver's render() re-detect and re-push if a menu layer is still open underneath (e.g. closing a nested one)
       try{ resolver(); }finally{ try{ syncMenuHistory(); }catch(e){} }   // even if the resolver stumbled, an open menu underneath always gets its Back entry back
+      // Safety net: a Back press must always visibly do something. If Settings was open and that step changed nothing on screen
+      // (a sub-menu that was already gone, a stale entry), the press is used to close Settings instead of being swallowed.
+      if(wasSettings && headerMenuOpen && document.getElementById("settingsPage") && _backSig() === sigBefore){
+        backLog("  -> that step changed nothing: closed Settings instead");
+        wasMenuOpen = false; wasSubOpen = false;
+        try{ closeHeaderMenu(); render(); }finally{ try{ syncMenuHistory(); }catch(e){} }
+      }
       return;
     }
     backLog("  -> skipped a leftover Back entry (nothing open)");
@@ -2430,6 +2440,14 @@ window.addEventListener("popstate", function(){
 function _uiOpen(f){ try{ return !!f(); }catch(e){ return false; } }
 // True when a sub-page / dialog is really on screen above the Settings page (they sit at z-index 120+ while Settings, at 110, is open).
 // Used so Back follows what the person can SEE: if nothing is above Settings, Back closes Settings - whatever the internal flags say.
+// A short fingerprint of what is on screen (which pop-up layers exist + whether Settings is open), used to tell whether a Back step did anything.
+function _backSig(){
+  try{
+    const ov = document.querySelectorAll('[id$="Root"] .modal-overlay, #selSheet');
+    let n = 0; for(let i=0;i<ov.length;i++) if(ov[i].firstElementChild) n++;
+    return [n, headerMenuOpen, manageUi.open, manageUi.editingId, printerUi.open, themeUi.open, backupUi.open, diagUi.open, toolsUi.open, kbTestUi.open, rdUi.open, catUi.open, healthUi.open, historyUi.open, shareText!==null].join("|");
+  }catch(e){ return String(Math.random()); }
+}
 function _layerAboveSettings(){
   try{
     const els = document.querySelectorAll('[id$="Root"] .modal-overlay, #selSheet');
@@ -2437,7 +2455,7 @@ function _layerAboveSettings(){
       const cs = getComputedStyle(els[i]);
       if(cs.display === "none" || cs.visibility === "hidden" || !els[i].firstElementChild) continue;   // empty / hidden leftovers don't count
       const z = parseInt(cs.zIndex, 10);
-      if(!isNaN(z) && z > 110) return true;
+      if(!isNaN(z) && z > 110){ window.__layerBy = (els[i].parentElement && els[i].parentElement.id) || els[i].id || "?"; return true; }
     }
   }catch(e){}
   return false;
@@ -2520,7 +2538,16 @@ function syncMenuHistory(){
     pushNav(closeTopMenu);
   }
   wasMenuOpen = open;
+  // Inside Settings, every page/pop-up opened from it gets its own Back entry. Back then simply uses up that entry; the next Back
+  // uses Settings' entry. Nothing has to be added to the browser history while a Back press is being handled (Android WebViews
+  // don't handle that reliably).
+  if(headerMenuOpen){
+    const sub = _subOpen();
+    if(sub && !wasSubOpen) pushNav(closeTopMenu);
+    wasSubOpen = sub;
+  } else wasSubOpen = false;
 }
+function _subOpen(){ const h = headerMenuOpen; headerMenuOpen = false; try{ return anyMenuOpen(); }finally{ headerMenuOpen = h; } }
 
 
 // Opening or closing a pop-up only needs the pop-up layers redrawn. render() also rebuilds the whole
